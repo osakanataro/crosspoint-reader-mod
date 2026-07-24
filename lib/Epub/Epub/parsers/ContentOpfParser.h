@@ -64,6 +64,7 @@ class ContentOpfParser final : public Print {
   std::string coverItemHref;
   std::string guideCoverPageHref;  // Guide reference with type="cover" or "cover-page" (points to XHTML wrapper)
   std::string textReferenceHref;
+  bool pageProgressionRtl = false;    // spine page-progression-direction="rtl" (RTL / vertical book)
   std::vector<std::string> cssFiles;  // CSS stylesheet paths
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
