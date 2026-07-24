@@ -465,6 +465,153 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
   }
   return 0;
 }
+void ParsedText::addVerticalToken(std::string token, const EpdFontFamily::Style fontStyle,
+                                  const VerticalTextUtils::VerticalBehavior vb) {
+  if (token.empty()) return;
+  token = utf8ComposeNfc(token);
+  words.push_back(std::move(token));
+  wordStyles.push_back(fontStyle);
+  // Kept in lockstep with words[] so the parallel-vector invariant holds; the horizontal-only
+  // fields are unused by layoutVerticalColumns but must stay the same length.
+  wordContinues.push_back(false);
+  wordNoSpaceBefore.push_back(false);
+  wordIsFocusSuffix.push_back(false);
+  wordVerticalBehaviors.push_back(vb);
+}
+
+// Vertical (tategaki) analogue of layoutAndExtractLines. Stacks tokens down columns of
+// height columnHeight (applying kinsoku at boundaries) and emits one TextBlock per column,
+// consuming emitted words like the horizontal path.
+void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fontId, const uint16_t columnHeight,
+                                       const std::function<void(std::shared_ptr<TextBlock>)>& processColumn,
+                                       const bool includeLastColumn) {
+  if (words.empty()) return;
+
+  // Load SD-card font advance metrics (no bitmaps) so getTextAdvanceX needs no per-glyph SD I/O.
+  if (renderer.isSdCardFont(fontId)) {
+    uint8_t styleMask = 0;
+    for (auto s : wordStyles) styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(s) & 0x03));
+    if (styleMask == 0) styleMask = 0x01;
+    renderer.ensureSdCardFontReady(fontId, words, hyphenationEnabled, styleMask);
+  }
+
+  const int lineHeight = renderer.getLineHeight(fontId);
+
+  // Reference CJK cell advance from the first Upright word (cannot hardcode "一": it may be
+  // absent from the advance table). Used as the TateChuYoko cell height and spacing base.
+  int cjkCharAdvance = 0;
+  for (size_t i = 0; i < words.size() && cjkCharAdvance == 0; i++) {
+    const auto vb =
+        (i < wordVerticalBehaviors.size()) ? wordVerticalBehaviors[i] : VerticalTextUtils::VerticalBehavior::Upright;
+    if (vb == VerticalTextUtils::VerticalBehavior::Upright) {
+      cjkCharAdvance = renderer.getTextAdvanceX(fontId, words[i].c_str(), wordStyles[i]);
+    }
+  }
+  if (cjkCharAdvance == 0) cjkCharAdvance = lineHeight;
+
+  // Per-word stacked height including inter-cell spacing.
+  std::vector<uint16_t> wordHeights;
+  wordHeights.reserve(words.size());
+  const int sp = renderer.getVerticalCharSpacing();
+  const int cjkSpacing = cjkCharAdvance * sp / 100;
+  for (size_t i = 0; i < words.size(); i++) {
+    const auto vb =
+        (i < wordVerticalBehaviors.size()) ? wordVerticalBehaviors[i] : VerticalTextUtils::VerticalBehavior::Upright;
+    uint16_t baseHeight;
+    if (vb == VerticalTextUtils::VerticalBehavior::TateChuYoko) {
+      baseHeight = static_cast<uint16_t>(cjkCharAdvance);
+    } else {  // Upright and Sideways both advance by the glyph's own width
+      baseHeight = static_cast<uint16_t>(renderer.getTextAdvanceX(fontId, words[i].c_str(), wordStyles[i]));
+    }
+    if (vb == VerticalTextUtils::VerticalBehavior::Upright) {
+      wordHeights.push_back(static_cast<uint16_t>(baseHeight + baseHeight * sp / 100));
+    } else {
+      wordHeights.push_back(static_cast<uint16_t>(baseHeight + cjkSpacing));
+    }
+  }
+
+  // First-line indent as a leading vertical gap of one CJK cell, mirroring the spirit of
+  // resolveFirstLineIndent: only for natural-aligned paragraphs with no explicit text-indent
+  // and when paragraph spacing is not used instead. isNaturalAlign is set inside the horizontal
+  // layout path (not reached here), so recompute the condition locally.
+  const bool naturalAlign =
+      blockStyle.alignment == CssTextAlign::Justify ||
+      (blockStyle.isRtl ? blockStyle.alignment == CssTextAlign::Right : blockStyle.alignment == CssTextAlign::Left);
+  int verticalIndent = 0;
+  if (naturalAlign && !blockStyle.textIndentDefined && !extraParagraphSpacing) {
+    verticalIndent = cjkCharAdvance > 0 ? cjkCharAdvance : lineHeight;
+  }
+
+  // First pass: column boundaries. columnEnds[i] is the exclusive end index of column i.
+  std::vector<size_t> columnEnds;
+  {
+    size_t columnStart = 0;
+    int currentY = verticalIndent;
+    for (size_t i = 0; i < words.size(); i++) {
+      if (currentY + wordHeights[i] > columnHeight && i > columnStart) {
+        size_t breakAt = i;
+        // Kinsoku-head pullback: closing brackets / small kana cannot start a column.
+        while (breakAt > columnStart + 1 && VerticalTextUtils::isKinsokuHead(firstCodepoint(words[breakAt]))) {
+          breakAt--;
+        }
+        // Kinsoku-tail pullback: opening brackets cannot end a column.
+        if (breakAt > columnStart + 1 && VerticalTextUtils::isKinsokuTail(firstCodepoint(words[breakAt - 1]))) {
+          breakAt--;
+        }
+        columnEnds.push_back(breakAt);
+        columnStart = breakAt;
+        currentY = 0;
+        for (size_t j = columnStart; j <= i; j++) currentY += wordHeights[j];
+        continue;
+      }
+      currentY += wordHeights[i];
+    }
+    if (columnStart < words.size()) columnEnds.push_back(words.size());
+  }
+
+  // Mid-block flushes (includeLastColumn=false) keep the trailing partial column for the next
+  // call so columns don't come out short at flush boundaries; makePages passes true to flush all.
+  const size_t totalCols = columnEnds.size();
+  const size_t emitCols = (includeLastColumn || totalCols <= 1) ? totalCols : totalCols - 1;
+
+  // Second pass: emit columns. Each column's words share xpos 0; the page positions the column
+  // (right-to-left) when it composes the block. ypos is the stacking offset within the column.
+  bool isFirstColumn = true;
+  size_t emitStart = 0;
+  for (size_t i = 0; i < emitCols; i++) {
+    const size_t start = emitStart;
+    const size_t end = columnEnds[i];
+    const size_t count = end - start;
+    std::vector<std::string> colWords(std::make_move_iterator(words.begin() + start),
+                                      std::make_move_iterator(words.begin() + end));
+    std::vector<EpdFontFamily::Style> colStyles(wordStyles.begin() + start, wordStyles.begin() + end);
+    std::vector<int16_t> colXpos(count, 0);
+    std::vector<int16_t> colYpos;
+    colYpos.reserve(count);
+    int y = isFirstColumn ? verticalIndent : 0;
+    for (size_t j = start; j < end; j++) {
+      colYpos.push_back(static_cast<int16_t>(y));
+      y += wordHeights[j];
+    }
+    processColumn(std::make_shared<TextBlock>(colWords, colXpos, colYpos, colStyles, blockStyle));
+    isFirstColumn = false;
+    emitStart = end;
+  }
+
+  // Consume emitted words from every parallel array (keep them the same length).
+  if (emitStart > 0) {
+    const auto eraseFront = [emitStart](auto& vec) {
+      if (!vec.empty()) vec.erase(vec.begin(), vec.begin() + std::min(emitStart, vec.size()));
+    };
+    eraseFront(words);
+    eraseFront(wordStyles);
+    eraseFront(wordContinues);
+    eraseFront(wordNoSpaceBefore);
+    eraseFront(wordIsFocusSuffix);
+    eraseFront(wordVerticalBehaviors);
+  }
+}
+
 // Consumes data to minimize memory usage
 void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
                                        const std::function<void(std::shared_ptr<TextBlock>)>& processLine,

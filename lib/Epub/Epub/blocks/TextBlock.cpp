@@ -8,9 +8,13 @@
 
 #include <cstring>
 
-size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const uint16_t textBytes) {
+size_t TextBlock::arenaSize(const uint16_t wordCount, const bool hasFocus, const bool hasVertical,
+                            const uint16_t textBytes) {
   // Layout documented in TextBlock.h: 16-bit arrays first, then 8-bit arrays, then text.
   size_t size = static_cast<size_t>(wordCount) * (sizeof(uint16_t) + sizeof(int16_t) + sizeof(uint8_t));
+  if (hasVertical) {
+    size += static_cast<size_t>(wordCount) * sizeof(int16_t);
+  }
   if (hasFocus) {
     size += static_cast<size_t>(wordCount) * (sizeof(uint16_t) + sizeof(uint8_t));
   }
@@ -23,6 +27,11 @@ void TextBlock::bindArenaPointers() {
   textOffArr = reinterpret_cast<const uint16_t*>(base);
   xposArr = reinterpret_cast<const int16_t*>(base + wc * 2);
   size_t off = wc * 4;
+  // ypos stays among the 16-bit arrays (right after xpos) so 2-byte alignment holds.
+  if (isVertical) {
+    yposArr = reinterpret_cast<const int16_t*>(base + off);
+    off += wc * 2;
+  }
   if (focusPresent) {
     focusSuffixXArr = reinterpret_cast<const uint16_t*>(base + off);
     off += wc * 2;
@@ -72,7 +81,7 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   }
   textBytes = static_cast<uint16_t>(totalText);
 
-  const size_t size = arenaSize(numWords, focusPresent, textBytes);
+  const size_t size = arenaSize(numWords, focusPresent, isVertical, textBytes);
   arena = makeUniqueNoThrow<uint8_t[]>(size);
   if (!arena) {
     LOG_ERR("TXB", "OOM: arena %u bytes", static_cast<uint32_t>(size));
@@ -108,9 +117,88 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   }
 }
 
+TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
+                     const std::vector<int16_t>& wordYpos, const std::vector<EpdFontFamily::Style>& wordStyles,
+                     const BlockStyle& blockStyle)
+    : blockStyle(blockStyle) {
+  if (words.size() != wordXpos.size() || words.size() != wordYpos.size() || words.size() != wordStyles.size() ||
+      words.size() > 10000) {
+    LOG_ERR("TXB", "Vertical construction failed: size mismatch (words=%u, xpos=%u, ypos=%u, styles=%u)",
+            static_cast<uint32_t>(words.size()), static_cast<uint32_t>(wordXpos.size()),
+            static_cast<uint32_t>(wordYpos.size()), static_cast<uint32_t>(wordStyles.size()));
+    isValid = false;
+    return;
+  }
+
+  numWords = static_cast<uint16_t>(words.size());
+  isVertical = true;
+  focusPresent = false;
+  if (numWords == 0) {
+    return;  // valid empty block, no arena
+  }
+
+  size_t totalText = 0;
+  for (const auto& w : words) totalText += w.size() + 1;
+  if (totalText > UINT16_MAX) {
+    LOG_ERR("TXB", "Vertical construction failed: text size %u exceeds arena limit", static_cast<uint32_t>(totalText));
+    numWords = 0;
+    isVertical = false;
+    isValid = false;
+    return;
+  }
+  textBytes = static_cast<uint16_t>(totalText);
+
+  const size_t size = arenaSize(numWords, focusPresent, isVertical, textBytes);
+  arena = makeUniqueNoThrow<uint8_t[]>(size);
+  if (!arena) {
+    LOG_ERR("TXB", "OOM: vertical arena %u bytes", static_cast<uint32_t>(size));
+    numWords = 0;
+    textBytes = 0;
+    isVertical = false;
+    isValid = false;
+    return;
+  }
+  bindArenaPointers();
+
+  auto* textOff = const_cast<uint16_t*>(textOffArr);
+  auto* xpos = const_cast<int16_t*>(xposArr);
+  auto* ypos = const_cast<int16_t*>(yposArr);
+  auto* styles = const_cast<uint8_t*>(stylesArr);
+  auto* text = const_cast<char*>(textArr);
+  uint16_t off = 0;
+  for (uint16_t i = 0; i < numWords; i++) {
+    textOff[i] = off;
+    xpos[i] = wordXpos[i];
+    ypos[i] = wordYpos[i];
+    styles[i] = static_cast<uint8_t>(wordStyles[i]);
+    memcpy(text + off, words[i].data(), words[i].size());
+    off += static_cast<uint16_t>(words[i].size());
+    text[off++] = '\0';
+  }
+}
+
+void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
+  // PR1 provisional vertical rendering: each word is stacked at its precomputed
+  // (xpos, ypos) with plain drawText. CJK ideographs and kana render correctly
+  // upright this way; punctuation-glyph rotation, tate-chu-yoko, and sideways
+  // Latin are added in a later commit (drawTextVertical / drawTextSideways).
+  const int ascender = renderer.getFontAscenderSize(fontId);
+  for (uint16_t i = 0; i < numWords; i++) {
+    const char* word = wordText(i);
+    const int wordX = xposArr[i] + x;
+    const int wordY = yposArr[i] + y + ascender;  // ypos is the cell top; drawText wants a baseline
+    renderer.drawText(fontId, wordX, wordY, word, true, wordStyle(i));
+  }
+}
+
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
   if (!isValid) {
     LOG_ERR("TXB", "Render skipped: invalid block");
+    return;
+  }
+
+  if (isVertical) {
+    renderVertical(renderer, fontId, x, y);
     return;
   }
 
@@ -246,9 +334,10 @@ bool TextBlock::serialize(HalFile& file) const {
   // per-word arrays and the text blob.
   serialization::writePod(file, numWords);
   serialization::writePod(file, static_cast<uint8_t>(focusPresent ? 1 : 0));
+  serialization::writePod(file, static_cast<uint8_t>(isVertical ? 1 : 0));
   serialization::writePod(file, textBytes);
   if (numWords > 0) {
-    const size_t size = arenaSize(numWords, focusPresent, textBytes);
+    const size_t size = arenaSize(numWords, focusPresent, isVertical, textBytes);
     if (file.write(arena.get(), size) != size) {
       LOG_ERR("TXB", "Serialization failed: arena write (%u bytes)", static_cast<uint32_t>(size));
       return false;
@@ -277,9 +366,11 @@ bool TextBlock::serialize(HalFile& file) const {
 std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   uint16_t wc;
   uint8_t hasFocus;
+  uint8_t hasVertical;
   uint16_t textBytes;
   serialization::readPod(file, wc);
   serialization::readPod(file, hasFocus);
+  serialization::readPod(file, hasVertical);
   serialization::readPod(file, textBytes);
 
   // Sanity checks: cap the arena allocation and reject impossible geometry
@@ -301,9 +392,10 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   block->numWords = wc;
   block->textBytes = textBytes;
   block->focusPresent = hasFocus != 0;
+  block->isVertical = hasVertical != 0;
 
   if (wc > 0) {
-    const size_t size = arenaSize(wc, block->focusPresent, textBytes);
+    const size_t size = arenaSize(wc, block->focusPresent, block->isVertical, textBytes);
     block->arena = makeUniqueNoThrow<uint8_t[]>(size);
     if (!block->arena) {
       LOG_ERR("TXB", "OOM: arena %u bytes", static_cast<uint32_t>(size));

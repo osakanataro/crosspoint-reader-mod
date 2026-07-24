@@ -39,6 +39,19 @@
 #include "util/ScreenshotUtil.h"
 
 namespace {
+// PR1 tategaki (vertical writing) auto-detection: no explicit writing-mode setting exists yet,
+// so a book lays out vertically only when its spine declares page-progression-direction="rtl"
+// AND its language is CJK (Japanese/Chinese) — the shape of a typical vertical EPUB.
+bool bookIsVertical(const Epub* epub) {
+  if (epub == nullptr || !epub->isPageProgressionRtl()) {
+    return false;
+  }
+  const std::string& lang = epub->getLanguage();
+  return lang.rfind("ja", 0) == 0 || lang.rfind("jp", 0) == 0 || lang.rfind("zh", 0) == 0;
+}
+}  // namespace
+
+namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 // pages per minute, first item is 1 to prevent division by zero if accessed
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
@@ -366,7 +379,8 @@ void EpubReaderActivity::loop() {
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
     RenderLock lock;
     // Reuse the last render's viewport so the extension paginates identically to the partial.
-    const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+    ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+    buildSpec.isVertical = bookIsVertical(epub.get());
     if (!section->startBuild(buildSpec)) {
       // Not fatal: the partial keeps serving its pages; crossing the watermark falls back to
       // the blocking extension in render(). Don't retry every tick.
@@ -1094,7 +1108,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   buildViewportWidth = viewportWidth;
   buildViewportHeight = viewportHeight;
 
-  const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  renderSpec.isVertical = bookIsVertical(epub.get());
 
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;

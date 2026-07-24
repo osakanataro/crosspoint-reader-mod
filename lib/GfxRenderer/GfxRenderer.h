@@ -73,6 +73,9 @@ class GfxRenderer {
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+  // Extra spacing between cells in vertical (tategaki) layout, as a percent of the
+  // cell advance. Set from the reader spec before a vertical section is laid out.
+  int _verticalCharSpacing = 0;
 
   // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
   // size-matched SD-card font id that carries CJK glyphs. When a string drawn
@@ -248,6 +251,8 @@ class GfxRenderer {
   int getFontAscenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   int getLineHeight(int fontId, float compression) const;
+  void setVerticalCharSpacing(int spacingPercent) { _verticalCharSpacing = spacingPercent; }
+  int getVerticalCharSpacing() const { return _verticalCharSpacing; }
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   /// Word-wrap \p text into at most \p maxLines lines, each no wider than

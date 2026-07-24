@@ -234,10 +234,60 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
+  if (isVertical) {
+    // Vertical layout tokenizes per codepoint: each glyph is its own cell, classified
+    // (upright CJK / sideways Latin / tate-chu-yoko digits) so layoutVerticalColumns can
+    // stack and orient it. Latin runs and 1-2 digit numbers are grouped into one token.
+    flushPartWordBufferVertical(fontStyle);
+  } else {
+    currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
+  }
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
+}
+
+// Tokenize the pending buffer into vertical cells. Emits one token per CJK/upright
+// codepoint; consecutive ASCII letters coalesce into a Sideways run and 1-2 digit
+// numbers into a TateChuYoko token (3+ digits fall back to Sideways).
+void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Style fontStyle) {
+  const auto* p = reinterpret_cast<const unsigned char*>(partWordBuffer);
+  const auto* end = p + partWordBufferIndex;
+  while (p < end) {
+    const unsigned char* cpStart = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+
+    if (VerticalTextUtils::isUprightInVertical(cp) || VerticalTextUtils::getVerticalPunctuationOffset(cp) != nullptr) {
+      // Upright CJK/kana/punctuation: one cell each.
+      currentTextBlock->addVerticalToken(std::string(reinterpret_cast<const char*>(cpStart), p - cpStart), fontStyle,
+                                         VerticalTextUtils::VerticalBehavior::Upright);
+      continue;
+    }
+
+    // Coalesce a run of ASCII digits or letters into a single sideways/tate-chu-yoko token.
+    const bool isDigit = (cp >= '0' && cp <= '9');
+    const unsigned char* runStart = cpStart;
+    const unsigned char* runEnd = p;
+    int runChars = 1;
+    while (runEnd < end) {
+      const unsigned char* peek = runEnd;
+      const uint32_t next = utf8NextCodepoint(&peek);
+      const bool nextDigit = (next >= '0' && next <= '9');
+      const bool nextAscii = (next >= '!' && next <= '~');
+      if ((isDigit && nextDigit) || (!isDigit && nextAscii && !nextDigit)) {
+        runEnd = peek;
+        runChars++;
+      } else {
+        break;
+      }
+    }
+    p = runEnd;
+    const auto behavior = (isDigit && runChars <= 2) ? VerticalTextUtils::VerticalBehavior::TateChuYoko
+                                                     : VerticalTextUtils::VerticalBehavior::Sideways;
+    currentTextBlock->addVerticalToken(std::string(reinterpret_cast<const char*>(runStart), runEnd - runStart),
+                                       fontStyle, behavior);
+  }
 }
 
 // start a new text block if needed
@@ -1199,13 +1249,24 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
   if (blockWordCount > softFlushThreshold) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-    const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                        ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                        : self->viewportWidth;
-    self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
+    if (self->isVertical) {
+      const int verticalInset =
+          self->currentTextBlock->getBlockStyle().topInset() + self->currentTextBlock->getBlockStyle().bottomInset();
+      const uint16_t effectiveHeight = (verticalInset < self->viewportHeight)
+                                           ? static_cast<uint16_t>(self->viewportHeight - verticalInset)
+                                           : self->viewportHeight;
+      self->currentTextBlock->layoutVerticalColumns(
+          self->renderer, self->fontId, effectiveHeight,
+          [self](const std::shared_ptr<TextBlock>& col) { self->addColumnToPage(col); }, false);
+    } else {
+      const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
+      const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
+                                          ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
+                                          : self->viewportWidth;
+      self->currentTextBlock->layoutAndExtractLines(
+          self->renderer, self->fontId, effectiveWidth,
+          [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
+    }
   }
 }
 
@@ -1504,6 +1565,37 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   currentPageNextY += lineHeight;
 }
 
+void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
+  // Column occupies one CJK cell of width plus a quarter-cell gap to the next column.
+  const int columnWidth = renderer.getLineHeight(fontId, lineCompression);
+  const int columnSpacing = columnWidth / 4;
+
+  if (!currentPage) {
+    currentPage.reset(new Page());
+    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth);
+  }
+
+  // Columns advance right-to-left; a new page starts once the cursor passes the left edge.
+  if (currentPageNextX < 0) {
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
+    completedPageCount++;
+    currentPage.reset(new Page());
+    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth);
+  }
+
+  wordsExtractedInBlock += column->wordCount();
+  auto footnoteIt = pendingFootnotes.begin();
+  while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
+    currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
+    ++footnoteIt;
+  }
+  pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
+
+  const int16_t yOffset = column->getBlockStyle().topInset();
+  currentPage->elements.push_back(std::make_shared<PageLine>(column, currentPageNextX, yOffset));
+  currentPageNextX -= static_cast<int16_t>(columnWidth + columnSpacing);
+}
+
 void ChapterHtmlSlimParser::makePages() {
   if (!currentTextBlock) {
     LOG_ERR("EHP", "!! No text block to make pages for !!");
@@ -1513,12 +1605,37 @@ void ChapterHtmlSlimParser::makePages() {
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
+    if (isVertical) {
+      currentPageNextX = static_cast<int16_t>(viewportWidth - renderer.getLineHeight(fontId, lineCompression));
+    }
   }
 
   const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
 
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+
+  // Vertical (tategaki): lay the paragraph out as right-to-left columns. Block top/bottom
+  // margins are a horizontal-flow concept; vertical advances by column width and adds a
+  // half-cell inter-paragraph gap instead.
+  if (isVertical) {
+    const int verticalInset = blockStyle.topInset() + blockStyle.bottomInset();
+    const uint16_t effectiveHeight =
+        (verticalInset < viewportHeight) ? static_cast<uint16_t>(viewportHeight - verticalInset) : viewportHeight;
+    currentTextBlock->layoutVerticalColumns(renderer, fontId, effectiveHeight,
+                                            [this](const std::shared_ptr<TextBlock>& col) { addColumnToPage(col); });
+    if (!pendingFootnotes.empty() && currentPage) {
+      for (const auto& [idx, fn] : pendingFootnotes) {
+        currentPage->addFootnote(fn.number, fn.href);
+      }
+      pendingFootnotes.clear();
+    }
+    if (extraParagraphSpacing) {
+      currentPageNextX -= static_cast<int16_t>(lineHeight / 2);
+    }
+    return;
+  }
+
   if (blockStyle.marginTop > 0) {
     currentPageNextY += blockStyle.marginTop;
   }

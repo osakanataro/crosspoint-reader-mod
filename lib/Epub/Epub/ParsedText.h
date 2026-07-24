@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EpdFontFamily.h>
+#include <VerticalTextUtils.h>
 
 #include <functional>
 #include <memory>
@@ -18,6 +19,9 @@ class ParsedText {
   std::vector<bool> wordContinues;      // true = word attaches to previous with no break
   std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined
   std::vector<bool> wordIsFocusSuffix;  // true = token is the regular tail of a focus bold-prefix split
+  // Per-word vertical orientation (tategaki). Populated only in vertical mode, in lockstep
+  // with words[]; empty in horizontal mode. Consumed by layoutVerticalColumns.
+  std::vector<VerticalTextUtils::VerticalBehavior> wordVerticalBehaviors;
   BlockStyle blockStyle;
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
@@ -60,6 +64,10 @@ class ParsedText {
   ~ParsedText() = default;
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false);
+  // Vertical (tategaki) token: one already-tokenized unit (typically a single codepoint)
+  // plus its orientation class. Bypasses the horizontal focus/bidi machinery — vertical
+  // layout stacks tokens down a column and composes columns right-to-left.
+  void addVerticalToken(std::string token, EpdFontFamily::Style fontStyle, VerticalTextUtils::VerticalBehavior vb);
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
@@ -67,4 +75,12 @@ class ParsedText {
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
                              bool includeLastLine = true);
+  // Vertical (tategaki) analogue of layoutAndExtractLines: stacks tokens down columns of
+  // height columnHeight, applying kinsoku at column boundaries, and emits one TextBlock per
+  // column (words positioned by ypos; the page composes columns right-to-left). Consumes
+  // emitted words like the horizontal path; includeLastColumn=false preserves a trailing
+  // partial column across mid-block flushes.
+  void layoutVerticalColumns(const GfxRenderer& renderer, int fontId, uint16_t columnHeight,
+                             const std::function<void(std::shared_ptr<TextBlock>)>& processColumn,
+                             bool includeLastColumn = true);
 };
