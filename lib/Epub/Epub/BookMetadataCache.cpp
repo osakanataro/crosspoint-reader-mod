@@ -12,8 +12,12 @@
 
 namespace {
 // v8: TOC/book titles stored NFC-composed
-// v9: BookMetadata gains pageProgressionRtl (spine page-progression-direction), for tategaki auto-detect
-constexpr uint8_t BOOK_CACHE_VERSION = 9;
+// v9: superseded — pageProgressionRtl carried this number on the tategaki branch before it
+//     merged upstream v10; skipped to keep v11 unambiguous.
+// v10: ignore ambiguous guide text references
+// v11: BookMetadata gains pageProgressionRtl (spine page-progression-direction), for tategaki
+//      auto-detect
+constexpr uint8_t BOOK_CACHE_VERSION = 11;
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";

@@ -21,12 +21,13 @@ namespace {
 // v32: ImageBlock serializes the book-internal source href after the cache path
 //      (lazy extraction: images are header-probed at build time and extracted on
 //      first render).
-// v33: ReaderRenderSpec gains isVertical + verticalCharSpacing (tategaki). Both are
-//      part of the section cache key, so a book switched between vertical and
-//      horizontal (or a changed vertical char spacing) rebuilds its sections.
-// v34: TextBlock serializes an isVertical flag and (for vertical blocks) a per-word
-//      ypos array inside the arena, so v33 page data can no longer be decoded.
-constexpr uint8_t SECTION_FILE_VERSION = 34;
+// v33: Support <ruby> and <rt> tags. Skip <rp> tags
+// v34: superseded — the vertical-writing key/TextBlock changes carried this number on the
+//      tategaki branch before it merged upstream ruby support; skipped to keep v35 unambiguous.
+// v35: Vertical writing (tategaki) on top of ruby support. The header carries isVertical +
+//      verticalCharSpacing as cache-key fields, and TextBlock serializes an isVertical flag
+//      plus a per-word ypos array for vertical blocks.
+constexpr uint8_t SECTION_FILE_VERSION = 35;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

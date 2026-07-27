@@ -22,6 +22,7 @@ class ParsedText {
   // Per-word vertical orientation (tategaki). Populated only in vertical mode, in lockstep
   // with words[]; empty in horizontal mode. Consumed by layoutVerticalColumns.
   std::vector<VerticalTextUtils::VerticalBehavior> wordVerticalBehaviors;
+  std::vector<std::string> rubyTexts;
   BlockStyle blockStyle;
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
@@ -74,6 +75,13 @@ class ParsedText {
   // plus its orientation class. Bypasses the horizontal focus/bidi machinery — vertical
   // layout stacks tokens down a column and composes columns right-to-left.
   void addVerticalToken(std::string token, EpdFontFamily::Style fontStyle, VerticalTextUtils::VerticalBehavior vb);
+  void setRubyForWordAt(size_t index, const std::string& ruby);
+  void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
+  EpdFontFamily::Style getWordStyleAt(size_t index) const {
+    return index < wordStyles.size() ? wordStyles[index] : EpdFontFamily::REGULAR;
+  }
+  std::string getRubyTextAt(size_t index) const { return index < rubyTexts.size() ? rubyTexts[index] : std::string(); }
+  void ensureRubyCapacity();
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
