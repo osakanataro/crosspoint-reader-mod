@@ -42,6 +42,9 @@ class ChapterHtmlSlimParser {
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
   int16_t currentPageNextX = 0;  // vertical (tategaki): X of the next column, advancing right-to-left
+  // Page index currentPageNextX was last anchored for; -1 = never. addColumnToPage compares it
+  // against completedPageCount to detect a page started elsewhere and re-anchor to the right margin.
+  int verticalCursorPageIndex = -1;
   int fontId;
   float lineCompression;
   bool extraParagraphSpacing;

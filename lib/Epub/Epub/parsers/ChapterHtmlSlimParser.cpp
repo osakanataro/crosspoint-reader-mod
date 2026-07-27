@@ -333,7 +333,8 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
-  currentTextBlock.reset(new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle));
+  currentTextBlock.reset(
+      new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle, isVertical));
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
 }
@@ -976,7 +977,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
-        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR);
+        if (self->isVertical) {
+          self->currentTextBlock->addVerticalToken("\xe2\x80\xa2", EpdFontFamily::REGULAR,
+                                                   VerticalTextUtils::VerticalBehavior::Upright);
+        } else {
+          self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR);
+        }
         self->listItemBulletOnly = true;
       }
     }
@@ -1572,7 +1578,16 @@ void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
 
   if (!currentPage) {
     currentPage.reset(new Page());
+  }
+
+  // Re-anchor the cursor to the right margin whenever the page changed. Pages are also
+  // started outside this function (TOC-anchor breaks, image blocks) and those paths only
+  // reset the horizontal cursor, so the cursor value alone cannot tell us whether it still
+  // belongs to the current page. Keying on the page index instead is immune to that, and to
+  // a fresh Page landing on the address of the one just handed off.
+  if (verticalCursorPageIndex != completedPageCount) {
     currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth);
+    verticalCursorPageIndex = completedPageCount;
   }
 
   // Columns advance right-to-left; a new page starts once the cursor passes the left edge.
@@ -1581,6 +1596,7 @@ void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
     completedPageCount++;
     currentPage.reset(new Page());
     currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth);
+    verticalCursorPageIndex = completedPageCount;
   }
 
   wordsExtractedInBlock += column->wordCount();
@@ -1605,9 +1621,8 @@ void ChapterHtmlSlimParser::makePages() {
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
-    if (isVertical) {
-      currentPageNextX = static_cast<int16_t>(viewportWidth - renderer.getLineHeight(fontId, lineCompression));
-    }
+    // The vertical column cursor is anchored by addColumnToPage (keyed on the page index),
+    // so it needs no initialization here.
   }
 
   const int lineHeight = renderer.getLineHeight(fontId, lineCompression);

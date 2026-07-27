@@ -270,6 +270,17 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   const bool wordStartsRtl = !hasRtlWord && mayContainRtlBytes(word.c_str()) &&
                              BidiUtils::startsWithRtl(word.c_str(), RTL_PER_WORD_PROBE_DEPTH);
 
+  // Vertical layout needs one orientation entry per word. Callers in vertical mode should use
+  // addVerticalToken, but shared markup paths reach addWord too (the <li> bullet), and the
+  // focus-split branches below push several words at once. Topping the array up after every push
+  // keeps behaviors[i] describing words[i]: a short array would otherwise shift every later
+  // token's orientation onto its neighbour. No-op in horizontal mode.
+  const auto syncVerticalBehaviors = [&] {
+    if (verticalMode) {
+      wordVerticalBehaviors.resize(words.size(), VerticalTextUtils::VerticalBehavior::Upright);
+    }
+  };
+
   const auto pushToken = [&](std::string token, const bool continues, const bool noSpaceBefore,
                              const bool isFocusSuffix) {
     words.push_back(std::move(token));
@@ -277,6 +288,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     wordContinues.push_back(continues);
     wordNoSpaceBefore.push_back(noSpaceBefore);
     wordIsFocusSuffix.push_back(isFocusSuffix);
+    syncVerticalBehaviors();
   };
 
   bool effectiveAttachToPrevious = attachToPrevious;
@@ -406,6 +418,7 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
         wordIsFocusSuffix.push_back(true);
       }
     }
+    syncVerticalBehaviors();
   };
 
   // Tokenize the string by alternating states (Word vs. Non-Word)

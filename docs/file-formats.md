@@ -6,10 +6,14 @@ All POD fields are written in the ESP32 little-endian representation used by
 
 ## `book.bin`
 
-### Version 7
+### Version 9
 
 `book.bin` stores EPUB metadata plus lookup tables for spine and TOC entries.
 The current firmware writes this version from `BookMetadataCache`.
+
+Version 9 appends `pageProgressionRtl` to the metadata block: the spine's
+`page-progression-direction="rtl"` attribute, used to auto-detect vertical
+(tategaki) books.
 
 ImHex pattern:
 
@@ -18,7 +22,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 7
+#define EXPECTED_VERSION 9
 #define MAX_STRING_LENGTH 65535
 
 struct String {
@@ -39,6 +43,7 @@ struct Metadata {
     String language [[comment("Book language code")]];
     String coverItemHref [[comment("Path to cover image")]];
     String textReferenceHref [[comment("Path to guided first text reference")]];
+    u8 pageProgressionRtl [[comment("Spine page-progression-direction is rtl (vertical/RTL book)")]];
 };
 
 struct SpineEntry {
@@ -90,11 +95,18 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 30
+### Version 34
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 34 stores an `isVertical` flag per TextBlock and, for vertical blocks, a
+per-word `ypos` array inside the word arena (see `TextBlock.h` for the layout).
+
+Version 33 added the vertical-writing cache-busting fields `isVertical` and
+`verticalCharSpacing` to the header, so a book switched between vertical
+(tategaki) and horizontal layout rebuilds its sections.
 
 Version 30 is binary-identical to version 29. The version was bumped because
 Arabic contextual shaping changed text measurement (`getTextAdvanceX` now

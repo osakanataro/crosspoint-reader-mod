@@ -26,6 +26,10 @@ class ParsedText {
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
+  // True when this block is laid out as vertical (tategaki) columns. Kept here so addWord can
+  // maintain the wordVerticalBehaviors invariant even on shared markup paths that don't know
+  // about vertical mode.
+  bool verticalMode;
   bool isNaturalAlign;
   bool hasRtlWord;
   std::vector<std::string> reorderedWordsScratch;
@@ -54,11 +58,13 @@ class ParsedText {
 
  public:
   explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
-                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle())
+                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
+                      const bool verticalMode = false)
       : blockStyle(blockStyle),
         extraParagraphSpacing(extraParagraphSpacing),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
+        verticalMode(verticalMode),
         isNaturalAlign(false),
         hasRtlWord(false) {}
   ~ParsedText() = default;

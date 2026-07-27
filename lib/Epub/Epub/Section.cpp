@@ -24,7 +24,9 @@ namespace {
 // v33: ReaderRenderSpec gains isVertical + verticalCharSpacing (tategaki). Both are
 //      part of the section cache key, so a book switched between vertical and
 //      horizontal (or a changed vertical char spacing) rebuilds its sections.
-constexpr uint8_t SECTION_FILE_VERSION = 33;
+// v34: TextBlock serializes an isVertical flag and (for vertical blocks) a per-word
+//      ypos array inside the arena, so v33 page data can no longer be decoded.
+constexpr uint8_t SECTION_FILE_VERSION = 34;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
