@@ -292,6 +292,10 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 // codepoint; consecutive ASCII letters coalesce into a Sideways run and 1-2 digit
 // numbers into a TateChuYoko token (3+ digits fall back to Sideways).
 void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Style fontStyle) {
+  // Vertical layout emits roughly one token per codepoint, so a full buffer becomes a burst of
+  // pushes. Reserve up front (worst case one token per byte) so the parallel arrays grow once.
+  currentTextBlock->ensureTokenCapacity(static_cast<size_t>(partWordBufferIndex));
+
   const auto* p = reinterpret_cast<const unsigned char*>(partWordBuffer);
   const auto* end = p + partWordBufferIndex;
   while (p < end) {

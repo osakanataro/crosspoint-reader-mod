@@ -385,28 +385,6 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     effectiveNoSpaceBefore = true;
   }
 
-  // Bulk-reserve the per-token parallel arrays before a burst of pushes so they
-  // don't repeatedly double. Only the std::vector arrays are reserved: words and
-  // rubyTexts are std::deque (chunked growth, no reserve()/capacity() and no large
-  // contiguous reallocation to avoid). wordStyles' capacity gauges them all since
-  // pushToken() keeps every array in lockstep.
-  const auto ensureTokenCapacity = [&](const size_t additionalTokens) {
-    if (additionalTokens == 0) return;
-    const size_t requiredSize = words.size() + additionalTokens;
-    if (wordStyles.capacity() >= requiredSize) return;
-
-    size_t newCapacity = wordStyles.capacity() < 16 ? 16 : wordStyles.capacity();
-    while (newCapacity < requiredSize) {
-      newCapacity *= 2;
-    }
-
-    wordStyles.reserve(newCapacity);
-    wordContinues.reserve(newCapacity);
-    wordNoSpaceBefore.reserve(newCapacity);
-    wordIsFocusSuffix.reserve(newCapacity);
-    wordVisibleOffsetDeltas.reserve(newCapacity);
-  };
-
   if (auto breakOffsets = cjkCharacterBreakByteOffsets(word); !breakOffsets.empty()) {
     // CJK-heavy paragraphs can push hundreds of tiny tokens quickly when CSS toggles
     // inline styles. Reserve once up front to avoid repeated vector growth reallocations.
@@ -613,6 +591,35 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
   }
   return 0;
 }
+
+// Bulk-reserve the per-token parallel arrays before a burst of pushes so they don't repeatedly
+// double. Only the std::vector arrays are reserved: words and rubyTexts are std::deque (chunked
+// growth, no reserve()/capacity() and no large contiguous reallocation to avoid). wordStyles'
+// capacity gauges them all since every push path keeps the arrays in lockstep.
+void ParsedText::ensureTokenCapacity(const size_t additionalTokens) {
+  if (additionalTokens == 0) return;
+  const size_t requiredSize = words.size() + additionalTokens;
+  if (wordStyles.capacity() >= requiredSize) return;
+
+  size_t newCapacity = wordStyles.capacity() < 16 ? 16 : wordStyles.capacity();
+  while (newCapacity < requiredSize) {
+    newCapacity *= 2;
+  }
+
+  wordStyles.reserve(newCapacity);
+  wordContinues.reserve(newCapacity);
+  wordNoSpaceBefore.reserve(newCapacity);
+  wordIsFocusSuffix.reserve(newCapacity);
+  // Exactly one of these is filled, depending on writing mode (addWord pushes visible offsets,
+  // addVerticalToken pushes orientations). Reserving both would waste a few KB per paragraph on
+  // the array the current mode never touches.
+  if (verticalMode) {
+    wordVerticalBehaviors.reserve(newCapacity);
+  } else {
+    wordVisibleOffsetDeltas.reserve(newCapacity);
+  }
+}
+
 void ParsedText::addVerticalToken(std::string token, const EpdFontFamily::Style fontStyle,
                                   const VerticalTextUtils::VerticalBehavior vb) {
   if (token.empty()) return;

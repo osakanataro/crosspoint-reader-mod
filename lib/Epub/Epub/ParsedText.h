@@ -106,6 +106,10 @@ class ParsedText {
   // layout stacks tokens down a column and composes columns right-to-left. Does not track
   // a visible-text offset (see the wordVisibleOffsetDeltas comment above).
   void addVerticalToken(std::string token, EpdFontFamily::Style fontStyle, VerticalTextUtils::VerticalBehavior vb);
+  // Reserve the per-token parallel arrays for `additionalTokens` more pushes. Callers that
+  // append a burst of tokens (a CJK-split word, a buffer of vertical cells) should call this
+  // first so the arrays grow once instead of doubling repeatedly mid-burst.
+  void ensureTokenCapacity(size_t additionalTokens);
   void setRubyForWordAt(size_t index, const std::string& ruby);
   void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
   EpdFontFamily::Style getWordStyleAt(size_t index) const {
