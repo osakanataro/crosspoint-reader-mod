@@ -97,16 +97,25 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 35
+### Version 36
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 35 adds vertical writing (tategaki) on top of ruby support: the header
+Version 36 adds vertical writing (tategaki) on top of version 35: the header
 carries the `isVertical` and `verticalCharSpacing` cache-key fields, and each
 TextBlock serializes an `isVertical` flag plus — for vertical blocks — a per-word
 `ypos` array inside the word arena (see `TextBlock.h` for the arena layout).
+
+Version 35 adds a header offset and a `uint32_t` entry per page for the
+visible-text offset LUT. The other section LUTs remain unchanged.
+
+Version 34 is binary-identical to version 33 in the upstream sense (word-gap
+suppression narrowed to tokens glued together in the source, so v33's collapsed
+Hangul-word spacing no longer matches what the layout engine produces) — this
+number was also briefly used by the tategaki branch's own pre-merge changes
+before it adopted vertical writing under version 36 instead.
 
 Version 33 added `<ruby>`/`<rt>` support (`<rp>` tags are skipped).
 
@@ -121,8 +130,9 @@ superscript, and subscript. The format also includes:
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
 - page offset LUT
+- per-page visible-text offset LUT (zero-based Unicode codepoints in `<body>`)
 - anchor-to-page map for fragment and footnote navigation
-- paragraph and list-item LUTs used by KOReader sync page refinement
+- paragraph and list-item LUTs retained for navigation and legacy sync fallback
 - optional per-word Focus Reading split metadata
 - per-page footnote entries
 - serialized word style bits for underline, strikethrough, superscript, and
@@ -139,7 +149,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 30
+#define EXPECTED_VERSION 36
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 96
@@ -201,11 +211,15 @@ struct BlockStyle {
 struct TextBlock {
     u16 wordCount;
     u8 hasFocus;
+    u8 isVertical [[comment("Tategaki block: arena carries a per-word wordYPos array")]];
     u16 textBytes [[comment("Total size of text[], including one NUL per word")]];
 
     if (wordCount > 0) {
         u16 textOff[wordCount] [[comment("Byte offset of word i's text within text[]")]];
         s16 wordXPos[wordCount];
+        if (isVertical != 0) {
+            s16 wordYPos[wordCount] [[comment("Per-word stacking position within the column")]];
+        }
         if (hasFocus != 0) {
             u16 wordFocusSuffixX[wordCount] [[comment("Suffix x offset from word start")]];
         }
@@ -215,6 +229,8 @@ struct TextBlock {
         }
         char text[textBytes] [[comment("All words back to back, each NUL-terminated")]];
     }
+
+    String wordRuby[wordCount] [[comment("Per-word ruby annotation text, empty when none")]];
 
     BlockStyle blockStyle;
 };
@@ -307,6 +323,7 @@ struct SectionBin {
     u32 anchorMapOffset;
     u32 paragraphLutOffset;
     u32 listItemLutOffset;
+    u32 visibleTextLutOffset;
 
     Page pages[pageCount];
 
@@ -327,6 +344,10 @@ struct SectionBin {
 
     if (listItemLutOffset != 0 && paragraphLutOffset != 0) {
         u16 listItemIndex[paragraphLut.count] @ listItemLutOffset;
+    }
+
+    if (visibleTextLutOffset != 0) {
+	u32 visibleTextOffset[pageCount] @ visibleTextLutOffset;
     }
 };
 

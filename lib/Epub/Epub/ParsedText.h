@@ -3,6 +3,7 @@
 #include <EpdFontFamily.h>
 #include <VerticalTextUtils.h>
 
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -14,7 +15,16 @@
 class GfxRenderer;
 
 class ParsedText {
-  std::vector<std::string> words;
+  // words/rubyTexts are std::deque, not std::vector: a paragraph can hold thousands
+  // of tokens (CJK splits every character), and a vector grows by reallocating its
+  // whole element array into one contiguous block (32 B/std::string -> 64-128 KB at
+  // a few thousand tokens). On the ESP32-C3 that single large contiguous request
+  // fails under a fragmented, BLE-resident heap and the throwing operator new
+  // abort()s the firmware (fresh-open CJK crash). A deque grows in fixed ~512 B nodes
+  // (largest contiguous alloc stays ~2 KB regardless of token count), so it never
+  // triggers that. The per-token parallel arrays below stay vectors: 1 byte / 1 bit
+  // each, they never approach the contiguous-block ceiling.
+  std::deque<std::string> words;
   std::vector<EpdFontFamily::Style> wordStyles;
   std::vector<bool> wordContinues;      // true = word attaches to previous with no break
   std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined
@@ -22,7 +32,21 @@ class ParsedText {
   // Per-word vertical orientation (tategaki). Populated only in vertical mode, in lockstep
   // with words[]; empty in horizontal mode. Consumed by layoutVerticalColumns.
   std::vector<VerticalTextUtils::VerticalBehavior> wordVerticalBehaviors;
-  std::vector<std::string> rubyTexts;
+  std::deque<std::string> rubyTexts;
+  // Zero-based visible Unicode-codepoint offsets in the spine body, stored as
+  // uint16_t deltas from a shared base to keep this layout-only metadata small.
+  // Pathological spans wider than uint16_t use sparse rebases; rendered
+  // TextBlocks do not carry any of this metadata. Not populated in vertical mode
+  // (see addVerticalToken); vertical pages instead fall back to the parser's running
+  // visibleTextOffset, which by then points at the end of the parsed paragraph, so their
+  // recorded positions run ahead of the true one.
+  struct VisibleOffsetRebase {
+    size_t wordIndex;
+    uint32_t base;
+  };
+  std::vector<uint16_t> wordVisibleOffsetDeltas;
+  uint32_t visibleOffsetBase = 0;
+  std::vector<VisibleOffsetRebase> visibleOffsetRebases;
   BlockStyle blockStyle;
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
@@ -41,6 +65,11 @@ class ParsedText {
   std::vector<bool> reorderedFocusSuffixScratch;
   std::vector<uint16_t> visualOrderScratch;
 
+  uint32_t visibleOffsetBaseAt(size_t wordIndex) const;
+  uint32_t visibleOffsetAt(size_t wordIndex) const;
+  void pushVisibleOffset(uint32_t offset);
+  void insertVisibleOffset(size_t wordIndex, uint32_t offset);
+  void eraseVisibleOffsetPrefix(size_t count);
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
@@ -53,8 +82,8 @@ class ParsedText {
   void extractLine(size_t breakIndex, int pageWidth, const std::vector<uint16_t>& wordWidths,
                    const std::vector<bool>& continuesVec, const std::vector<bool>& noSpaceBeforeVec,
                    const std::vector<size_t>& lineBreakIndices,
-                   const std::function<void(std::shared_ptr<TextBlock>)>& processLine, const GfxRenderer& renderer,
-                   int fontId);
+                   const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
+                   const GfxRenderer& renderer, int fontId);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
 
  public:
@@ -70,10 +99,12 @@ class ParsedText {
         hasRtlWord(false) {}
   ~ParsedText() = default;
 
-  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false);
+  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
+               uint32_t visibleTextOffset = 0);
   // Vertical (tategaki) token: one already-tokenized unit (typically a single codepoint)
   // plus its orientation class. Bypasses the horizontal focus/bidi machinery — vertical
-  // layout stacks tokens down a column and composes columns right-to-left.
+  // layout stacks tokens down a column and composes columns right-to-left. Does not track
+  // a visible-text offset (see the wordVisibleOffsetDeltas comment above).
   void addVerticalToken(std::string token, EpdFontFamily::Style fontStyle, VerticalTextUtils::VerticalBehavior vb);
   void setRubyForWordAt(size_t index, const std::string& ruby);
   void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
@@ -87,7 +118,7 @@ class ParsedText {
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
-                             const std::function<void(std::shared_ptr<TextBlock>)>& processLine,
+                             const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                              bool includeLastLine = true);
   // Vertical (tategaki) analogue of layoutAndExtractLines: stacks tokens down columns of
   // height columnHeight, applying kinsoku at column boundaries, and emits one TextBlock per
