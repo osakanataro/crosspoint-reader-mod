@@ -193,11 +193,12 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // (xpos, ypos) with plain drawText. CJK ideographs and kana render correctly
   // upright this way; punctuation-glyph rotation, tate-chu-yoko, and sideways
   // Latin are added in a later commit (drawTextVertical / drawTextSideways).
-  const int ascender = renderer.getFontAscenderSize(fontId);
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
     const int wordX = xposArr[i] + x;
-    const int wordY = yposArr[i] + y + ascender;  // ypos is the cell top; drawText wants a baseline
+    // drawText takes the cell top and adds the ascender itself (GfxRenderer.cpp,
+    // `yPos = y + getFontAscenderSize(...)`), so ypos passes through unshifted.
+    const int wordY = yposArr[i] + y;
     renderer.drawText(fontId, wordX, wordY, word, true, wordStyle(i));
   }
 }
