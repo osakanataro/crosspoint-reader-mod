@@ -276,6 +276,12 @@ class GfxRenderer {
   // Helper for drawing rotated text (90 degrees clockwise, for side buttons)
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+
+  // Latin runs inside vertical Japanese text: glyphs turn clockwise and the run
+  // advances downward from (x, y), which is the top-left of the column cell.
+  // `columnWidth` centres the rotated line box across the column.
+  void drawTextSideways(int fontId, int x, int y, const char* text, int columnWidth, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

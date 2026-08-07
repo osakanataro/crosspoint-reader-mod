@@ -36,9 +36,10 @@ struct PunctuationOffset {
 //     advance, column layout, kinsoku and cached geometry are unaffected.
 //
 //   rotate — 90 CW rotation, which brackets and long marks need (「 opens
-//     downward in vertical, ー runs along the column). Not implemented yet:
-//     these entries are inert and the glyph draws upright, so brackets still
-//     look horizontal. Needs a rotated-glyph blit in GfxRenderer.
+//     downward in vertical, ー runs along the column). Drawn through
+//     GfxRenderer::drawTextSideways, the same path Latin runs use. The rotation
+//     moves the ink to the right corner of the cell by itself, so these entries
+//     need no offsets on top.
 static constexpr PunctuationOffset VERTICAL_PUNCTUATION[] = {
     // Punctuation - translate from the bottom-left to the top-right quadrant
     {0x3001, 4, -4, false},  // 、 ideographic comma

@@ -190,11 +190,43 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
   }
 }
 
+namespace {
+// Re-derive the token's vertical behaviour at draw time. layoutVerticalColumns
+// classified it the same way from the same text, so this stays in step without
+// widening the cached block format with a per-word behaviour array.
+//
+// Upright: CJK, kana and the punctuation table. Tate-chu-yoko: runs of 1-2 digits,
+// which drawn upright already fill exactly one cell because proportional digits are
+// half-width. Everything else (Latin words, 3+ digit numbers) is sideways.
+bool isSidewaysToken(const char* word) {
+  const auto* p = reinterpret_cast<const unsigned char*>(word);
+  const uint32_t first = utf8NextCodepoint(&p);
+  if (first == 0) return false;
+  if (VerticalTextUtils::isUprightInVertical(first) ||
+      VerticalTextUtils::getVerticalPunctuationOffset(first) != nullptr) {
+    return false;
+  }
+  if (first >= '0' && first <= '9') {
+    int digits = 1;
+    while (const uint32_t cp = utf8NextCodepoint(&p)) {
+      if (cp < '0' || cp > '9') break;
+      digits++;
+    }
+    return digits > 2;
+  }
+  return true;
+}
+}  // namespace
+
 void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
-  // PR1 provisional vertical rendering: each word is stacked at its precomputed
-  // (xpos, ypos) with plain drawText. CJK ideographs and kana render correctly
-  // upright this way; punctuation-glyph rotation, tate-chu-yoko, and sideways
-  // Latin are added in a later commit (drawTextVertical / drawTextSideways).
+  // Each token is stacked at its precomputed (xpos, ypos): CJK and kana upright,
+  // Latin runs and the rotating punctuation turned clockwise (see VERTICAL_PUNCTUATION).
+  //
+  // Column width, needed to centre a sideways run, is the line height the layout
+  // used for the column pitch (addColumnToPage). lineCompression does not reach
+  // here, so a compressed column centres a couple of pixels off.
+  const int columnWidth = renderer.getLineHeight(fontId);
+
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
     int wordX = xposArr[i] + x;
@@ -202,15 +234,32 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     // `yPos = y + getFontAscenderSize(...)`), so ypos passes through unshifted.
     int wordY = yposArr[i] + y;
 
-    // Punctuation drawn from a horizontal-layout font lands in the wrong quadrant
-    // of the cell; nudge it into the vertical position (see VERTICAL_PUNCTUATION).
+    // Sideways runs: the column reserved the run's *width* as its vertical extent,
+    // so drawing it upright would spill across the columns to the left.
+    if (isSidewaysToken(word)) {
+      renderer.drawTextSideways(fontId, wordX, wordY, word, columnWidth, true, wordStyle(i));
+      continue;
+    }
+
+    // Punctuation drawn from a horizontal-layout font is in the wrong place, or the
+    // wrong orientation, for a vertical column (see VERTICAL_PUNCTUATION).
     const auto* p = reinterpret_cast<const unsigned char*>(word);
     const uint32_t cp = utf8NextCodepoint(&p);
     if (const VerticalTextUtils::PunctuationOffset* punct = VerticalTextUtils::getVerticalPunctuationOffset(cp);
-        punct != nullptr && !punct->rotate && (punct->dxEighths != 0 || punct->dyEighths != 0)) {
-      const int cell = renderer.getTextAdvanceX(fontId, word, wordStyle(i));
-      wordX += cell * punct->dxEighths / 8;
-      wordY += cell * punct->dyEighths / 8;
+        punct != nullptr) {
+      if (punct->rotate) {
+        // Brackets and long marks turn with the column. Rotating the horizontal glyph
+        // also carries its ink to the right corner of the cell on its own: 「 ends up
+        // opening downward at the cell top, 」 closing at the bottom, ー running along
+        // the column. The advance is unchanged, so the cell still measures one em.
+        renderer.drawTextSideways(fontId, wordX, wordY, word, columnWidth, true, wordStyle(i));
+        continue;
+      }
+      if (punct->dxEighths != 0 || punct->dyEighths != 0) {
+        const int cell = renderer.getTextAdvanceX(fontId, word, wordStyle(i));
+        wordX += cell * punct->dxEighths / 8;
+        wordY += cell * punct->dyEighths / 8;
+      }
     }
 
     renderer.drawText(fontId, wordX, wordY, word, true, wordStyle(i));
