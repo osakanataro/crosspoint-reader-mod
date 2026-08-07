@@ -1,6 +1,24 @@
-# CrossPoint Reader
+# CrossPoint Reader 改造版
 
-[![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
+XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader を改造しています。
+### 2026/08/07時点の開発方針
+- XTEINK X3で動けばいい
+  - aliexpressで買ったUSB接続ができないバージョンを使用
+- Claude Codeで開発する
+  - コンパイルなどはUbuntu 24.04仮想マシン上で実施
+- 本家をベースにする
+  - X3の最近のバージョンは液晶パネルが違う件への対応などが本家には入っているため
+- 日本語訳は付けない
+- フォントはSDカード上に配置する
+  - 容量食うのでSDカード上に置く
+- ページめくりボタンは左が進むで、右が戻る
+  - 縦書きフォーマット(RTL)のEPUBを開いた時だけその動作をする
+- テスト用EPUBファイルにて動作を確認
+  - 一部、特殊なフォントを必要とする文字以外について表示できることが期待される
+- ルビ表示については検討中
+  - ルビ表示面倒くさそうだから、どうするかなぁ
+
+## 以下 CrossPoint Reader 公式の記述
 
 CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
 
