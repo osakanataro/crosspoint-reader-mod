@@ -280,6 +280,15 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     if (punct != nullptr) {
       drawX += cellWidth * punct->dxEighths / 8;
       drawY += cellWidth * punct->dyEighths / 8;
+    } else if (cp >= '0' && cp <= '9') {
+      // Tate-chu-yoko: 1-2 digits set upright inside one cell, which the layout
+      // reserved at a full em. Two half-width digits fill that exactly, but a lone
+      // digit covers half of it and would hug the cell's left edge, off the column's
+      // axis. Centre whatever comes out narrower than the cell.
+      const int advance = renderer.getTextAdvanceX(fontId, word, wordStyle(i));
+      if (advance < cellWidth) {
+        drawX += (cellWidth - advance) / 2;
+      }
     }
 
     renderer.drawText(fontId, drawX, drawY, word, true, wordStyle(i));
