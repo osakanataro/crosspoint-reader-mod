@@ -462,7 +462,12 @@ void EpubReaderActivity::loop() {
     pendingReadFolderMove = false;
   }
 
-  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  // Page-progression-direction, not bookIsVertical(): the controls have to follow the
+  // page order the spine declares, which is right-to-left for a horizontal Arabic book
+  // just as much as for a vertical Japanese one.
+  const bool rtlPages = epub != nullptr && epub->isPageProgressionRtl();
+
+  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput, rtlPages);
 
   if (automaticPageTurnActive) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
@@ -615,7 +620,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput, rtlPages);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
