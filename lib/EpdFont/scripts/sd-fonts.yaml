@@ -261,6 +261,11 @@ families:
   # The non-ideograph blocks the presets name (IPA modifiers, math operators,
   # arrows, geometric shapes) pass through in full -- a few hundred codepoints
   # each, and a book that reaches for ∼ or ˜ should not get U+FFFD.
+  #
+  # extra_fallbacks sits behind Noto Sans in the fallback chain. Neither the CJK
+  # faces nor Noto Sans carry U+223C TILDE OPERATOR — JIS X 0208 defines ∽ but not
+  # ∼ — so the maths face supplies it and its neighbours (≈ ∫ ∂ ...). Same Noto
+  # design family, so a substituted glyph does not read as foreign.
   # Directory/file names stay ASCII so the SD registry can read them.
   #
   # The 8 and 10 pt entries are for the UI, not the reader: when the selected
@@ -275,6 +280,8 @@ families:
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
+    extra_fallbacks:
+      - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/googlefonts/morisawa-biz-ud-gothic/raw/main/fonts/ttf/BIZUDGothic-Regular.ttf"}
@@ -286,6 +293,8 @@ families:
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
+    extra_fallbacks:
+      - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/googlefonts/morisawa-biz-ud-mincho/raw/main/fonts/ttf/BIZUDMincho-Regular.ttf"}
@@ -297,6 +306,8 @@ families:
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
+    extra_fallbacks:
+      - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"}

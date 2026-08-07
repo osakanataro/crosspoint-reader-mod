@@ -566,7 +566,7 @@ def extract_ligatures_fonttools(font_path, codepoints):
 
 
 def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=False,
-                         fallback_fontfile=None):
+                         fallback_fontfiles=None):
     """Rasterize all glyphs for one font style. Returns StyleRasterData."""
     import freetype
 
@@ -580,10 +580,14 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     # Invalid_Size_Handle on some fonts.
     face.set_char_size(size << 6, size << 6, 150, 150)
     ligature_glyph_indices = extract_ligature_glyph_indices_fonttools(fontfile)
-    fallback_face = None
-    if fallback_fontfile:
-        fallback_face = freetype.Face(fallback_fontfile)
-        fallback_face.set_char_size(size << 6, size << 6, 150, 150)
+    # Fallback chain, tried in order. The first face carrying the codepoint wins, so a
+    # specialist face (maths, symbols) can sit behind the general text one without
+    # displacing it for the glyphs they both have.
+    fallback_faces = []
+    for fb_path in fallback_fontfiles or []:
+        fb_face = freetype.Face(fb_path)
+        fb_face.set_char_size(size << 6, size << 6, 150, 150)
+        fallback_faces.append(fb_face)
 
     load_flags = freetype.FT_LOAD_RENDER
     if force_autohint:
@@ -596,11 +600,11 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
         if glyph_index > 0:
             face.load_glyph(glyph_index, load_flags)
             return face
-        if fallback_face:
-            fallback_glyph_index = fallback_face.get_char_index(code_point)
+        for fb_face in fallback_faces:
+            fallback_glyph_index = fb_face.get_char_index(code_point)
             if fallback_glyph_index > 0:
-                fallback_face.load_glyph(fallback_glyph_index, load_flags)
-                return fallback_face
+                fb_face.load_glyph(fallback_glyph_index, load_flags)
+                return fb_face
         return None
 
     # Validate intervals: remove codepoints not present in the font.
@@ -613,7 +617,7 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
         start = i_start
         for code_point in range(i_start, i_end + 1):
             has_primary = face.get_char_index(code_point) != 0 or code_point in ligature_glyph_indices
-            has_fallback = fallback_face and fallback_face.get_char_index(code_point) != 0
+            has_fallback = any(fb.get_char_index(code_point) != 0 for fb in fallback_faces)
             if not has_primary and not has_fallback:
                 if start < code_point:
                     validated_intervals.append((start, code_point - 1))
@@ -861,7 +865,8 @@ def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
     """Generate a multi-style v4 .cpfont file.
 
     style_fonts: dict of {style_id: fontfile_path} e.g. {0: "Regular.ttf", 2: "Italic.ttf"}
-    fallback_style_fonts: optional dict of {style_id: fallback_fontfile_path}
+    fallback_style_fonts: optional dict of {style_id: [fallback_fontfile_path, ...]},
+                          tried in the order given
     """
     MAGIC = b"CPFONT\x00\x00"
     HEADER_SIZE = 32
@@ -874,12 +879,12 @@ def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
     fallback_style_fonts = fallback_style_fonts or {}
     for style_id in sorted(style_fonts.keys()):
         fontfile = style_fonts[style_id]
-        fallback_fontfile = fallback_style_fonts.get(style_id)
+        fallback_fontfiles = fallback_style_fonts.get(style_id)
         print(f"  Rasterizing style {style_id}...", file=sys.stderr)
         raster_data[style_id] = rasterize_font_style(
             fontfile, size, intervals, style_id=style_id,
             force_autohint=force_autohint,
-            fallback_fontfile=fallback_fontfile)
+            fallback_fontfiles=fallback_fontfiles)
 
     # Pack binary sections for each style
     packed_sections = {}  # style_id -> tuple of section bytearrays
@@ -990,14 +995,14 @@ def main():
                         help="Font file for italic style.")
     parser.add_argument("--bolditalic", dest="font_bolditalic",
                         help="Font file for bold-italic style.")
-    parser.add_argument("--fallback-regular", dest="fallback_regular",
-                        help="Fallback font file for regular style.")
-    parser.add_argument("--fallback-bold", dest="fallback_bold",
-                        help="Fallback font file for bold style.")
-    parser.add_argument("--fallback-italic", dest="fallback_italic",
-                        help="Fallback font file for italic style.")
-    parser.add_argument("--fallback-bolditalic", dest="fallback_bolditalic",
-                        help="Fallback font file for bold-italic style.")
+    parser.add_argument("--fallback-regular", dest="fallback_regular", action="append",
+                        help="Fallback font file for regular style. Repeatable; the faces are tried in the order given, so a broad text face can be backed by a specialist one (e.g. Noto Sans then Noto Sans Math).")
+    parser.add_argument("--fallback-bold", dest="fallback_bold", action="append",
+                        help="Fallback font file for bold style. Repeatable; the faces are tried in the order given, so a broad text face can be backed by a specialist one (e.g. Noto Sans then Noto Sans Math).")
+    parser.add_argument("--fallback-italic", dest="fallback_italic", action="append",
+                        help="Fallback font file for italic style. Repeatable; the faces are tried in the order given, so a broad text face can be backed by a specialist one (e.g. Noto Sans then Noto Sans Math).")
+    parser.add_argument("--fallback-bolditalic", dest="fallback_bolditalic", action="append",
+                        help="Fallback font file for bold-italic style. Repeatable; the faces are tried in the order given, so a broad text face can be backed by a specialist one (e.g. Noto Sans then Noto Sans Math).")
     parser.add_argument("--codepoints-file", dest="codepoints_file", action="append",
                         help="Whitelist file of allowed codepoints (hex, one per line). "
                              "When specified, only codepoints present in both the intervals "
