@@ -1,0 +1,36 @@
+Japanese sample EPUBs for exercising the reader by hand on a device. Kept apart
+from test/epubs so this fork's own material, with its own provenance, does not
+mix into the upstream set. Nothing here is loaded by the gtest suites; copy a
+file to an SD card and open it.
+
+Vertical writing (tategaki)
+---------------------------
+
+  test_vertical_ja.epub
+  test_vertical_ja_minicss.epub
+
+A Japanese book that declares page-progression-direction="rtl" with
+dc:language ja, so the reader lays it out vertically. It walks through the
+cases that vertical layout gets wrong most easily: ruby (145 instances,
+including annotations long enough to overhang their base word), list items,
+tilde variants (U+FF5E, U+301C, U+223C, U+02DC), fullwidth and halfwidth
+digit runs of one, two and three digits, fullwidth operators (＝ ＜ ＞ ≠ ≒),
+Greek letters, and line-break positions where kinsoku rules apply.
+
+The two files carry byte-identical XHTML and differ only in stylesheet size:
+
+  test_vertical_ja.epub          ~144 KB of CSS across 4 files
+  test_vertical_ja_minicss.epub  ~2 KB of CSS in 1 file, holding only the
+                                 rules the XHTML actually reaches
+
+That pairing separates layout behaviour from CSS cost: the same text, the
+same expected rendering, one book asking the parser to chew through seventy
+times more stylesheet than the other.
+
+Provenance
+----------
+
+Text by OSAKANA TARO, published on Kakuyomu under the handle memoro and
+reused here by its author. CSS derived from the EBPAJ EPUB 3 production
+guide template set, ver. 1.1.4. The EPUB itself is assembled by a private
+PowerShell script, so these files are the artifact rather than the source.
