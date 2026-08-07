@@ -261,6 +261,8 @@ class GfxRenderer {
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
+  /// Negative, matching the font data. ascender - descender is the line box height.
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   int getLineHeight(int fontId, float compression) const;
   void setVerticalCharSpacing(int spacingPercent) { _verticalCharSpacing = spacingPercent; }
@@ -279,8 +281,8 @@ class GfxRenderer {
 
   // Latin runs inside vertical Japanese text: glyphs turn clockwise and the run
   // advances downward from (x, y), which is the top-left of the column cell.
-  // `columnWidth` centres the rotated line box across the column.
-  void drawTextSideways(int fontId, int x, int y, const char* text, int columnWidth, bool black = true,
+  // `cellWidth` is the full-width character cell; the rotated line box is centred on it.
+  void drawTextSideways(int fontId, int x, int y, const char* text, int cellWidth, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getTextHeight(int fontId) const;
 

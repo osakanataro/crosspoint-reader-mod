@@ -222,22 +222,41 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // Each token is stacked at its precomputed (xpos, ypos): CJK and kana upright,
   // Latin runs and the rotating punctuation turned clockwise (see VERTICAL_PUNCTUATION).
   //
-  // Column width, needed to centre a sideways run, is the line height the layout
-  // used for the column pitch (addColumnToPage). lineCompression does not reach
-  // here, so a compressed column centres a couple of pixels off.
-  const int columnWidth = renderer.getLineHeight(fontId);
+  // Both adjustments below are measured against the full-width character cell -- the
+  // em advance layoutVerticalColumns stacked by -- and NOT the column pitch. The two
+  // differ: the pitch is the font's line height, which for a CJK face runs well wider
+  // than the em (NotoSansJP 16pt: 48 px pitch, 33 px em). Upright glyphs land against
+  // the cell's left edge, so centring anything on the pitch instead pushes it right,
+  // out of line with the column of kanji above and below it.
+  //
+  // Every upright token is full-width, so the first one measures the cell for the whole
+  // block. A block of nothing but Latin has none to measure; fall back to the line height,
+  // matching layoutVerticalColumns' own fallback for cjkCharAdvance.
+  int cellWidth = 0;
+  for (uint16_t i = 0; i < numWords && cellWidth == 0; i++) {
+    if (!isSidewaysToken(wordText(i))) {
+      cellWidth = renderer.getTextAdvanceX(fontId, wordText(i), wordStyle(i));
+    }
+  }
+  if (cellWidth == 0) {
+    cellWidth = renderer.getLineHeight(fontId);
+  }
+
+  // Cell top -> the y drawText expects. drawText adds the ascender itself, and for a CJK
+  // face that reaches past the em box, dropping every glyph low in its cell until the last
+  // one of a column overlaps the status bar. Centring the line box in the cell pulls it back.
+  const int lineBox = renderer.getFontAscenderSize(fontId) - renderer.getFontDescenderSize(fontId);
+  const int uprightYAdjust = (cellWidth - lineBox) / 2;
 
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
-    int wordX = xposArr[i] + x;
-    // drawText takes the cell top and adds the ascender itself (GfxRenderer.cpp,
-    // `yPos = y + getFontAscenderSize(...)`), so ypos passes through unshifted.
-    int wordY = yposArr[i] + y;
+    const int cellX = xposArr[i] + x;
+    const int cellY = yposArr[i] + y;
 
     // Sideways runs: the column reserved the run's *width* as its vertical extent,
     // so drawing it upright would spill across the columns to the left.
     if (isSidewaysToken(word)) {
-      renderer.drawTextSideways(fontId, wordX, wordY, word, columnWidth, true, wordStyle(i));
+      renderer.drawTextSideways(fontId, cellX, cellY, word, cellWidth, true, wordStyle(i));
       continue;
     }
 
@@ -245,24 +264,25 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     // wrong orientation, for a vertical column (see VERTICAL_PUNCTUATION).
     const auto* p = reinterpret_cast<const unsigned char*>(word);
     const uint32_t cp = utf8NextCodepoint(&p);
-    if (const VerticalTextUtils::PunctuationOffset* punct = VerticalTextUtils::getVerticalPunctuationOffset(cp);
-        punct != nullptr) {
-      if (punct->rotate) {
-        // Brackets and long marks turn with the column. Rotating the horizontal glyph
-        // also carries its ink to the right corner of the cell on its own: 「 ends up
-        // opening downward at the cell top, 」 closing at the bottom, ー running along
-        // the column. The advance is unchanged, so the cell still measures one em.
-        renderer.drawTextSideways(fontId, wordX, wordY, word, columnWidth, true, wordStyle(i));
-        continue;
-      }
-      if (punct->dxEighths != 0 || punct->dyEighths != 0) {
-        const int cell = renderer.getTextAdvanceX(fontId, word, wordStyle(i));
-        wordX += cell * punct->dxEighths / 8;
-        wordY += cell * punct->dyEighths / 8;
-      }
+    const VerticalTextUtils::PunctuationOffset* punct = VerticalTextUtils::getVerticalPunctuationOffset(cp);
+
+    if (punct != nullptr && punct->rotate) {
+      // Brackets and long marks turn with the column. Rotating the horizontal glyph also
+      // carries its ink to the right corner of the cell on its own: 「 ends up opening
+      // downward at the cell top, 」 closing at the bottom, ー running along the column.
+      // The advance is unchanged, so the cell still measures one em.
+      renderer.drawTextSideways(fontId, cellX, cellY, word, cellWidth, true, wordStyle(i));
+      continue;
     }
 
-    renderer.drawText(fontId, wordX, wordY, word, true, wordStyle(i));
+    int drawX = cellX;
+    int drawY = cellY + uprightYAdjust;
+    if (punct != nullptr) {
+      drawX += cellWidth * punct->dxEighths / 8;
+      drawY += cellWidth * punct->dyEighths / 8;
+    }
+
+    renderer.drawText(fontId, drawX, drawY, word, true, wordStyle(i));
   }
 }
 

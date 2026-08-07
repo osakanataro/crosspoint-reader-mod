@@ -1986,6 +1986,18 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
 }
 
+// Negative, as in the font data: how far the deepest descender reaches below the
+// baseline. Pairs with getFontAscenderSize to give the line box height.
+int GfxRenderer::getFontDescenderSize(const int fontId) const {
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+
+  return fontIt->second.getData(EpdFontFamily::REGULAR)->descender;
+}
+
 int GfxRenderer::getLineHeight(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
@@ -2009,7 +2021,7 @@ int GfxRenderer::getTextHeight(const int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
 }
 
-void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, const char* text, const int columnWidth,
+void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, const char* text, const int cellWidth,
                                    const bool black, const EpdFontFamily::Style style) const {
   if (text == nullptr || *text == '\0') {
     return;
@@ -2037,8 +2049,8 @@ void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, c
 
   // Turning clockwise maps the line box's "up" onto screen-right, so the run occupies
   // [baseline + descender, baseline + ascender] horizontally (descender is negative).
-  // Centre that span in the column instead of hanging it off the cell's left edge.
-  const int baselineX = x + columnWidth / 2 - (fontData->ascender + fontData->descender) / 2;
+  // Centre that span on the character cell, which is where the upright glyphs sit.
+  const int baselineX = x + cellWidth / 2 - (fontData->ascender + fontData->descender) / 2;
 
   int cursorY = y;
   int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
