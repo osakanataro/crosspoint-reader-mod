@@ -97,16 +97,22 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 36
+### Version 37
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 36 adds vertical writing (tategaki) on top of version 35: the header
+Version 37 adds vertical writing (tategaki) on top of version 36: the header
 carries the `isVertical` and `verticalCharSpacing` cache-key fields, and each
 TextBlock serializes an `isVertical` flag plus — for vertical blocks — a per-word
 `ypos` array inside the word arena (see `TextBlock.h` for the arena layout).
+Numbered 37 rather than 36 because upstream consumed 36 for the change below
+while the tategaki branch was out.
+
+Version 36 keeps ruby inside the right border when text is justified and stops
+CJK text breaking into unwanted short lines. Both change word positions, so v35
+caches no longer match.
 
 Version 35 adds a header offset and a `uint32_t` entry per page for the
 visible-text offset LUT. The other section LUTs remain unchanged.
@@ -115,7 +121,7 @@ Version 34 is binary-identical to version 33 in the upstream sense (word-gap
 suppression narrowed to tokens glued together in the source, so v33's collapsed
 Hangul-word spacing no longer matches what the layout engine produces) — this
 number was also briefly used by the tategaki branch's own pre-merge changes
-before it adopted vertical writing under version 36 instead.
+before it adopted vertical writing under version 37 instead.
 
 Version 33 added `<ruby>`/`<rt>` support (`<rp>` tags are skipped).
 
@@ -149,7 +155,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 36
+#define EXPECTED_VERSION 37
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 96

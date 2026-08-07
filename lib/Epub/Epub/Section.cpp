@@ -24,7 +24,7 @@ namespace {
 // v33: Support <ruby> and <rt> tags. Skip <rp> tags
 // v34: superseded — this number was used both by upstream (word-gap/<br> fixes, see below)
 //      and by the tategaki branch's own vertical-writing changes before they merged;
-//      skipped here to keep v35/v36 unambiguous.
+//      skipped here to keep the later numbers unambiguous.
 //        - Word gaps are only suppressed for tokens glued in the source, so spaces between
 //          Hangul words survive again; ruby element boundaries carry the continuation flag
 //          instead. Invalidates v33 caches, whose word positions have the spaces collapsed.
@@ -34,10 +34,14 @@ namespace {
 //          Keeps <br>-per-paragraph books (common CJK formatting) from re-adding container
 //          spacing at every paragraph.
 // v35: Persist a uint32_t visible-text start offset for every page.
-// v36: Vertical writing (tategaki) on top of v35. The header carries isVertical +
+// v36: Ruby no longer overflows the right border when text is justified, and CJK text
+//      stops breaking into unwanted short lines (upstream #2781). Both move word
+//      positions, so cached pages from older versions no longer match.
+// v37: Vertical writing (tategaki) on top of v36. The header carries isVertical +
 //      verticalCharSpacing as cache-key fields, and TextBlock serializes an isVertical flag
-//      plus a per-word ypos array for vertical blocks.
-constexpr uint8_t SECTION_FILE_VERSION = 36;
+//      plus a per-word ypos array for vertical blocks. Renumbered from v36, which upstream
+//      consumed for the ruby/justify fix above while this branch was out.
+constexpr uint8_t SECTION_FILE_VERSION = 37;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
