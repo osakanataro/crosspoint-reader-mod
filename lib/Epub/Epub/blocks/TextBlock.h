@@ -108,6 +108,8 @@ class TextBlock final : public Block {
   uint16_t focusSuffixX(const uint16_t i) const { return focusPresent ? focusSuffixXArr[i] : 0; }
   bool hasRuby() const;
   int getRubyShift(int ascender) const { return hasRuby() ? (ascender / 2) : 0; }
+  // Vertical only: whether it is worth measuring the column's extent for ruby clamping.
+  bool blockHasRubyExtent() const { return isVertical && numWords > 0 && hasRuby(); }
   const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
 
   void render(const GfxRenderer& renderer, int fontId, int x, int y) const;

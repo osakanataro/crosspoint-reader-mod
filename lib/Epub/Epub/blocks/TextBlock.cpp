@@ -256,6 +256,16 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   const int lineBox = ascender - renderer.getFontDescenderSize(fontId);
   const int uprightYAdjust = (cellWidth - lineBox) / 2;
 
+  // A vertical block is one column, so its own stacking positions give the column's
+  // extent: ruby is clamped to it below.
+  int columnTop = 0;
+  int columnEnd = 0;
+  if (blockHasRubyExtent()) {
+    columnTop = yposArr[0] + y;
+    const uint16_t lastWord = numWords - 1;
+    columnEnd = yposArr[lastWord] + y + renderer.getTextAdvanceX(fontId, wordText(lastWord), wordStyle(lastWord));
+  }
+
   // Ruby sits to the right of the words it annotates, the vertical counterpart of
   // sitting above them. The grouping is the horizontal path's, unchanged: the leader
   // word carries the text and each continuation word is flagged RUBY_CONTINUE, so the
@@ -290,6 +300,20 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
       // A ruby glyph is half-width, so it sits in the half cell just right of the body one.
       const int rubyX = cellX + cellWidth;
       int rubyCursorY = groupTop + (groupSpan - rubySpan) / 2;
+
+      // Ruby longer than the words it annotates overhangs both ends of the group. At the
+      // head or foot of a column that overhang leaves the page: the annotation is drawn
+      // above the top margin or under the status bar, where it is simply lost. Japanese
+      // typography answers this the same way (JIS X 4051): ruby that would overhang the
+      // line start or end is set flush with it instead of centred. Clamping to the
+      // column's own extent does exactly that, and needs nothing the block does not know.
+      if (columnEnd > columnTop) {
+        if (rubyCursorY < columnTop) rubyCursorY = columnTop;
+        if (rubyCursorY + rubySpan > columnEnd) rubyCursorY = columnEnd - rubySpan;
+        // A ruby run longer than the whole column cannot be placed; start it at the top
+        // and let it run out rather than pushing it off the near end.
+        if (rubyCursorY < columnTop) rubyCursorY = columnTop;
+      }
 
       const auto* rp = reinterpret_cast<const unsigned char*>(rubyTexts[i].c_str());
       while (*rp != '\0') {
