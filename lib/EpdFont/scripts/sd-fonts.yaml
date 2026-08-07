@@ -251,3 +251,37 @@ families:
       italic:     {url: "https://raw.githubusercontent.com/jacobxperez/lexica-ultralegible/main/fonts/ttf/LexicaUltralegible-Italic.ttf"}
       bolditalic: {url: "https://raw.githubusercontent.com/jacobxperez/lexica-ultralegible/main/fonts/ttf/LexicaUltralegible-BoldItalic.ttf"}
 
+
+  # ── Japanese ───────────────────────────────────────────────────────────
+  #
+  # CJK faces carry tens of thousands of glyphs, so these families pair a broad
+  # interval preset with codepoints_file to restrict output to JIS X 0213
+  # (13,957 codepoints) — the standard coverage a Japanese book needs.
+  # Directory/file names stay ASCII so the SD registry can read them.
+
+  - name: BIZUDGothic
+    description: "UD Gothic Japanese (MORISAWA, optimized for readability)"
+    intervals: ascii,latin1,punctuation,cjk
+    codepoints_file: codepoints/japanese_jis0213.txt
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/morisawa-biz-ud-gothic/raw/main/fonts/ttf/BIZUDGothic-Regular.ttf"}
+      bold:       {url: "https://github.com/googlefonts/morisawa-biz-ud-gothic/raw/main/fonts/ttf/BIZUDGothic-Bold.ttf"}
+
+  - name: BIZUDMincho
+    description: "UD Mincho Japanese (MORISAWA, optimized for readability)"
+    intervals: ascii,latin1,punctuation,cjk
+    codepoints_file: codepoints/japanese_jis0213.txt
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/googlefonts/morisawa-biz-ud-mincho/raw/main/fonts/ttf/BIZUDMincho-Regular.ttf"}
+      bold:       {url: "https://github.com/googlefonts/morisawa-biz-ud-mincho/raw/main/fonts/ttf/BIZUDMincho-Bold.ttf"}
+
+  - name: NotoSansJP
+    description: "Sans-serif Japanese (JIS X 0213)"
+    intervals: ascii,latin1,punctuation,cjk
+    codepoints_file: codepoints/japanese_jis0213.txt
+    sizes: [12, 14, 16, 18]
+    styles:
+      regular:    {url: "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"}
+      bold:       {url: "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"}

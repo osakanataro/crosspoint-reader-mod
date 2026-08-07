@@ -232,6 +232,9 @@ def build_family(
     if family.get("force_autohint", False):
         cmd.append("--force-autohint")
 
+    if "codepoints_file" in family:
+        cmd.extend(["--codepoints-file", str(SCRIPT_DIR / family["codepoints_file"])])
+
     # Run fontconvert_sdcard.py
     start = time.monotonic()
     try:

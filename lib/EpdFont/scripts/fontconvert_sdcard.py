@@ -622,6 +622,38 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
 
     intervals = validated_intervals
     total_glyphs = sum(end - start + 1 for start, end in intervals)
+
+    # Interval tables are the one part of a .cpfont the firmware holds in RAM
+    # for the whole session — 6 bytes per interval per style (SdCardFont.cpp,
+    # bmpIntervals) — while glyph records are read from the SD card on demand.
+    # SdCardFont::load() also hard-rejects a style above 4096 intervals.
+    #
+    # Splitting at every missing glyph is ideal for Latin faces (they land
+    # around 30 intervals), but a CJK face restricted to a standards subset
+    # leaves thousands of one-codepoint holes: BIZ UDGothic split into 4588
+    # intervals = 27 KB of DRAM per style. So cap the count and close the
+    # narrowest gaps first. Each closed gap costs one empty placeholder glyph
+    # per codepoint — 16 bytes of file, no RAM — and buys back an interval.
+    # A codepoint inside a closed gap reports as covered and renders blank
+    # instead of falling through to the glyph-miss handler; for the CJK holes
+    # this affects, no built-in font has those glyphs either, so nothing is lost.
+    MAX_INTERVALS = 256
+    if len(intervals) > MAX_INTERVALS:
+        gap_order = sorted(range(len(intervals) - 1),
+                           key=lambda i: intervals[i + 1][0] - intervals[i][1] - 1)
+        to_close = set(gap_order[:len(intervals) - MAX_INTERVALS])
+        merged = []
+        for i, (start, end) in enumerate(intervals):
+            if merged and (i - 1) in to_close:
+                merged[-1] = (merged[-1][0], end)
+            else:
+                merged.append((start, end))
+        placeholders = sum(e - s + 1 for s, e in merged) - total_glyphs
+        print(f"  [{style_label}] Interval cap: {len(intervals)} -> {len(merged)} intervals "
+              f"(+{placeholders} empty placeholders)", file=sys.stderr)
+        intervals = merged
+        total_glyphs = sum(end - start + 1 for start, end in intervals)
+
     print(f"  [{style_label}] Validated: {len(intervals)} intervals, {total_glyphs} glyphs", file=sys.stderr)
 
     # Rasterize all glyphs
@@ -965,6 +997,10 @@ def main():
                         help="Fallback font file for italic style.")
     parser.add_argument("--fallback-bolditalic", dest="fallback_bolditalic",
                         help="Fallback font file for bold-italic style.")
+    parser.add_argument("--codepoints-file", dest="codepoints_file",
+                        help="Whitelist file of allowed codepoints (hex, one per line). "
+                             "When specified, only codepoints present in both the intervals "
+                             "and this file are included in the output.")
 
     args = parser.parse_args()
 
@@ -1006,6 +1042,55 @@ def main():
         sys.exit(1)
 
     intervals = resolve_intervals(args.intervals)
+
+    # Apply codepoints whitelist filter if specified. Used for CJK families,
+    # where a broad interval preset would rasterize every ideograph the face
+    # carries; a standards-based subset (e.g. JIS X 0213) keeps the output to
+    # what a Japanese book actually needs.
+    if args.codepoints_file:
+        allowed = set()
+        with open(args.codepoints_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                allowed.add(int(line, 16))
+
+        filtered = []
+        for start, end in intervals:
+            run_start = None
+            for cp in range(start, end + 1):
+                if cp in allowed:
+                    if run_start is None:
+                        run_start = cp
+                else:
+                    if run_start is not None:
+                        filtered.append((run_start, cp - 1))
+                        run_start = None
+            if run_start is not None:
+                filtered.append((run_start, end))
+
+        # Merge intervals separated by small gaps to reduce the interval count.
+        # JIS X 0213 codepoints are scattered through the CJK block, which would
+        # otherwise produce thousands of tiny intervals. Filling gaps of at most
+        # GAP_TOLERANCE pulls in a few extra glyphs but keeps the count under the
+        # firmware's MAX_INTERVALS.
+        GAP_TOLERANCE = 4
+        if len(filtered) > 1:
+            merged = [filtered[0]]
+            for start, end in filtered[1:]:
+                prev_start, prev_end = merged[-1]
+                if start - prev_end - 1 <= GAP_TOLERANCE:
+                    merged[-1] = (prev_start, end)
+                else:
+                    merged.append((start, end))
+            filtered = merged
+
+        before = sum(e - s + 1 for s, e in intervals)
+        after = sum(e - s + 1 for s, e in filtered)
+        print(f"  Codepoints filter: {before} -> {after} codepoints, "
+              f"{len(filtered)} intervals ({len(allowed)} in whitelist)", file=sys.stderr)
+        intervals = filtered
 
     # Determine sizes
     if args.sizes:
