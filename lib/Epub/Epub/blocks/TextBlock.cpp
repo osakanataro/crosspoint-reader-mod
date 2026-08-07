@@ -134,6 +134,13 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
                      const std::vector<int16_t>& wordYpos, const std::vector<EpdFontFamily::Style>& wordStyles,
                      const BlockStyle& blockStyle, std::vector<std::string> rubyTexts)
     : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)) {
+  // Same invariant the horizontal constructor keeps: never hold an all-empty rubyTexts.
+  // A column split out of a ruby-bearing paragraph often lands entirely on unannotated
+  // words, and that column should not pay for a vector of empty strings.
+  if (!hasRuby()) {
+    this->rubyTexts = std::vector<std::string>{};
+  }
+
   if (words.size() != wordXpos.size() || words.size() != wordYpos.size() || words.size() != wordStyles.size() ||
       words.size() > 10000) {
     LOG_ERR("TXB", "Vertical construction failed: size mismatch (words=%u, xpos=%u, ypos=%u, styles=%u)",
@@ -245,13 +252,64 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // Cell top -> the y drawText expects. drawText adds the ascender itself, and for a CJK
   // face that reaches past the em box, dropping every glyph low in its cell until the last
   // one of a column overlaps the status bar. Centring the line box in the cell pulls it back.
-  const int lineBox = renderer.getFontAscenderSize(fontId) - renderer.getFontDescenderSize(fontId);
+  const int ascender = renderer.getFontAscenderSize(fontId);
+  const int lineBox = ascender - renderer.getFontDescenderSize(fontId);
   const int uprightYAdjust = (cellWidth - lineBox) / 2;
+
+  // Ruby sits to the right of the words it annotates, the vertical counterpart of
+  // sitting above them. The grouping is the horizontal path's, unchanged: the leader
+  // word carries the text and each continuation word is flagged RUBY_CONTINUE, so the
+  // group is however many flagged tokens follow. Per-codepoint tokenisation makes those
+  // groups longer than in horizontal mode, not different in kind.
+  const bool blockHasRuby = hasRuby();
 
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
     const int cellX = xposArr[i] + x;
     const int cellY = yposArr[i] + y;
+
+    if (blockHasRuby && i < rubyTexts.size() && !rubyTexts[i].empty() &&
+        (wordStyle(i) & EpdFontFamily::RUBY_CONTINUE) == 0) {
+      uint16_t groupWords = 1;
+      while (i + groupWords < numWords && (wordStyle(i + groupWords) & EpdFontFamily::RUBY_CONTINUE) != 0) {
+        groupWords++;
+      }
+      // Span the group along the column from the first cell's top to the last cell's
+      // bottom, taken from the stacking positions the layout already computed rather
+      // than re-summing advances -- ypos carries the inter-cell spacing too.
+      const int groupTop = yposArr[i] + y;
+      const uint16_t lastWord = i + groupWords - 1;
+      const int lastAdvance = renderer.getTextAdvanceX(fontId, wordText(lastWord), wordStyle(lastWord));
+      const int groupSpan = (yposArr[lastWord] + y + lastAdvance) - groupTop;
+
+      // Ruby runs down the column beside the body, so it is stacked a glyph at a time
+      // like the body is -- one drawText for the whole string would lay it across the
+      // column instead. SUP halves both the glyph and its advance, so the run's total
+      // length is what getTextAdvanceX reports for the string.
+      const int rubySpan = renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP);
+      // A ruby glyph is half-width, so it sits in the half cell just right of the body one.
+      const int rubyX = cellX + cellWidth;
+      int rubyCursorY = groupTop + (groupSpan - rubySpan) / 2;
+
+      const auto* rp = reinterpret_cast<const unsigned char*>(rubyTexts[i].c_str());
+      while (*rp != '\0') {
+        const unsigned char* cpStart = rp;
+        if (utf8NextCodepoint(&rp) == 0) break;
+        const size_t cpLen = static_cast<size_t>(rp - cpStart);
+        // A UTF-8 sequence is at most 4 bytes; a longer step means a malformed string.
+        char glyph[5] = {};
+        if (cpLen == 0 || cpLen >= sizeof(glyph)) break;
+        memcpy(glyph, cpStart, cpLen);
+
+        const int rubyAdvance = renderer.getTextAdvanceX(fontId, glyph, EpdFontFamily::SUP);
+        // drawText always offsets by the full ascender, but a SUP glyph is half-scale, so
+        // centre the halved line box in the ruby cell the same way the body centres the
+        // full one -- otherwise the glyph lands an ascender's worth below its cell.
+        const int rubyDrawY = rubyCursorY + (rubyAdvance - lineBox / 2) / 2 - ascender / 2;
+        renderer.drawText(fontId, rubyX, rubyDrawY, glyph, true, EpdFontFamily::SUP);
+        rubyCursorY += rubyAdvance;
+      }
+    }
 
     // Sideways runs: the column reserved the run's *width* as its vertical extent,
     // so drawing it upright would spill across the columns to the left.

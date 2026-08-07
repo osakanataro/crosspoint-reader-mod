@@ -41,7 +41,12 @@ namespace {
 //      verticalCharSpacing as cache-key fields, and TextBlock serializes an isVertical flag
 //      plus a per-word ypos array for vertical blocks. Renumbered from v36, which upstream
 //      consumed for the ruby/justify fix above while this branch was out.
-constexpr uint8_t SECTION_FILE_VERSION = 37;
+// v38: Vertical blocks carry ruby. The layout hands each column the slice of rubyTexts
+//      belonging to its words, where before it dropped them at the column boundary. The
+//      byte layout is unchanged -- a ruby string per word has always been written, it was
+//      simply always empty on this path -- so a v37 file still parses, but it parses to a
+//      book with no annotations. Bumping forces the re-layout that fills them in.
+constexpr uint8_t SECTION_FILE_VERSION = 38;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

@@ -754,7 +754,15 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
       colYpos.push_back(static_cast<int16_t>(y));
       y += wordHeights[j];
     }
-    processColumn(std::make_shared<TextBlock>(colWords, colXpos, colYpos, colStyles, blockStyle));
+    // Ruby rides along with the words it annotates. rubyTexts is kept in lockstep with
+    // words[] by addVerticalToken, so the same [start, end) slice lines up; an empty
+    // rubyTexts means the paragraph has no annotations and the block gets none.
+    std::vector<std::string> colRuby;
+    if (!rubyTexts.empty()) {
+      colRuby.assign(std::make_move_iterator(rubyTexts.begin() + start),
+                     std::make_move_iterator(rubyTexts.begin() + end));
+    }
+    processColumn(std::make_shared<TextBlock>(colWords, colXpos, colYpos, colStyles, blockStyle, std::move(colRuby)));
     isFirstColumn = false;
     emitStart = end;
   }

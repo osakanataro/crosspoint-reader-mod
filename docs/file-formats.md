@@ -97,11 +97,17 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 37
+### Version 38
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 38 gives vertical blocks their ruby: the layout now hands each column the
+slice of `rubyTexts` belonging to its words instead of dropping them at the column
+boundary. The byte layout does not change — a ruby string per word has always been
+written, it was simply always empty for vertical blocks — so a version 37 file still
+parses, just into a book with no annotations. The bump forces the re-layout.
 
 Version 37 adds vertical writing (tategaki) on top of version 36: the header
 carries the `isVertical` and `verticalCharSpacing` cache-key fields, and each
@@ -155,7 +161,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 37
+#define EXPECTED_VERSION 38
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 96
