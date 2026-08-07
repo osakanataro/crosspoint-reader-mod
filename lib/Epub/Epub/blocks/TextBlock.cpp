@@ -5,6 +5,8 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
+#include <Utf8.h>
+#include <VerticalTextUtils.h>
 
 #include <cstring>
 
@@ -195,10 +197,22 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // Latin are added in a later commit (drawTextVertical / drawTextSideways).
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
-    const int wordX = xposArr[i] + x;
+    int wordX = xposArr[i] + x;
     // drawText takes the cell top and adds the ascender itself (GfxRenderer.cpp,
     // `yPos = y + getFontAscenderSize(...)`), so ypos passes through unshifted.
-    const int wordY = yposArr[i] + y;
+    int wordY = yposArr[i] + y;
+
+    // Punctuation drawn from a horizontal-layout font lands in the wrong quadrant
+    // of the cell; nudge it into the vertical position (see VERTICAL_PUNCTUATION).
+    const auto* p = reinterpret_cast<const unsigned char*>(word);
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (const VerticalTextUtils::PunctuationOffset* punct = VerticalTextUtils::getVerticalPunctuationOffset(cp);
+        punct != nullptr && !punct->rotate && (punct->dxEighths != 0 || punct->dyEighths != 0)) {
+      const int cell = renderer.getTextAdvanceX(fontId, word, wordStyle(i));
+      wordX += cell * punct->dxEighths / 8;
+      wordY += cell * punct->dyEighths / 8;
+    }
+
     renderer.drawText(fontId, wordX, wordY, word, true, wordStyle(i));
   }
 }

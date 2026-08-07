@@ -25,21 +25,32 @@ struct PunctuationOffset {
   bool rotate;       // true = rotate 90 CW (e.g. long vowel mark)
 };
 
-// CJK punctuation and brackets that need 90 CW rotation in vertical text.
-// Horizontal font glyphs are designed for horizontal layout; rotating them
-// naturally transforms their position to the correct vertical placement
-// (e.g. 。at bottom-left becomes upper-right after rotation).
-// dx/dyEighths are post-rotation fine-tuning offsets (usually 0).
+// CJK punctuation and brackets whose horizontal-layout glyph is in the wrong
+// place (or the wrong orientation) for vertical text. Two mechanisms:
+//
+//   dx/dyEighths — translate the glyph inside its cell, shape unchanged. This
+//     is what 、。，． need: the horizontal glyph sits in the bottom-left
+//     quadrant of the em box and vertical typography puts it in the top-right
+//     one, which is a move of half a cell right and half a cell up. Applied by
+//     TextBlock::renderVertical; only the draw position moves, so the cell
+//     advance, column layout, kinsoku and cached geometry are unaffected.
+//
+//   rotate — 90 CW rotation, which brackets and long marks need (「 opens
+//     downward in vertical, ー runs along the column). Not implemented yet:
+//     these entries are inert and the glyph draws upright, so brackets still
+//     look horizontal. Needs a rotated-glyph blit in GfxRenderer.
 static constexpr PunctuationOffset VERTICAL_PUNCTUATION[] = {
-    // Punctuation - rotate to reposition from horizontal to vertical placement
-    {0x3001, 0, 0, true},  // 、 ideographic comma
-    {0x3002, 0, 0, true},  // 。 ideographic period
-    {0xFF0C, 0, 0, true},  // ， fullwidth comma
-    {0xFF0E, 0, 0, true},  // ． fullwidth period
-    {0xFF01, 0, 0, true},  // ！ fullwidth exclamation
-    {0xFF1F, 0, 0, true},  // ？ fullwidth question mark
-    {0xFF1A, 0, 0, true},  // ： fullwidth colon
-    {0xFF1B, 0, 0, true},  // ； fullwidth semicolon
+    // Punctuation - translate from the bottom-left to the top-right quadrant
+    {0x3001, 4, -4, false},  // 、 ideographic comma
+    {0x3002, 4, -4, false},  // 。 ideographic period
+    {0xFF0C, 4, -4, false},  // ， fullwidth comma
+    {0xFF0E, 4, -4, false},  // ． fullwidth period
+    // Centered in the em box in both writing modes - listed so the classifier
+    // treats them as upright cells, but they need no adjustment.
+    {0xFF01, 0, 0, false},  // ！ fullwidth exclamation
+    {0xFF1F, 0, 0, false},  // ？ fullwidth question mark
+    {0xFF1A, 0, 0, true},   // ： fullwidth colon
+    {0xFF1B, 0, 0, true},   // ； fullwidth semicolon
     // Brackets - rotate so opening/closing direction matches vertical flow
     {0x300C, 0, 0, true},  // 「 left corner bracket
     {0x300D, 0, 0, true},  // 」 right corner bracket
