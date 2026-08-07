@@ -255,8 +255,9 @@ families:
   # ── Japanese ───────────────────────────────────────────────────────────
   #
   # CJK faces carry tens of thousands of glyphs, so these families pair a broad
-  # interval preset with codepoints_file to restrict output to JIS X 0213
-  # (13,957 codepoints) — the standard coverage a Japanese book needs.
+  # interval preset with codepoints_file to restrict output to what the JIS
+  # standards define: 13,957 codepoints from JIS X 0213, plus the 114 Greek and
+  # Cyrillic letters of JIS X 0208 rows 6 and 7, which the 0213 list omits.
   # Directory/file names stay ASCII so the SD registry can read them.
   #
   # The 8 and 10 pt entries are for the UI, not the reader: when the selected
@@ -267,8 +268,10 @@ families:
 
   - name: BIZUDGothic
     description: "UD Gothic Japanese (MORISAWA, optimized for readability)"
-    intervals: ascii,latin1,punctuation,cjk
-    codepoints_file: codepoints/japanese_jis0213.txt
+    intervals: ascii,latin1,punctuation,greek,cyrillic,cjk
+    codepoints_file:
+      - codepoints/japanese_jis0213.txt
+      - codepoints/jis0208_greek_cyrillic.txt
     sizes: [8, 10, 12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/googlefonts/morisawa-biz-ud-gothic/raw/main/fonts/ttf/BIZUDGothic-Regular.ttf"}
@@ -276,8 +279,10 @@ families:
 
   - name: BIZUDMincho
     description: "UD Mincho Japanese (MORISAWA, optimized for readability)"
-    intervals: ascii,latin1,punctuation,cjk
-    codepoints_file: codepoints/japanese_jis0213.txt
+    intervals: ascii,latin1,punctuation,greek,cyrillic,cjk
+    codepoints_file:
+      - codepoints/japanese_jis0213.txt
+      - codepoints/jis0208_greek_cyrillic.txt
     sizes: [8, 10, 12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/googlefonts/morisawa-biz-ud-mincho/raw/main/fonts/ttf/BIZUDMincho-Regular.ttf"}
@@ -285,8 +290,10 @@ families:
 
   - name: NotoSansJP
     description: "Sans-serif Japanese (JIS X 0213)"
-    intervals: ascii,latin1,punctuation,cjk
-    codepoints_file: codepoints/japanese_jis0213.txt
+    intervals: ascii,latin1,punctuation,greek,cyrillic,cjk
+    codepoints_file:
+      - codepoints/japanese_jis0213.txt
+      - codepoints/jis0208_greek_cyrillic.txt
     sizes: [8, 10, 12, 14, 16, 18]
     styles:
       regular:    {url: "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"}

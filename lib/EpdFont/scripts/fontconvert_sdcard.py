@@ -998,10 +998,12 @@ def main():
                         help="Fallback font file for italic style.")
     parser.add_argument("--fallback-bolditalic", dest="fallback_bolditalic",
                         help="Fallback font file for bold-italic style.")
-    parser.add_argument("--codepoints-file", dest="codepoints_file",
+    parser.add_argument("--codepoints-file", dest="codepoints_file", action="append",
                         help="Whitelist file of allowed codepoints (hex, one per line). "
                              "When specified, only codepoints present in both the intervals "
-                             "and this file are included in the output.")
+                             "and the whitelist are included in the output. Repeatable; the "
+                             "files are unioned, so a base standard can be extended without "
+                             "editing it.")
 
     args = parser.parse_args()
 
@@ -1050,12 +1052,13 @@ def main():
     # what a Japanese book actually needs.
     if args.codepoints_file:
         allowed = set()
-        with open(args.codepoints_file, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                allowed.add(int(line, 16))
+        for path in args.codepoints_file:
+            with open(path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    allowed.add(int(line, 16))
 
         filtered = []
         for start, end in intervals:

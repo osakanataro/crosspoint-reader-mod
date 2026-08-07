@@ -233,7 +233,10 @@ def build_family(
         cmd.append("--force-autohint")
 
     if "codepoints_file" in family:
-        cmd.extend(["--codepoints-file", str(SCRIPT_DIR / family["codepoints_file"])])
+        # One file or a list of them; the converter unions whatever it is given.
+        spec = family["codepoints_file"]
+        for entry in [spec] if isinstance(spec, str) else spec:
+            cmd.extend(["--codepoints-file", str(SCRIPT_DIR / entry)])
 
     # Run fontconvert_sdcard.py
     start = time.monotonic()
