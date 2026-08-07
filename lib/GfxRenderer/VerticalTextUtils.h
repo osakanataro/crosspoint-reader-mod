@@ -40,6 +40,14 @@ struct PunctuationOffset {
 //     GfxRenderer::drawTextSideways, the same path Latin runs use. The rotation
 //     moves the ink to the right corner of the cell by itself, so these entries
 //     need no offsets on top.
+//
+// Membership follows the Vertical_Orientation property of UAX #50: vo=R and vo=Tr
+// rotate, vo=U and vo=Tu stay upright. Only characters isUprightInVertical() calls
+// upright need an entry -- everything else already reaches the rotated path as a
+// sideways token. To find omissions, list the codepoints in those blocks and diff
+// them against VerticalOrientation.txt rather than adding them one report at a time.
+// A vo=Tu character with no vertical alternate in the face (、。) is approximated by
+// the offsets above; a vo=Tr one is approximated by plain rotation.
 static constexpr PunctuationOffset VERTICAL_PUNCTUATION[] = {
     // Punctuation - translate from the bottom-left to the top-right quadrant
     {0x3001, 4, -4, false},  // 、 ideographic comma
@@ -67,12 +75,42 @@ static constexpr PunctuationOffset VERTICAL_PUNCTUATION[] = {
     {0x300B, 0, 0, true},  // 》 right double angle bracket
     {0x3014, 0, 0, true},  // 〔 left tortoise shell bracket
     {0x3015, 0, 0, true},  // 〕 right tortoise shell bracket
-    // Long marks - rotate to vertical orientation
+    {0x3016, 0, 0, true},  // 〖 left white lenticular bracket
+    {0x3017, 0, 0, true},  // 〗 right white lenticular bracket
+    {0x3018, 0, 0, true},  // 〘 left white tortoise shell bracket
+    {0x3019, 0, 0, true},  // 〙 right white tortoise shell bracket
+    {0x301D, 0, 0, true},  // 〝 reversed double prime quotation mark
+    {0x301E, 0, 0, true},  // 〞 double prime quotation mark
+    {0x301F, 0, 0, true},  // 〟 low double prime quotation mark
+    {0xFF3B, 0, 0, true},  // ［ fullwidth left square bracket
+    {0xFF3D, 0, 0, true},  // ］ fullwidth right square bracket
+    {0xFF5B, 0, 0, true},  // ｛ fullwidth left curly bracket
+    {0xFF5D, 0, 0, true},  // ｝ fullwidth right curly bracket
+    {0xFF5F, 0, 0, true},  // ｟ fullwidth left white parenthesis
+    {0xFF60, 0, 0, true},  // ｠ fullwidth right white parenthesis
+    // Comparison signs - vo=R, so they turn with the column even though neither
+    // BIZ UD nor Noto Sans CJK ships a vertical alternate: rotating the upright
+    // glyph is the whole of what is needed.
+    {0xFF1C, 0, 0, true},  // ＜ fullwidth less-than
+    {0xFF1E, 0, 0, true},  // ＞ fullwidth greater-than
+    // Long marks, dashes and rules - rotate so the stroke runs along the column.
+    // Every entry here is classified upright by its block (CJK symbols, katakana,
+    // fullwidth forms), so without a table entry it would draw lying across the
+    // column. The ones outside those blocks -- ‥ U+2025, ∼ U+223C -- already reach
+    // the rotated path as sideways tokens and need no entry.
     {0x30FC, 0, 0, true},  // ー katakana long vowel mark
+    {0x30A0, 0, 0, true},  // ゠ katakana-hiragana double hyphen
     {0x2014, 0, 0, true},  // — em dash
     {0x2015, 0, 0, true},  // ― horizontal bar
     {0x2026, 0, 0, true},  // … ellipsis
     {0xFF5E, 0, 0, true},  // ～ fullwidth tilde
+    {0x301C, 0, 0, true},  // 〜 wave dash
+    {0xFF1D, 0, 0, true},  // ＝ fullwidth equals sign
+    {0xFF0D, 0, 0, true},  // － fullwidth hyphen-minus
+    {0x3030, 0, 0, true},  // 〰 wavy dash
+    {0xFF3F, 0, 0, true},  // ＿ fullwidth low line
+    {0xFF5C, 0, 0, true},  // ｜ fullwidth vertical line
+    {0xFFE3, 0, 0, true},  // ￣ fullwidth macron
 };
 static constexpr int VERTICAL_PUNCTUATION_COUNT = sizeof(VERTICAL_PUNCTUATION) / sizeof(VERTICAL_PUNCTUATION[0]);
 
@@ -92,7 +130,12 @@ inline bool isUprightInVertical(uint32_t cp) {
   if (cp >= 0x3040 && cp <= 0x309F) return true;  // Hiragana
   if (cp >= 0x30A0 && cp <= 0x30FF) return true;  // Katakana
   if (cp >= 0x3000 && cp <= 0x303F) return true;  // CJK Symbols and Punctuation
-  if (cp >= 0xFF00 && cp <= 0xFFEF) return true;  // Fullwidth Forms
+  // Halfwidth and Fullwidth Forms is not one class: the fullwidth forms are upright,
+  // but halfwidth katakana and halfwidth punctuation (FF61-FF9F) are vo=R in UAX #50
+  // and must rotate. Excluding them here routes them to the sideways draw path, which
+  // also reserves their real (half-em) advance as the cell height.
+  if (cp >= 0xFF00 && cp <= 0xFF60) return true;  // Fullwidth Forms
+  if (cp >= 0xFFA0 && cp <= 0xFFEF) return true;  // Halfwidth Hangul, fullwidth signs
   if (cp >= 0xF900 && cp <= 0xFAFF) return true;  // CJK Compatibility Ideographs
   if (cp >= 0x3200 && cp <= 0x32FF) return true;  // Enclosed CJK Letters
   if (cp >= 0x3300 && cp <= 0x33FF) return true;  // CJK Compatibility
