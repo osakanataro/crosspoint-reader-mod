@@ -1050,6 +1050,19 @@ def main():
     # where a broad interval preset would rasterize every ideograph the face
     # carries; a standards-based subset (e.g. JIS X 0213) keeps the output to
     # what a Japanese book actually needs.
+    #
+    # The filter deliberately gates ONLY the ideograph ranges. That is where the
+    # size lives -- a CJK face carries 20k+ Han glyphs against the few thousand a
+    # standard defines. Every other block an interval preset can name holds at most
+    # a few hundred codepoints, so gating those as well saves nothing worth having
+    # and silently drops characters a Japanese book may legitimately use: the tilde
+    # operator, IPA modifiers, math and arrow symbols. A whitelist drawn from a
+    # kanji standard lists none of them.
+    IDEOGRAPH_RANGES = ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0x20000, 0x3FFFF))
+
+    def is_gated(cp):
+        return any(lo <= cp <= hi for lo, hi in IDEOGRAPH_RANGES)
+
     if args.codepoints_file:
         allowed = set()
         for path in args.codepoints_file:
@@ -1064,7 +1077,7 @@ def main():
         for start, end in intervals:
             run_start = None
             for cp in range(start, end + 1):
-                if cp in allowed:
+                if cp in allowed or not is_gated(cp):
                     if run_start is None:
                         run_start = cp
                 else:

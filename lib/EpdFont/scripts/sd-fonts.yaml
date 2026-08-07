@@ -254,10 +254,13 @@ families:
 
   # ── Japanese ───────────────────────────────────────────────────────────
   #
-  # CJK faces carry tens of thousands of glyphs, so these families pair a broad
-  # interval preset with codepoints_file to restrict output to what the JIS
-  # standards define: 13,957 codepoints from JIS X 0213, plus the 114 Greek and
-  # Cyrillic letters of JIS X 0208 rows 6 and 7, which the 0213 list omits.
+  # CJK faces carry tens of thousands of glyphs, so these families pair broad
+  # interval presets with codepoints_file, which prunes the *ideographs* down to
+  # what the JIS standards define: 13,957 codepoints from JIS X 0213 plus the 114
+  # Greek and Cyrillic letters of JIS X 0208 rows 6 and 7 that the 0213 list omits.
+  # The non-ideograph blocks the presets name (IPA modifiers, math operators,
+  # arrows, geometric shapes) pass through in full -- a few hundred codepoints
+  # each, and a book that reaches for ∼ or ˜ should not get U+FFFD.
   # Directory/file names stay ASCII so the SD registry can read them.
   #
   # The 8 and 10 pt entries are for the UI, not the reader: when the selected
@@ -268,7 +271,7 @@ families:
 
   - name: BIZUDGothic
     description: "UD Gothic Japanese (MORISAWA, optimized for readability)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,cjk
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
@@ -279,7 +282,7 @@ families:
 
   - name: BIZUDMincho
     description: "UD Mincho Japanese (MORISAWA, optimized for readability)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,cjk
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
@@ -290,7 +293,7 @@ families:
 
   - name: NotoSansJP
     description: "Sans-serif Japanese (JIS X 0213)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,cjk
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
