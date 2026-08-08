@@ -31,12 +31,23 @@ a regression shows up as a difference rather than as a hunch.
 What the text covers
 --------------------
 
-11 chapters, 146 ruby instances including annotations long enough to overhang
-their base word and to overhang the head and foot of a column. Also list items,
-tilde variants (U+FF5E, U+301C, U+223C, U+02DC), fullwidth and halfwidth digit
-runs of one, two and three digits, fullwidth operators (＝ ＜ ＞ ≠ ≒),
-exclamation/question pairs, Greek letters, and line-break positions where kinsoku
-rules apply. Most of the vertical fixes on this branch were found with it.
+12 chapters, 196 ruby instances, 41 of them read in Latin script. They include
+annotations long enough to overhang their base word and to overhang the head and
+foot of a column. Also list items, tilde variants (U+FF5E, U+301C, U+223C,
+U+02DC), fullwidth and halfwidth digit runs of one, two and three digits,
+fullwidth operators (＝ ＜ ＞ ≠ ≒), exclamation/question pairs, Greek letters,
+and line-break positions where kinsoku rules apply. Most of the vertical fixes on
+this branch were found with it.
+
+The last chapter is about ruby alone, and each of its paragraphs is one question:
+long marks and brackets inside a reading, readings that are a single Latin letter
+or carry a hyphen, period, apostrophe or space, readings that are only digits
+(where the body's own rule sets one and two upright and turns three), readings in
+Cyrillic and Greek, readings that mix scripts, one-character bases carrying
+readings far longer than themselves and set next to each other so they have to
+collide, monoruby that fits its base exactly against monoruby that does not, and
+a long passage seeded with annotated words so that some of them land on a column
+break -- which they do not yet survive.
 
 Provenance
 ----------
@@ -49,13 +60,22 @@ The EPUBs are built from that Kakuyomu source by NovelToEpub, a PowerShell scrip
 at https://github.com/osakanataro/NovelToEpub, so they can be rebuilt rather than
 hand-edited -- fix the text on Kakuyomu, re-run, replace the files.
 
-  pwsh NovelToEpub.txt -Url https://kakuyomu.jp/works/2912051602969738484 -MaxCacheAgeHours 0.1
-  pwsh NovelToEpub.txt -Url https://kakuyomu.jp/works/2912051602969738484 -MinimalCss
-  pwsh NovelToEpub.txt -Url https://kakuyomu.jp/works/2912051602969738484 -Horizontal
-  pwsh NovelToEpub.txt -Url https://kakuyomu.jp/works/2912051602969738484 -Horizontal -MinimalCss
+Run the four from one working directory of your own, then copy the results here.
+KAKUYOMU below stands for https://kakuyomu.jp/works/2912051602969738484.
 
-Each run writes カクヨムの書式確認.epub; rename it after each one, in the order
-above.
+  pwsh NovelToEpub.txt -Url KAKUYOMU -MaxCacheAgeHours 0.1 -OutputDir test_vertical_ja.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -MinimalCss -OutputDir test_vertical_ja_minicss.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -Horizontal -OutputDir test_horizontal_ja.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -Horizontal -MinimalCss -OutputDir test_horizontal_ja_minicss.epub
+
+-OutputDir names the file when its value ends in .epub, and a directory otherwise.
+Naming each one is what keeps the four apart: without it every run writes the
+work's own title and the previous file is gone.
+
+Run them from the same directory, and not from this one. The episode cache is a
+.cache directory beside the output, so a shared working directory is what lets the
+four share one fetch -- and pointing them here would leave that cache in the repo,
+which .gitignore does not cover outside the root.
 
 The script caches each episode it fetches, and -MaxCacheAgeHours defaults to 0,
 which disables age-based expiry: a cached episode is reused however old it is.
