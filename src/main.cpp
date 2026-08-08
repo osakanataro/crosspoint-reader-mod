@@ -33,6 +33,7 @@
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
+#include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
 
 GfxRenderer renderer(display);
@@ -519,6 +520,10 @@ void loop() {
     powerManager.setPowerSaving(false);
   }
 
+  // No-op unless built with INPUT_DIAG. Sampled here so the recorded interval is the real
+  // gpio.update() period, including whatever the rest of the loop and the render task cost.
+  InputDiag::sample(loopStartTime, gpio.wasAnyPressed() || gpio.wasAnyReleased(), debouncePending);
+
   static bool screenshotButtonsReleased = true;
   static bool screenshotComboActive = false;
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
@@ -589,6 +594,10 @@ void loop() {
       LOG_DBG("LOOP", "New max loop duration: %lu ms (activity: %lu ms)", maxLoopDuration, activityDuration);
     }
   }
+
+  // Last, so the SD write it may perform is outside the loop duration measured above. No-op unless
+  // built with INPUT_DIAG.
+  InputDiag::flush(inputActive);
 
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
