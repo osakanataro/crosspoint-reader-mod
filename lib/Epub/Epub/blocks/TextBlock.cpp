@@ -234,6 +234,13 @@ bool isSidewaysToken(const char* word) {
 // a proportional 'i' or 'r' is a fraction as wide as it is tall, so the letters print on
 // top of each other. Anything with a CJK character in it keeps the upright stack, where
 // mixing the two would be worse than either.
+//
+// A reading that is only digits turns with the rest, where the body would set one or two
+// of them upright as tate-chu-yoko. That divergence is deliberate, not an oversight: ruby
+// is already half size, so a two-digit reading set upright across the column would leave
+// each digit a quarter of the body's width -- consistent with the body, and unreadable.
+// Checked on the device against the chapter of test/epubs-ja that carries 3, 12 and 2024
+// as readings for exactly this comparison.
 bool isSidewaysRuby(const char* ruby) {
   const auto* p = reinterpret_cast<const unsigned char*>(ruby);
   bool sawGlyph = false;
