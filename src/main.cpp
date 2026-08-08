@@ -498,6 +498,27 @@ void loop() {
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
 
+  // Hold full speed while the buttons are live, decided on levels rather than the edges above.
+  //
+  // InputManager commits a state change only once two consecutive samples agree, so a press has to
+  // outlast one poll period to be seen at all. The idle path below polls every 50 ms at
+  // LOW_POWER_FREQ (10 MHz on X3, where the loop body itself is 16x slower), which is longer than a
+  // normal tap: the press lands in one sample and the release in the next, each resetting the
+  // debounce timer, and no edge is ever emitted. Since the frequency was previously restored only
+  // on a *committed* edge, nothing could break that loop -- which is why menu presses went missing
+  // until one happened to be held long enough, and the ones after it then registered instantly.
+  //
+  // isAnyPressed() covers the other half: a hold emits one press edge, so 3 s into holding a side
+  // button to scroll a list the edge-only check above let the CPU drop to 10 MHz mid-scroll.
+  //
+  // Deliberately kept out of lastActivityTime. These are raw ADC-ladder levels, and a drifted
+  // divider that reads as a stuck or flickering button must not be able to hold off auto-sleep.
+  const bool debouncePending = gpio.isDebouncePending();
+  const bool inputActive = debouncePending || gpio.isAnyPressed();
+  if (inputActive) {
+    powerManager.setPowerSaving(false);
+  }
+
   static bool screenshotButtonsReleased = true;
   static bool screenshotComboActive = false;
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
@@ -575,14 +596,17 @@ void loop() {
   if (activityManager.skipLoopDelay()) {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
+  } else if (debouncePending) {
+    // Re-sample well inside InputManager's 5 ms debounce window so the pending change commits on one
+    // of the next few iterations. Without this the idle 50 ms delay outlasts the press itself and the
+    // change is dropped rather than delayed.
+    delay(2);
+  } else if (inputActive || millis() - lastActivityTime < HalPowerManager::IDLE_POWER_SAVING_MS) {
+    // Short delay to prevent tight loop while still being responsive
+    delay(10);
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
-      // If we've been inactive for a while, increase the delay to save power
-      powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
-      delay(50);
-    } else {
-      // Short delay to prevent tight loop while still being responsive
-      delay(10);
-    }
+    // If we've been inactive for a while, increase the delay to save power
+    powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
+    delay(50);
   }
 }
