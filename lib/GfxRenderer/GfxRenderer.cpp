@@ -315,6 +315,11 @@ enum class TextRotation { None, Rotated90CW, Sideways90CW };
 //
 // The advance width is also halved in drawText() so layout reserves exactly the right
 // horizontal space for the scaled glyph.
+//
+// Rotation is selected the same way as in renderCharImpl, and on the same mapping. It
+// applies to the destination pixels, which are already in half-scale coordinates, so the
+// glyph's own bearings are the only thing that has to be halved before being turned.
+template <TextRotation rotation = TextRotation::None>
 static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                              const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                              const bool pixelState, const EpdFontFamily::Style style) {
@@ -331,8 +336,23 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   const int dstH = (srcH + 1) / 2;
   // Scale the glyph bearing by the same factor so the scaled glyph sits at the correct
   // pixel offset from the (already-shifted) cursor position.
-  const int baseX = cursorX + glyph->left / 2;
-  const int baseY = cursorY - glyph->top / 2;
+  int baseX, baseY;
+  if constexpr (rotation == TextRotation::Sideways90CW) {
+    // cursorX is the rotated baseline, cursorY the run's cursor down the column.
+    baseX = cursorX + glyph->top / 2;   // screenX = baseX - dstY
+    baseY = cursorY + glyph->left / 2;  // screenY = baseY + dstX
+  } else {
+    baseX = cursorX + glyph->left / 2;
+    baseY = cursorY - glyph->top / 2;
+  }
+
+  const auto plot = [&](const int dstX, const int dstY) {
+    if constexpr (rotation == TextRotation::Sideways90CW) {
+      renderer.drawPixel(baseX - dstY, baseY + dstX, pixelState);
+    } else {
+      renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+    }
+  };
 
   if (fontData->is2Bit) {
     // 2-bit packed format: 4 pixels per byte, MSB first, 2 bits per pixel.
@@ -353,7 +373,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (maxRaw >= 2 || coverage >= 2) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          plot(dstX, dstY);
         }
       }
     }
@@ -375,7 +395,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (hasInk) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          plot(dstX, dstY);
         }
       }
     }
@@ -2050,7 +2070,16 @@ void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, c
   // Turning clockwise maps the line box's "up" onto screen-right, so the run occupies
   // [baseline + descender, baseline + ascender] horizontally (descender is negative).
   // Centre that span on the character cell, which is where the upright glyphs sit.
-  const int baselineX = x + cellWidth / 2 - (fontData->ascender + fontData->descender) / 2;
+  //
+  // A SUP/SUB run is drawn at half scale, so it is half as wide across the column as the
+  // font's own line box. Centring the full one would push it off the cell it belongs to --
+  // for ruby, into the body column beside it.
+  const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+  int lineBoxCentre = (fontData->ascender + fontData->descender) / 2;
+  if (isSupSub) {
+    lineBoxCentre /= 2;
+  }
+  const int baselineX = x + cellWidth / 2 - lineBoxCentre;
 
   int cursorY = y;
   int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
@@ -2067,8 +2096,17 @@ void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, c
 
     const EpdGlyph* glyph = font.getGlyph(cp, style);
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    if (isSupSub) {
+      // Halved to match the scaled glyph, exactly as drawText and getTextAdvanceX do, so
+      // a measured run and a drawn one stay the same length.
+      prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    }
 
-    renderCharImpl<TextRotation::Sideways90CW>(*this, renderMode, font, cp, baselineX, cursorY, black, style);
+    if (isSupSub) {
+      renderCharScaled<TextRotation::Sideways90CW>(*this, renderMode, font, cp, baselineX, cursorY, black, style);
+    } else {
+      renderCharImpl<TextRotation::Sideways90CW>(*this, renderMode, font, cp, baselineX, cursorY, black, style);
+    }
     prevCp = cp;
   }
 }

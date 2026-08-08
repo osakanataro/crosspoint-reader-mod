@@ -8,6 +8,7 @@
 #include <Utf8.h>
 #include <VerticalTextUtils.h>
 
+#include <climits>
 #include <cstring>
 
 #include "../../../../src/fontIds.h"
@@ -226,6 +227,30 @@ bool isSidewaysToken(const char* word) {
   }
   return !isTateChuYokoToken(word);
 }
+
+// Ruby written in Latin script is turned clockwise and run down the column, the same way
+// a Latin word in the body is. Stacking it a letter at a time upright is what a reader
+// sees as a smear rather than a word: the stack advances by each letter's own width, and
+// a proportional 'i' or 'r' is a fraction as wide as it is tall, so the letters print on
+// top of each other. Anything with a CJK character in it keeps the upright stack, where
+// mixing the two would be worse than either.
+bool isSidewaysRuby(const char* ruby) {
+  const auto* p = reinterpret_cast<const unsigned char*>(ruby);
+  bool sawGlyph = false;
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(&p)) != 0) {
+    if (VerticalTextUtils::isUprightInVertical(cp) || VerticalTextUtils::getVerticalPunctuationOffset(cp) != nullptr) {
+      return false;
+    }
+    sawGlyph = true;
+  }
+  return sawGlyph;
+}
+
+// Separation kept between the ruby of one group and the next down the column. One pixel
+// is the least that reads as two runs rather than one on a 1-bit panel; more than that
+// costs column space, which the ruby that needs separating is already short of.
+constexpr int RUBY_GROUP_GAP = 1;
 }  // namespace
 
 void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
@@ -276,6 +301,15 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // groups longer than in horizontal mode, not different in kind.
   const bool blockHasRuby = hasRuby();
 
+  // Each group is centred on the words it annotates, so a reading longer than them
+  // overhangs both ends of the group -- half-width ruby fits exactly when the reading
+  // runs to twice the base in characters, and past that it spills. Two groups a cell or
+  // so apart in the same column then land on top of each other, and two half-size runs
+  // overprinted are not readable as either. The later group is pushed clear of the
+  // earlier one instead. The loop walks the column from top to bottom, so the only group
+  // that can be in the way is the one before: a single position, not a set.
+  int prevRubyFoot = INT_MIN;
+
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
     const int cellX = xposArr[i] + x;
@@ -283,6 +317,10 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
 
     if (blockHasRuby && i < rubyTexts.size() && !rubyTexts[i].empty() &&
         (wordStyle(i) & EpdFontFamily::RUBY_CONTINUE) == 0) {
+      // Ruby runs down the column beside the body. A CJK ruby is stacked a glyph at a
+      // time like the body is -- one drawText for the whole string would lay it across
+      // the column instead -- while a Latin one is turned clockwise and drawn as a single
+      // run, which is both how Japanese typesetting sets it and what keeps it legible.
       uint16_t groupWords = 1;
       while (i + groupWords < numWords && (wordStyle(i + groupWords) & EpdFontFamily::RUBY_CONTINUE) != 0) {
         groupWords++;
@@ -295,14 +333,33 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
       const int lastAdvance = renderer.getTextAdvanceX(fontId, wordText(lastWord), wordStyle(lastWord));
       const int groupSpan = (yposArr[lastWord] + y + lastAdvance) - groupTop;
 
-      // Ruby runs down the column beside the body, so it is stacked a glyph at a time
-      // like the body is -- one drawText for the whole string would lay it across the
-      // column instead. SUP halves both the glyph and its advance, so the run's total
-      // length is what getTextAdvanceX reports for the string.
-      const int rubySpan = renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP);
+      // The stack advances on a fixed half-em, not on each glyph's own width. For kana
+      // and kanji the two are the same number, since a full-width glyph halved by SUP is
+      // exactly the half cell; for anything proportional they are not, and the glyph
+      // width is the wrong one -- it is a measure across the line, and the stack runs
+      // down it. JIS X 4051 sets ruby on that fixed pitch for the same reason.
+      const bool rubySideways = isSidewaysRuby(rubyTexts[i].c_str());
       // A ruby glyph is half-width, so it sits in the half cell just right of the body one.
+      const int rubyCellWidth = cellWidth / 2;
       const int rubyX = cellX + cellWidth;
+      int rubySpan;
+      if (rubySideways) {
+        // Turned, the run's extent down the column is its width across the line, which is
+        // what getTextAdvanceX reports -- SUP halves the glyphs and their advances alike.
+        rubySpan = renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP);
+      } else {
+        int rubyCells = 0;
+        const auto* cp = reinterpret_cast<const unsigned char*>(rubyTexts[i].c_str());
+        while (utf8NextCodepoint(&cp) != 0) rubyCells++;
+        rubySpan = rubyCells * rubyCellWidth;
+      }
       int rubyCursorY = groupTop + (groupSpan - rubySpan) / 2;
+
+      // Clear of the group above before anything else, so the clamp below has the final
+      // say on where the run may sit.
+      if (prevRubyFoot != INT_MIN && rubyCursorY < prevRubyFoot + RUBY_GROUP_GAP) {
+        rubyCursorY = prevRubyFoot + RUBY_GROUP_GAP;
+      }
 
       // Ruby longer than the words it annotates overhangs both ends of the group. At the
       // head or foot of a column that overhang leaves the page: the annotation is drawn
@@ -310,6 +367,12 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
       // typography answers this the same way (JIS X 4051): ruby that would overhang the
       // line start or end is set flush with it instead of centred. Clamping to the
       // column's own extent does exactly that, and needs nothing the block does not know.
+      //
+      // This also settles what happens when a column holds more ruby than it has room
+      // for: the push above can walk a run past the column's foot, and here it is pulled
+      // back into the group before it. That is the right way round. Ruby drawn below the
+      // foot is not merely ugly, it is gone -- the status bar covers it -- whereas ruby
+      // that touches its neighbour is still on the page and still readable in context.
       if (columnEnd > columnTop) {
         if (rubyCursorY < columnTop) rubyCursorY = columnTop;
         if (rubyCursorY + rubySpan > columnEnd) rubyCursorY = columnEnd - rubySpan;
@@ -318,24 +381,52 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
         if (rubyCursorY < columnTop) rubyCursorY = columnTop;
       }
 
-      const auto* rp = reinterpret_cast<const unsigned char*>(rubyTexts[i].c_str());
-      while (*rp != '\0') {
-        const unsigned char* cpStart = rp;
-        if (utf8NextCodepoint(&rp) == 0) break;
-        const size_t cpLen = static_cast<size_t>(rp - cpStart);
-        // A UTF-8 sequence is at most 4 bytes; a longer step means a malformed string.
-        char glyph[5] = {};
-        if (cpLen == 0 || cpLen >= sizeof(glyph)) break;
-        memcpy(glyph, cpStart, cpLen);
+      if (rubySideways) {
+        renderer.drawTextSideways(fontId, rubyX, rubyCursorY, rubyTexts[i].c_str(), rubyCellWidth, true,
+                                  EpdFontFamily::SUP);
+        rubyCursorY += rubySpan;
+      } else {
+        const auto* rp = reinterpret_cast<const unsigned char*>(rubyTexts[i].c_str());
+        while (*rp != '\0') {
+          const unsigned char* cpStart = rp;
+          if (utf8NextCodepoint(&rp) == 0) break;
+          const size_t cpLen = static_cast<size_t>(rp - cpStart);
+          // A UTF-8 sequence is at most 4 bytes; a longer step means a malformed string.
+          char glyph[5] = {};
+          if (cpLen == 0 || cpLen >= sizeof(glyph)) break;
+          memcpy(glyph, cpStart, cpLen);
 
-        const int rubyAdvance = renderer.getTextAdvanceX(fontId, glyph, EpdFontFamily::SUP);
-        // drawText always offsets by the full ascender, but a SUP glyph is half-scale, so
-        // centre the halved line box in the ruby cell the same way the body centres the
-        // full one -- otherwise the glyph lands an ascender's worth below its cell.
-        const int rubyDrawY = rubyCursorY + (rubyAdvance - lineBox / 2) / 2 - ascender / 2;
-        renderer.drawText(fontId, rubyX, rubyDrawY, glyph, true, EpdFontFamily::SUP);
-        rubyCursorY += rubyAdvance;
+          // Ruby is set in the column, so its punctuation needs turning and shifting for
+          // the column exactly as the body's does -- an ー left upright in a katakana
+          // reading is as wrong there as it is in the text it annotates. The body's own
+          // table and the same two cases answer it, on the ruby cell instead of the full
+          // one. Sideways drawing scales for SUP, so the rotating case is the same call.
+          const auto* gp = reinterpret_cast<const unsigned char*>(glyph);
+          const uint32_t gcp = utf8NextCodepoint(&gp);
+          const VerticalTextUtils::PunctuationOffset* rubyPunct = VerticalTextUtils::getVerticalPunctuationOffset(gcp);
+
+          if (rubyPunct != nullptr && rubyPunct->rotate) {
+            renderer.drawTextSideways(fontId, rubyX, rubyCursorY, glyph, rubyCellWidth, true, EpdFontFamily::SUP);
+            rubyCursorY += rubyCellWidth;
+            continue;
+          }
+
+          // drawText always offsets by the full ascender, but a SUP glyph is half-scale, so
+          // centre the halved line box in the ruby cell the same way the body centres the
+          // full one -- otherwise the glyph lands an ascender's worth below its cell.
+          int rubyDrawX = rubyX;
+          int rubyDrawY = rubyCursorY + (rubyCellWidth - lineBox / 2) / 2 - ascender / 2;
+          if (rubyPunct != nullptr) {
+            rubyDrawX += rubyCellWidth * rubyPunct->dxEighths / 8;
+            rubyDrawY += rubyCellWidth * rubyPunct->dyEighths / 8;
+          }
+          renderer.drawText(fontId, rubyDrawX, rubyDrawY, glyph, true, EpdFontFamily::SUP);
+          rubyCursorY += rubyCellWidth;
+        }
       }
+      // The loop advanced the cursor by each glyph it drew, so it now holds where the run
+      // actually ended -- no need to add the measured span back on and hope the two agree.
+      prevRubyFoot = rubyCursorY;
     }
 
     // Sideways runs: the column reserved the run's *width* as its vertical extent,
