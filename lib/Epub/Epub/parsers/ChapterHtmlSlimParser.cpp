@@ -290,7 +290,9 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
 // Tokenize the pending buffer into vertical cells. Emits one token per CJK/upright
 // codepoint; consecutive ASCII letters coalesce into a Sideways run and 1-2 digit
-// numbers into a TateChuYoko token (3+ digits fall back to Sideways).
+// numbers into a TateChuYoko token (3+ digits fall back to Sideways). A number keeps
+// any separator standing between two of its digits, so 3.14 and 12:34 are one cell each
+// and cannot be broken across a column.
 void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Style fontStyle) {
   // Vertical layout emits roughly one token per codepoint, so a full buffer becomes a burst of
   // pushes. Reserve up front (worst case one token per byte) so the parallel arrays grow once.
@@ -320,12 +322,37 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
       const uint32_t next = utf8NextCodepoint(&peek);
       const bool nextDigit = (next >= '0' && next <= '9');
       const bool nextAscii = (next >= '!' && next <= '~');
-      if ((isDigit && nextDigit) || (!isDigit && nextAscii && !nextDigit)) {
-        runEnd = peek;
-        runChars++;
-      } else {
+      if (isDigit) {
+        if (nextDigit) {
+          runEnd = peek;
+          runChars++;
+          continue;
+        }
+        // A separator standing between two digits is part of the number, not a break in
+        // it: 3.14, 12:34, 1,000, 3/4. Left out of the run, each of those became three
+        // cells with a column break free to fall between them, and 3.14 duly came back
+        // from the device split across two columns. The digit on the far side is what
+        // makes it safe -- the full stop ending a sentence has no digit after it, so it
+        // is not swallowed, and neither is the colon introducing a quotation.
+        if (next == '.' || next == ',' || next == ':' || next == '/') {
+          const unsigned char* after = peek;
+          if (after < end) {
+            const uint32_t following = utf8NextCodepoint(&after);
+            if (following >= '0' && following <= '9') {
+              runEnd = after;
+              runChars += 2;
+              continue;
+            }
+          }
+        }
         break;
       }
+      if (nextAscii && !nextDigit) {
+        runEnd = peek;
+        runChars++;
+        continue;
+      }
+      break;
     }
     p = runEnd;
     std::string token(reinterpret_cast<const char*>(runStart), runEnd - runStart);

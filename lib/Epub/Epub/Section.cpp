@@ -49,7 +49,11 @@ namespace {
 // v39: An exclamation/question pair (!? !! ?? ?!) is tate-chu-yoko -- one upright cell
 //      -- where it used to be a sideways Latin run. That changes the cell's height and
 //      so every position after it in the column.
-constexpr uint8_t SECTION_FILE_VERSION = 39;
+// v40: A number holds on to a separator standing between two of its digits, so 3.14 and
+//      12:34 tokenize as one sideways run instead of three cells. Cell count and heights
+//      along the column change with it, and a number can no longer be split by a column
+//      break.
+constexpr uint8_t SECTION_FILE_VERSION = 40;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

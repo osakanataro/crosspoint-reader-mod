@@ -97,11 +97,15 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 39
+### Version 40
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 40 keeps a number together with any separator standing between two of its
+digits, so `3.14` and `12:34` become a single sideways run rather than three cells.
+The number of cells in a column changes, and with it every position after one.
 
 Version 39 sets an exclamation/question pair (`!?` `!!` `??` `?!`) as tate-chu-yoko,
 one upright cell, where it used to be a sideways Latin run. The cell's height changes
@@ -165,7 +169,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 39
+#define EXPECTED_VERSION 40
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 96
