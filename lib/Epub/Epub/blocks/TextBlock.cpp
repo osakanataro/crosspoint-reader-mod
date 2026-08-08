@@ -460,6 +460,17 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
           if (rubyPunct != nullptr) {
             rubyDrawX += rubyCellWidth * rubyPunct->dxEighths / 8;
             rubyDrawY += rubyCellWidth * rubyPunct->dyEighths / 8;
+          } else {
+            // The stack steps down the column on the half-em cell, but each glyph is drawn
+            // from that cell's left edge, and a proportional one does not fill it. A thin
+            // letter then sits off the axis the rest of the ruby runs along -- an 'I' among
+            // 'A' and 'S' reads as pushed left, because it is. Centre whatever comes out
+            // narrower than the cell, the same way the body centres a tate-chu-yoko run in
+            // its own. Kana and kanji are unaffected: halved by SUP they are the cell.
+            const int glyphAdvance = renderer.getTextAdvanceX(fontId, glyph, EpdFontFamily::SUP);
+            if (glyphAdvance < rubyCellWidth) {
+              rubyDrawX += (rubyCellWidth - glyphAdvance) / 2;
+            }
           }
           renderer.drawText(fontId, rubyDrawX, rubyDrawY, glyph, true, EpdFontFamily::SUP);
           rubyCursorY += rubyCellWidth;
