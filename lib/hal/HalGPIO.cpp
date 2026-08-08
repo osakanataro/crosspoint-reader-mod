@@ -157,6 +157,15 @@ bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleas
 
 bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
 
+bool HalGPIO::isAnyPressed() const {
+  for (uint8_t button = BTN_BACK; button <= BTN_POWER; ++button) {
+    if (inputMgr.isPressed(button)) return true;
+  }
+  return false;
+}
+
+bool HalGPIO::isDebouncePending() const { return inputMgr.isDebouncePending(); }
+
 unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
 
 unsigned long HalGPIO::getPowerButtonHeldTime() const { return inputMgr.getPowerButtonHeldTime(); }

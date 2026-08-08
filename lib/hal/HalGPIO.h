@@ -70,6 +70,13 @@ class HalGPIO {
   bool wasAnyPressed() const;
   bool wasReleased(uint8_t buttonIndex) const;
   bool wasAnyReleased() const;
+  // True while any button is physically down. Level, not edge: a hold emits a single press edge,
+  // so wasAnyPressed() cannot tell "still holding" from "idle".
+  bool isAnyPressed() const;
+  // True while a raw button change has not yet cleared InputManager's debounce window. A host that
+  // polls slower than the press itself must re-poll quickly while this is set, or the change is
+  // dropped instead of committed (see InputManager::isDebouncePending).
+  bool isDebouncePending() const;
   unsigned long getHeldTime() const;
   unsigned long getPowerButtonHeldTime() const;
   bool hasTouch() const;
