@@ -3,34 +3,66 @@ from test/epubs so this fork's own material, with its own provenance, does not
 mix into the upstream set. Nothing here is loaded by the gtest suites; copy a
 file to an SD card and open it.
 
-Vertical writing (tategaki)
----------------------------
+The four files
+--------------
 
-  test_vertical_ja.epub
-  test_vertical_ja_minicss.epub
+One book, built four ways:
 
-A Japanese book that declares page-progression-direction="rtl" with
-dc:language ja, so the reader lays it out vertically. It walks through the
-cases that vertical layout gets wrong most easily: ruby (145 instances,
-including annotations long enough to overhang their base word), list items,
-tilde variants (U+FF5E, U+301C, U+223C, U+02DC), fullwidth and halfwidth
-digit runs of one, two and three digits, fullwidth operators (＝ ＜ ＞ ≠ ≒),
-Greek letters, and line-break positions where kinsoku rules apply.
+                         full CSS (~144 KB)      minimal CSS (~2 KB)
+  vertical, ppd=rtl      test_vertical_ja        test_vertical_ja_minicss
+  horizontal, ppd=ltr    test_horizontal_ja      test_horizontal_ja_minicss
 
-The two files carry byte-identical XHTML and differ only in stylesheet size:
+The chapter XHTML is byte-identical across a row, and across a column it differs
+by one attribute -- class="vrtl" against class="hltr" on the body element. So the
+set isolates two variables independently:
 
-  test_vertical_ja.epub          ~144 KB of CSS across 4 files
-  test_vertical_ja_minicss.epub  ~2 KB of CSS in 1 file, holding only the
-                                 rules the XHTML actually reaches
+  along a row     writing mode, with the stylesheet held constant
+  down a column   stylesheet size, with the writing mode held constant
 
-That pairing separates layout behaviour from CSS cost: the same text, the
-same expected rendering, one book asking the parser to chew through seventy
-times more stylesheet than the other.
+That makes a difference attributable. A rendering fault that appears in the
+minimal-CSS file too is in the layout engine; one that only appears with the full
+stylesheet is in CSS handling. A fault present in both writing modes is not a
+tategaki bug, whatever it looks like.
+
+The horizontal pair also serves as the regression check for vertical work: the
+vertical branch must not disturb it, and having the same text on both sides means
+a regression shows up as a difference rather than as a hunch.
+
+What the text covers
+--------------------
+
+11 chapters, 146 ruby instances including annotations long enough to overhang
+their base word and to overhang the head and foot of a column. Also list items,
+tilde variants (U+FF5E, U+301C, U+223C, U+02DC), fullwidth and halfwidth digit
+runs of one, two and three digits, fullwidth operators (＝ ＜ ＞ ≠ ≒),
+exclamation/question pairs, Greek letters, and line-break positions where kinsoku
+rules apply. Most of the vertical fixes on this branch were found with it.
 
 Provenance
 ----------
 
-Text by OSAKANA TARO, published on Kakuyomu under the handle memoro and
-reused here by its author. CSS derived from the EBPAJ EPUB 3 production
-guide template set, ver. 1.1.4. The EPUB itself is assembled by a private
-PowerShell script, so these files are the artifact rather than the source.
+Text by OSAKANA TARO, published on Kakuyomu under the handle memoro and reused
+here by its author. CSS derived from the EBPAJ EPUB 3 production guide template
+set, ver. 1.1.4.
+
+The EPUBs are built from that Kakuyomu source by NovelToEpub, a PowerShell script
+at https://github.com/osakanataro/NovelToEpub, so they can be rebuilt rather than
+hand-edited -- fix the text on Kakuyomu, re-run, replace the files.
+
+  pwsh NovelToEpub.txt -Url https://kakuyomu.jp/works/2912051602969738484 -MaxCacheAgeHours 0.1
+  pwsh NovelToEpub.txt -Url https://kakuyomu.jp/works/2912051602969738484 -MinimalCss
+  pwsh NovelToEpub.txt -Url https://kakuyomu.jp/works/2912051602969738484 -Horizontal
+  pwsh NovelToEpub.txt -Url https://kakuyomu.jp/works/2912051602969738484 -Horizontal -MinimalCss
+
+Each run writes カクヨムの書式確認.epub; rename it after each one, in the order
+above.
+
+The script caches each episode it fetches, and -MaxCacheAgeHours defaults to 0,
+which disables age-based expiry: a cached episode is reused however old it is.
+Pass -MaxCacheAgeHours 0.1 on the *first* command only, as above, so it re-checks
+Kakuyomu for revisions. The remaining three run within those six minutes and
+reuse what the first fetched, so the site is polled once rather than four times.
+
+Rebuild all four together. They are only worth what their shared text is worth,
+and the source gains chapters over time -- regenerating one alone silently breaks
+the comparison the set exists for.
