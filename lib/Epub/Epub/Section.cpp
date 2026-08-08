@@ -46,7 +46,10 @@ namespace {
 //      byte layout is unchanged -- a ruby string per word has always been written, it was
 //      simply always empty on this path -- so a v37 file still parses, but it parses to a
 //      book with no annotations. Bumping forces the re-layout that fills them in.
-constexpr uint8_t SECTION_FILE_VERSION = 38;
+// v39: An exclamation/question pair (!? !! ?? ?!) is tate-chu-yoko -- one upright cell
+//      -- where it used to be a sideways Latin run. That changes the cell's height and
+//      so every position after it in the column.
+constexpr uint8_t SECTION_FILE_VERSION = 39;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

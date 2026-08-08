@@ -122,6 +122,13 @@ inline const PunctuationOffset* getVerticalPunctuationOffset(uint32_t cp) {
   return nullptr;
 }
 
+// An exclamation/question pair (!? !! ?? ?!) is set as one upright cell in vertical
+// Japanese, the same treatment a 1-2 digit number gets. Longer ASCII runs are not:
+// "Wow!!" is a Latin phrase and turns with the column like any other.
+inline bool isTateChuYokoPunctuationPair(const char* text) {
+  return text != nullptr && (text[0] == '!' || text[0] == '?') && (text[1] == '!' || text[1] == '?') && text[2] == '\0';
+}
+
 // Determine if a codepoint should be drawn upright in vertical text.
 // CJK ideographs, kana, CJK symbols, fullwidth forms, etc.
 inline bool isUprightInVertical(uint32_t cp) {

@@ -97,11 +97,15 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 38
+### Version 39
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 39 sets an exclamation/question pair (`!?` `!!` `??` `?!`) as tate-chu-yoko,
+one upright cell, where it used to be a sideways Latin run. The cell's height changes
+with it, moving everything after it in the column.
 
 Version 38 gives vertical blocks their ruby: the layout now hands each column the
 slice of `rubyTexts` belonging to its words instead of dropping them at the column
@@ -161,7 +165,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 38
+#define EXPECTED_VERSION 39
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 96

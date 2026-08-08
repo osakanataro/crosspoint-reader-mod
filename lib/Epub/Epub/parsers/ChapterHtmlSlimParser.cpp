@@ -328,10 +328,14 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
       }
     }
     p = runEnd;
-    const auto behavior = (isDigit && runChars <= 2) ? VerticalTextUtils::VerticalBehavior::TateChuYoko
-                                                     : VerticalTextUtils::VerticalBehavior::Sideways;
-    currentTextBlock->addVerticalToken(std::string(reinterpret_cast<const char*>(runStart), runEnd - runStart),
-                                       fontStyle, behavior);
+    std::string token(reinterpret_cast<const char*>(runStart), runEnd - runStart);
+    // 1-2 digits and an exclamation/question pair share one upright cell; every other
+    // ASCII run turns with the column.
+    const bool tateChuYoko =
+        (isDigit && runChars <= 2) || VerticalTextUtils::isTateChuYokoPunctuationPair(token.c_str());
+    const auto behavior =
+        tateChuYoko ? VerticalTextUtils::VerticalBehavior::TateChuYoko : VerticalTextUtils::VerticalBehavior::Sideways;
+    currentTextBlock->addVerticalToken(std::move(token), fontStyle, behavior);
   }
 }
 

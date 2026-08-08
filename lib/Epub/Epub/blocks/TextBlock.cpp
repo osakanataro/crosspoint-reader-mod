@@ -202,9 +202,20 @@ namespace {
 // classified it the same way from the same text, so this stays in step without
 // widening the cached block format with a per-word behaviour array.
 //
-// Upright: CJK, kana and the punctuation table. Tate-chu-yoko: runs of 1-2 digits,
-// which drawn upright already fill exactly one cell because proportional digits are
-// half-width. Everything else (Latin words, 3+ digit numbers) is sideways.
+// Upright: CJK, kana and the punctuation table. Tate-chu-yoko: runs of 1-2 digits and
+// an exclamation/question pair, set upright inside one cell. Everything else (Latin
+// words, 3+ digit numbers) is sideways.
+bool isTateChuYokoToken(const char* word) {
+  if (VerticalTextUtils::isTateChuYokoPunctuationPair(word)) return true;
+  if (word[0] < '0' || word[0] > '9') return false;
+  int digits = 0;
+  for (const char* p = word; *p != '\0'; ++p) {
+    if (*p < '0' || *p > '9') return false;
+    digits++;
+  }
+  return digits <= 2;
+}
+
 bool isSidewaysToken(const char* word) {
   const auto* p = reinterpret_cast<const unsigned char*>(word);
   const uint32_t first = utf8NextCodepoint(&p);
@@ -213,15 +224,7 @@ bool isSidewaysToken(const char* word) {
       VerticalTextUtils::getVerticalPunctuationOffset(first) != nullptr) {
     return false;
   }
-  if (first >= '0' && first <= '9') {
-    int digits = 1;
-    while (const uint32_t cp = utf8NextCodepoint(&p)) {
-      if (cp < '0' || cp > '9') break;
-      digits++;
-    }
-    return digits > 2;
-  }
-  return true;
+  return !isTateChuYokoToken(word);
 }
 }  // namespace
 
@@ -362,11 +365,12 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     if (punct != nullptr) {
       drawX += cellWidth * punct->dxEighths / 8;
       drawY += cellWidth * punct->dyEighths / 8;
-    } else if (cp >= '0' && cp <= '9') {
-      // Tate-chu-yoko: 1-2 digits set upright inside one cell, which the layout
-      // reserved at a full em. Two half-width digits fill that exactly, but a lone
-      // digit covers half of it and would hug the cell's left edge, off the column's
-      // axis. Centre whatever comes out narrower than the cell.
+    } else if (isTateChuYokoToken(word)) {
+      // Tate-chu-yoko sets its run upright inside one cell, which the layout reserved
+      // at a full em. Two half-width digits fill that exactly, but a lone digit covers
+      // half of it, and a proportional pair like "!?" is narrower still (26.6 px against
+      // a 33.3 px cell in NotoSansJP) -- all of which would hug the cell's left edge,
+      // off the column's axis. Centre whatever comes out narrower than the cell.
       const int advance = renderer.getTextAdvanceX(fontId, word, wordStyle(i));
       if (advance < cellWidth) {
         drawX += (cellWidth - advance) / 2;
