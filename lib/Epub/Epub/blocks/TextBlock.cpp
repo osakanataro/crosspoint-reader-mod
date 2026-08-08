@@ -254,6 +254,26 @@ bool isSidewaysRuby(const char* ruby) {
   return sawGlyph;
 }
 
+// How far a reading runs down the column. It depends on the reading alone and not on what
+// it annotates, which is what lets the column's total be counted in one cheap walk before
+// any of it is placed.
+//
+// The upright stack advances on a fixed half-em, not on each glyph's own width. For kana
+// and kanji the two are the same number, since a full-width glyph halved by SUP is exactly
+// the half cell; for anything proportional they are not, and the glyph width is the wrong
+// one -- it measures across the line, and the stack runs down it. JIS X 4051 sets ruby on
+// that fixed pitch for the same reason. Turned, a run's extent down the column is instead
+// its width across the line, which is what getTextAdvanceX reports.
+int rubyRunSpan(const GfxRenderer& renderer, const int fontId, const char* ruby, const int rubyCellWidth) {
+  if (isSidewaysRuby(ruby)) {
+    return renderer.getTextAdvanceX(fontId, ruby, EpdFontFamily::SUP);
+  }
+  int cells = 0;
+  const auto* cp = reinterpret_cast<const unsigned char*>(ruby);
+  while (utf8NextCodepoint(&cp) != 0) cells++;
+  return cells * rubyCellWidth;
+}
+
 // Separation kept between the ruby of one group and the next down the column. One pixel
 // is the least that reads as two runs rather than one on a 1-bit panel; more than that
 // costs column space, which the ruby that needs separating is already short of.
@@ -355,17 +375,36 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     renderer.drawText(fontId, drawX, drawY, word, true, wordStyle(i));
   }
 
-  // Ruby is placed in a pass of its own, running up the column from its foot. It cannot
-  // be placed in the body's pass: where a group ends up depends on the groups after it,
-  // and a run at the foot of the column would be drawn under the status bar, where it is
-  // not misplaced but gone. Taken from the foot instead, each group sits at its ideal
-  // position or as high as the group below leaves room for, whichever is lower, and a
-  // single running variable carries that room -- no table of positions, and nothing
-  // measured that is not drawn immediately after.
+  // Ruby is placed in a pass of its own, and needs two things the body's pass cannot give
+  // it. A group has to clear the one above -- a reading longer than what it annotates
+  // overhangs its group at both ends, so neighbours collide -- and it has to leave the
+  // groups below room to reach the foot of the column, or the last of them is drawn under
+  // the status bar, where ruby is not misplaced but gone.
+  //
+  // The two pull opposite ways and neither can be answered on its own. Pushing only
+  // downward piles the overflow at the foot; pushing only upward piles it at the head,
+  // which is where the device showed it -- two eleven-character readings on two-character
+  // bases, overprinted at the top of a column.
+  //
+  // Both fit in two running totals, no table of positions needed, because how far a
+  // reading runs does not depend on what it annotates. Count the column's readings once,
+  // then walk them from the top: what is still to be placed below is room this group may
+  // not take, and the foot of the column less that room is the lowest it may end.
   if (blockHasRuby) {
-    int rubyRoomBelow = (columnEnd > columnTop) ? columnEnd : INT_MAX;
-    for (int w = static_cast<int>(numWords) - 1; w >= 0; w--) {
-      const auto i = static_cast<uint16_t>(w);
+    // A ruby glyph is half-width, so it sits in the half cell just right of the body one.
+    const int rubyCellWidth = cellWidth / 2;
+
+    int rubyTotalExtent = 0;
+    for (uint16_t i = 0; i < numWords; i++) {
+      if (i >= rubyTexts.size() || rubyTexts[i].empty() || (wordStyle(i) & EpdFontFamily::RUBY_CONTINUE) != 0) {
+        continue;
+      }
+      rubyTotalExtent += rubyRunSpan(renderer, fontId, rubyTexts[i].c_str(), rubyCellWidth) + RUBY_GROUP_GAP;
+    }
+
+    int rubyPlacedExtent = 0;
+    int prevRubyFoot = INT_MIN;
+    for (uint16_t i = 0; i < numWords; i++) {
       if (i >= rubyTexts.size() || rubyTexts[i].empty() || (wordStyle(i) & EpdFontFamily::RUBY_CONTINUE) != 0) {
         continue;
       }
@@ -386,42 +425,38 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
       const int lastAdvance = renderer.getTextAdvanceX(fontId, wordText(lastWord), wordStyle(lastWord));
       const int groupSpan = (yposArr[lastWord] + y + lastAdvance) - groupTop;
 
-      // The stack advances on a fixed half-em, not on each glyph's own width. For kana
-      // and kanji the two are the same number, since a full-width glyph halved by SUP is
-      // exactly the half cell; for anything proportional they are not, and the glyph
-      // width is the wrong one -- it is a measure across the line, and the stack runs
-      // down it. JIS X 4051 sets ruby on that fixed pitch for the same reason.
       const bool rubySideways = isSidewaysRuby(rubyTexts[i].c_str());
-      // A ruby glyph is half-width, so it sits in the half cell just right of the body one.
-      const int rubyCellWidth = cellWidth / 2;
       const int rubyX = cellX + cellWidth;
-      int rubySpan;
-      if (rubySideways) {
-        // Turned, the run's extent down the column is its width across the line, which is
-        // what getTextAdvanceX reports -- SUP halves the glyphs and their advances alike.
-        rubySpan = renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP);
-      } else {
-        int rubyCells = 0;
-        const auto* cp = reinterpret_cast<const unsigned char*>(rubyTexts[i].c_str());
-        while (utf8NextCodepoint(&cp) != 0) rubyCells++;
-        rubySpan = rubyCells * rubyCellWidth;
-      }
+      const int rubySpan = rubyRunSpan(renderer, fontId, rubyTexts[i].c_str(), rubyCellWidth);
       int rubyCursorY = groupTop + (groupSpan - rubySpan) / 2;
 
-      // A reading longer than what it annotates overhangs both ends of its group, so the
-      // group below this one may already have taken the room it wanted. Take what is left.
-      if (rubyCursorY + rubySpan > rubyRoomBelow) {
-        rubyCursorY = rubyRoomBelow - rubySpan;
+      // The earliest this group may start: clear of the one above, and not above the head
+      // of the column. Japanese typography answers the overhang at a column's ends the
+      // same way (JIS X 4051) -- ruby that would overhang the line start is set flush with
+      // it instead of centred.
+      int rubyEarliest = columnTop;
+      if (prevRubyFoot != INT_MIN && prevRubyFoot + RUBY_GROUP_GAP > rubyEarliest) {
+        rubyEarliest = prevRubyFoot + RUBY_GROUP_GAP;
       }
-      // Japanese typography answers the overhang at a column's ends the same way (JIS X
-      // 4051): ruby that would overhang the line start is set flush with it instead of
-      // centred. Holding it here is also what decides where a column carrying more ruby
-      // than it has room for gives way -- at its head, against the top margin, rather
-      // than off the top of the page.
-      if (columnEnd > columnTop && rubyCursorY < columnTop) {
-        rubyCursorY = columnTop;
+      if (rubyCursorY < rubyEarliest) rubyCursorY = rubyEarliest;
+
+      if (columnEnd > columnTop) {
+        // ...and the latest it may end: far enough above the foot for everything still to
+        // be placed below it, packed tight.
+        const int roomBelow = rubyTotalExtent - rubyPlacedExtent - (rubySpan + RUBY_GROUP_GAP);
+        const int latestEnd = columnEnd - roomBelow;
+        if (rubyCursorY + rubySpan > latestEnd) {
+          // Never past the earliest, though. A column can carry more ruby than it has room
+          // for -- two eleven-character readings and three more in fourteen cells is over
+          // its length before anything is placed -- and then no arrangement satisfies both
+          // bounds. Keeping clear of the group above is the one to hold: readings that
+          // overprint are readable as neither, while the overflow at the foot is at worst
+          // a tail that runs under the status bar.
+          rubyCursorY = (latestEnd - rubySpan > rubyEarliest) ? latestEnd - rubySpan : rubyEarliest;
+        }
       }
-      rubyRoomBelow = rubyCursorY - RUBY_GROUP_GAP;
+      prevRubyFoot = rubyCursorY + rubySpan;
+      rubyPlacedExtent += rubySpan + RUBY_GROUP_GAP;
 
       if (rubySideways) {
         renderer.drawTextSideways(fontId, rubyX, rubyCursorY, rubyTexts[i].c_str(), rubyCellWidth, true,
