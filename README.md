@@ -1,7 +1,7 @@
 # CrossPoint Reader 改造版
 
 XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader を改造しています。
-### 2026/08/07時点の開発方針
+### 2026/08/09時点の開発方針
 - XTEINK X3で動けばいい
   - aliexpressで買ったUSB接続ができないバージョンを使用
 - Claude Codeで開発する
@@ -15,12 +15,27 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
   - 縦書きフォーマット(RTL)のEPUBを開いた時だけその動作をする
 - テスト用EPUBファイルにて動作を確認
   - 一部、特殊なフォントを必要とする文字以外について表示できることが期待される
-- ルビ表示については検討中
-  - ルビ表示面倒くさそうだから、どうするかなぁ
+- ルビ表示について対応中
+  - 横書きであればルビに対応してるなら縦書きでも対応しておくかな、って
 - 電書連 EPUB 3 制作ガイド ver.1.1.4に準拠したEPUB表示についての対策は悩み中
   - CSSが巨大すぎてメモリクラッシュを起こす件についての対応をやる必要があるのかという問題
   - [Setings]-[Reader]-[Text Settings]にある[Style]にて「Embedded Style」を「OFF」にするとCSSを使わないため回避できる
   - こんな小さな端末で著者がやりたいという複雑な表現をやって期待通りの表示になるのか？
+- 開発に際して下記URLをClaude codeに読み込ませている
+  - 本家 https://github.com/crosspoint-reader/crosspoint-reader
+  - JP版 https://github.com/zrn-ns/crosspoint-jp
+  - CJK版 https://github.com/aBER0724/crosspoint-reader-cjk
+  - Yomuka版 https://github.com/ponto1216-ai/crosspoint-jp
+  - 抹茶版 https://github.com/eszter007/matcha-reader
+
+### 変更点メモ
+- 縦書き時のみNext/Prevボタンの動作を逆とする
+  - EPUBファイル内でRTL宣言されている場合のみ適用する
+  - 横書きEPUBを読み込ませた場合は、この挙動をしない
+- ボタン操作がすぐに画面に反映されず6秒程度待つことがあることを修正
+  - なんか開発途中からそのような挙動をするようになった
+  - SDカード内のフォントを読んで描画することが問題だったらしく、HOME画面などの描画ルーチンに手を加えた
+
 
 ## 以下 CrossPoint Reader 公式の記述
 
