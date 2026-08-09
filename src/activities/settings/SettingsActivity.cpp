@@ -16,6 +16,7 @@
 #include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
 #include "OpdsServerListActivity.h"
+#include "OstVersion.h"
 #include "OtaUpdateActivity.h"
 #include "SdCardFontSystem.h"
 #include "SdFirmwareUpdateActivity.h"
@@ -475,8 +476,10 @@ void SettingsActivity::render(RenderLock&&) {
 
   const auto& metrics = UITheme::getInstance().getMetrics();
 
+  // The fork's build number rather than the upstream release: this is the screen reached to check
+  // what is installed, and the upstream figure is still on the OTA screen next door.
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE),
-                 CROSSPOINT_VERSION);
+                 OST_VERSION_LABEL);
 
   std::vector<TabInfo> tabs;
   tabs.reserve(categoryCount);
