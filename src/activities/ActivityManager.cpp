@@ -22,6 +22,7 @@
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/InputDiag.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -82,7 +83,19 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+#ifdef INPUT_DIAG
+      // Snapshot the name onto the stack before rendering. render() receives the lock by value and
+      // may release it partway, after which the main task can pop and destroy this activity -- so
+      // reading the name after render() returns is not safe. Guarded rather than routed through the
+      // no-op InputDiag stub because the snapshot itself would otherwise cost every build a copy.
+      char renderedName[16];
+      snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
+      const unsigned long renderStart = millis();
+#endif
       currentActivity->render(std::move(lock));
+#ifdef INPUT_DIAG
+      InputDiag::noteRender(renderedName, millis() - renderStart);
+#endif
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;

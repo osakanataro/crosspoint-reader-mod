@@ -22,6 +22,15 @@ class InputDiag {
   // Once per main-loop iteration, immediately after gpio.update().
   static void sample(unsigned long nowMs, bool committedEdge, bool debouncePending);
 
+  // One completed activity render, measured in the render task: drawing plus the panel refresh.
+  // The panel refresh is a fixed few hundred ms, so anything well above that is drawing -- which on
+  // a screen full of SD-card CJK glyphs means card reads, not pixels.
+  //
+  // The activity name is recorded per render because a running maximum cannot say *which* render was
+  // slow, and on a screen whose glyph cache warms on first use the first render and the tenth are
+  // different questions.
+  static void noteRender(const char* activityName, unsigned long durationMs);
+
   // Rewrites the snapshot on the SD card, at most every few seconds.
   static void flush(bool inputActive);
 };
@@ -29,6 +38,7 @@ class InputDiag {
 class InputDiag {
  public:
   static void sample(unsigned long, bool, bool) {}
+  static void noteRender(const char*, unsigned long) {}
   static void flush(bool) {}
 };
 #endif

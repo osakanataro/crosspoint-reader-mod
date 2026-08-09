@@ -28,6 +28,27 @@ uint32_t debounceEpisodes = 0;
 uint32_t committedEdges = 0;
 uint32_t cpuMhzMin = 0;
 bool wasPending = false;
+// Written from the render task, read by flush() on the main task. Aligned 32-bit scalars on a
+// single core, and nothing downstream acts on them, so a stale read only misreports a diagnostic.
+uint32_t renderMaxMs = 0;
+uint32_t renderLastMs = 0;
+uint32_t renderCount = 0;
+
+// Ring of the most recent renders, so the report shows the shape over time rather than one maximum
+// with no context. Names are truncated rather than pointed at: the activity that produced a render
+// is deleted on navigation, so keeping the pointer would dangle by the time flush() reads it.
+constexpr uint8_t RENDER_LOG_SIZE = 12;
+constexpr uint8_t RENDER_NAME_LEN = 12;
+struct RenderEntry {
+  char name[RENDER_NAME_LEN];
+  uint32_t ms;
+};
+RenderEntry renderLog[RENDER_LOG_SIZE] = {};
+uint8_t renderLogNext = 0;
+
+// File-scope so flush() stays inside the 256-byte stack budget for locals. Only the main loop task
+// calls flush(), so there is no second writer.
+char reportBuf[1024];
 }  // namespace
 
 void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, const bool debouncePending) {
@@ -59,6 +80,17 @@ void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, cons
   }
 }
 
+void InputDiag::noteRender(const char* activityName, const unsigned long durationMs) {
+  renderLastMs = static_cast<uint32_t>(durationMs);
+  if (renderLastMs > renderMaxMs) renderMaxMs = renderLastMs;
+  renderCount++;
+
+  RenderEntry& entry = renderLog[renderLogNext];
+  snprintf(entry.name, sizeof(entry.name), "%s", activityName ? activityName : "?");
+  entry.ms = renderLastMs;
+  renderLogNext = static_cast<uint8_t>((renderLogNext + 1) % RENDER_LOG_SIZE);
+}
+
 void InputDiag::flush(const bool inputActive) {
   const unsigned long now = millis();
   if (now - lastFlushAt < FLUSH_INTERVAL_MS) {
@@ -71,23 +103,44 @@ void InputDiag::flush(const bool inputActive) {
   }
   lastFlushAt = now;
 
-  char buf[448];
-  const int len = snprintf(buf, sizeof(buf),
-                           "uptime_ms=%lu\n"
-                           "cpu_mhz_now=%u\n"
-                           "cpu_mhz_min=%u\n"
-                           "poll_gap_max_fullspeed_ms=%u\n"
-                           "poll_gap_max_lowpower_ms=%u\n"
-                           "samples_lowpower=%u\n"
-                           "debounce_episodes=%u\n"
-                           "committed_edges=%u\n"
-                           "\n"
-                           "# poll_gap_* is the interval between button samples. A press shorter than\n"
-                           "# the gap in force at the time cannot be committed at all.\n"
-                           "# One clean press = 2 episodes (down, up) and 2 edges. episodes well above\n"
-                           "# edges means presses reached the pin and were dropped by the debounce.\n",
-                           now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
-                           debounceEpisodes, committedEdges);
+  int len = snprintf(reportBuf, sizeof(reportBuf),
+                     "uptime_ms=%lu\n"
+                     "cpu_mhz_now=%u\n"
+                     "cpu_mhz_min=%u\n"
+                     "poll_gap_max_fullspeed_ms=%u\n"
+                     "poll_gap_max_lowpower_ms=%u\n"
+                     "samples_lowpower=%u\n"
+                     "debounce_episodes=%u\n"
+                     "committed_edges=%u\n"
+                     "render_last_ms=%u\n"
+                     "render_max_ms=%u\n"
+                     "render_count=%u\n",
+                     now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
+                     debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderCount);
+  if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
+    return;
+  }
+
+  // Oldest first, so the list reads in the order the renders happened.
+  len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "render_log=");
+  for (uint8_t i = 0; i < RENDER_LOG_SIZE && static_cast<size_t>(len) < sizeof(reportBuf); i++) {
+    const RenderEntry& entry = renderLog[(renderLogNext + i) % RENDER_LOG_SIZE];
+    if (entry.name[0] == '\0') continue;  // ring not full yet
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u ", entry.name, entry.ms);
+  }
+  if (static_cast<size_t>(len) >= sizeof(reportBuf)) {
+    return;
+  }
+
+  len += snprintf(reportBuf + len, sizeof(reportBuf) - len,
+                  "\n\n"
+                  "# poll_gap_* is the interval between button samples. A press shorter than\n"
+                  "# the gap in force at the time cannot be committed at all.\n"
+                  "# One clean press = 2 episodes (down, up) and 2 edges. episodes well above\n"
+                  "# edges means presses reached the pin and were dropped by the debounce.\n"
+                  "# render_* covers drawing plus the panel refresh. The refresh alone is a\n"
+                  "# few hundred ms, so a much larger figure is drawing time, not the panel.\n"
+                  "# render_log is name:ms per render, oldest first.\n");
   if (len <= 0) {
     return;
   }
@@ -96,7 +149,7 @@ void InputDiag::flush(const bool inputActive) {
   if (!Storage.openFileForWrite("DIAG", DIAG_PATH, file)) {
     return;
   }
-  file.write(buf, strnlen(buf, sizeof(buf)));
+  file.write(reportBuf, strnlen(reportBuf, sizeof(reportBuf)));
 
   // Drop the next interval. The SD write above sits between two samples, so measuring across it
   // would report this file's own cost as the worst-case poll gap -- and it would land in the
