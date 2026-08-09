@@ -12,6 +12,7 @@
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGlyphPrewarm.h"
 
 namespace {
 // Hold threshold for the long-press "remove from list" action (firmware convention).
@@ -160,6 +161,30 @@ void RecentBooksActivity::render(RenderLock&&) {
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
 
+  // Batch-load this page's glyphs before drawing any of them (see UiGlyphPrewarm). Only the rows on
+  // screen: a long history has many more distinct characters than one page shows.
+  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  {
+    UiGlyphPrewarm warm;
+    warm.add(tr(STR_MENU_RECENT_BOOKS));
+    warm.add(labels.btn1);
+    warm.add(labels.btn2);
+    warm.add(labels.btn3);
+    warm.add(labels.btn4);
+    if (recentBooks.empty()) {
+      warm.add(tr(STR_NO_RECENT_BOOKS));
+    } else {
+      const int pageItems = GUI.getListPageItems(contentHeight, true);
+      const int first = UiGlyphPrewarm::pageStart(static_cast<int>(selectorIndex), pageItems);
+      const int last = std::min(first + pageItems, static_cast<int>(recentBooks.size()));
+      for (int i = first; i < last; i++) {
+        warm.add(recentBooks[i].title);
+        warm.add(recentBooks[i].author);
+      }
+    }
+    warm.apply(renderer);
+  }
+
   // Recent tab
   if (recentBooks.empty()) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_RECENT_BOOKS));
@@ -171,7 +196,6 @@ void RecentBooksActivity::render(RenderLock&&) {
   }
 
   // Help text
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

@@ -26,6 +26,7 @@
 #include "activities/util/IntervalSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGlyphPrewarm.h"
 
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
@@ -484,12 +485,35 @@ void SettingsActivity::render(RenderLock&&) {
                  selectedSettingIndex == 0);
 
   const auto& settings = *currentSettings;
+
+  const Rect listRect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing,
+                      pageWidth,
+                      pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight +
+                                    metrics.buttonHintsHeight + metrics.verticalSpacing * 2)};
+
+  // Batch-load this page's glyphs before drawing any of them (see UiGlyphPrewarm).
+  //
+  // Labels only. The right-hand value text is assembled inside the drawList callback below, across
+  // every SettingType, and duplicating that here to prewarm it would mean two copies of the same
+  // formatting rules drifting apart. Values are short and drawn from a small repeated vocabulary
+  // (on/off, enum names), so what is left on the on-demand path is a fraction of the screen.
+  {
+    UiGlyphPrewarm warm;
+    warm.add(tr(STR_SETTINGS_TITLE));
+    for (const auto& tab : tabs) {
+      warm.add(tab.label);
+    }
+    const int pageItems = GUI.getListPageItems(listRect.height, false);
+    const int first = UiGlyphPrewarm::pageStart(selectedSettingIndex - 1, pageItems);
+    const int last = std::min(first + pageItems, settingsCount);
+    for (int i = first; i < last; i++) {
+      warm.add(I18N.get(settings[i].nameId));
+    }
+    warm.apply(renderer);
+  }
+
   GUI.drawList(
-      renderer,
-      Rect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing, pageWidth,
-           pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
-                         metrics.verticalSpacing * 2)},
-      settingsCount, selectedSettingIndex - 1,
+      renderer, listRect, settingsCount, selectedSettingIndex - 1,
       [&settings](int index) { return std::string(I18N.get(settings[index].nameId)); }, nullptr, nullptr,
       [&settings](int i) {
         const auto& setting = settings[i];

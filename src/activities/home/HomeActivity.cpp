@@ -19,6 +19,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGlyphPrewarm.h"
 
 int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Recents, File transfer, Settings
@@ -278,52 +279,20 @@ void HomeActivity::loop() {
 
 void HomeActivity::prewarmUiGlyphs(const std::vector<const char*>& menuItems,
                                    const MappedInputManager::Labels& labels) const {
-  // Load every glyph this render will need in one batched pass, before drawing starts.
-  //
-  // Without this, each CJK glyph is fetched on demand while drawing, and SdCardFont keeps only 8 of
-  // those (OVERFLOW_CAPACITY) — a Japanese home screen carries far more distinct characters than
-  // that, so the ring thrashes and every glyph costs a seek plus a read from the card, in draw
-  // order, on every repaint. Prewarming reads the same glyphs sorted by position in the file, in a
-  // single forward pass. Latin builds are unaffected: their UI glyphs come from the built-in fonts.
-  //
-  // The three sizes are exactly the ones SdCardFontSystem::setupUiFallbacks registers CJK fallbacks
-  // for, and each is a separate .cpfont with its own cache, so each needs its own pass.
-  //
-  // Bold is warmed for UI_12 alone: every EpdFontFamily::BOLD draw in every theme is at that size
-  // (BaseTheme header/tabs/popup titles, LyraTheme titles, and RoundedRaffTheme's kTitleFontId is
-  // UI_12_FONT_ID). Warming bold at the other two sizes was two extra passes over the card for
-  // glyphs nothing draws, and a cold pass is not cheap.
-  struct UiFontWarm {
-    int fontId;
-    uint8_t styleMask;
-  };
-  static constexpr uint8_t kRegular = 1u << EpdFontFamily::REGULAR;
-  static constexpr uint8_t kBold = 1u << EpdFontFamily::BOLD;
-  static constexpr UiFontWarm kUiFonts[] = {
-      {SMALL_FONT_ID, kRegular},
-      {UI_10_FONT_ID, kRegular},
-      {UI_12_FONT_ID, static_cast<uint8_t>(kRegular | kBold)},
-  };
-
-  std::string text;
-  text.reserve(512);
+  UiGlyphPrewarm warm;
   for (const char* item : menuItems) {
-    if (item) text += item;
+    warm.add(item);
   }
   for (const char* label : {labels.btn1, labels.btn2, labels.btn3, labels.btn4}) {
-    if (label) text += label;
+    warm.add(label);
   }
   // Every recent book, not just the selected one: the header, the cover tile and the menu's
   // "continue reading" row each show a different book depending on theme and selection.
   for (const auto& book : recentBooks) {
-    text += book.title;
-    text += book.author;
+    warm.add(book.title);
+    warm.add(book.author);
   }
-  if (text.empty()) return;
-
-  for (const auto& font : kUiFonts) {
-    renderer.prewarmText(font.fontId, text.c_str(), font.styleMask);
-  }
+  warm.apply(renderer);
 }
 
 void HomeActivity::render(RenderLock&&) {

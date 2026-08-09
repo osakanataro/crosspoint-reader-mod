@@ -3,9 +3,12 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <algorithm>
+
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGlyphPrewarm.h"
 
 int EpubReaderChapterSelectionActivity::getTotalItems() const { return epub->getTocItemsCount(); }
 
@@ -116,6 +119,26 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
   const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
 
   const int totalItems = getTotalItems();
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  {
+    // Batch-load this page's glyphs before drawing any of them (see UiGlyphPrewarm). Chapter titles
+    // are the densest CJK text in the UI, and only the rows on screen are worth reading.
+    UiGlyphPrewarm warm;
+    warm.add(tr(STR_SELECT_CHAPTER));
+    warm.add(labels.btn1);
+    warm.add(labels.btn2);
+    warm.add(labels.btn3);
+    warm.add(labels.btn4);
+    const int pageItems = GUI.getListPageItems(contentHeight, false);
+    const int first = UiGlyphPrewarm::pageStart(selectorIndex, pageItems);
+    const int last = std::min(first + pageItems, totalItems);
+    for (int i = first; i < last; i++) {
+      warm.add(epub->getTocItem(i).title);
+    }
+    warm.apply(renderer);
+  }
+
   GUI.drawList(renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, totalItems, selectorIndex,
                [this](int index) {
                  auto item = epub->getTocItem(index);
@@ -123,7 +146,6 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
                  return indent + item.title;
                });
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

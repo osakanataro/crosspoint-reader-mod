@@ -14,6 +14,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/UiGlyphPrewarm.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
@@ -396,6 +397,23 @@ void FileBrowserActivity::render(RenderLock&&) {
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight =
       pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
+  // Batch-load this page's glyphs before drawing any of them (see UiGlyphPrewarm). Only the rows on
+  // screen: a directory of hundreds of Japanese filenames has far more distinct characters than one
+  // page shows, and each extra one is a card read for a glyph nothing draws.
+  {
+    UiGlyphPrewarm warm;
+    warm.add(folderName);
+    warm.add(basepath);
+    const int pageItems = GUI.getListPageItems(contentHeight, false);
+    const int first = UiGlyphPrewarm::pageStart(static_cast<int>(selectorIndex), pageItems);
+    const int last = std::min(first + pageItems, static_cast<int>(files.size()));
+    for (int i = first; i < last; i++) {
+      warm.add(getFileName(files[i]));
+      warm.add(getFileExtension(files[i]));
+    }
+    warm.apply(renderer);
+  }
+
   if (files.empty()) {
     const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
