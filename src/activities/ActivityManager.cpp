@@ -112,8 +112,12 @@ void ActivityManager::renderTaskLoop() {
   }
 }
 
-void ActivityManager::loop() {
-  if (currentActivity) {
+void ActivityManager::loop(const bool waitForPendingActions) {
+  // Skip the outgoing activity once a transition is queued. Pending work is no longer guaranteed to
+  // finish inside this call, so without the guard an activity that has already called finish() keeps
+  // receiving loop() calls while it waits, and a still-held button can trigger a second transition
+  // on top of the first.
+  if (currentActivity && pendingAction == PendingAction::None) {
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
@@ -127,9 +131,20 @@ void ActivityManager::loop() {
   }
 
   while (pendingAction != PendingAction::None) {
-    if (pendingAction == PendingAction::Pop) {
-      RenderLock lock;
+    // Try for the lock rather than waiting on it. The render task holds it for a whole render --
+    // measured at 1.4 s on a page turn -- and this runs on the task that samples the buttons, so
+    // waiting here means no input is read for that entire stretch. A press that starts and ends
+    // inside the gap is not merely delayed, it is never observed. Deferring costs one more
+    // main-loop iteration; the action stays pending and is retried on the next pass.
+    RenderLock lock{RenderLock::TryToLock{}};
+    if (!lock.isHeld()) {
+      // Callers that cannot come back later (goToSleep needs the sleep screen up before the device
+      // powers off) ask to wait instead.
+      if (!waitForPendingActions) return;
+      lock.lockBlocking();
+    }
 
+    if (pendingAction == PendingAction::Pop) {
       if (!currentActivity) {
         // Should never happen in practice
         LOG_ERR("ACT", "Pop set but currentActivity is null; ignoring pop request");
@@ -174,9 +189,8 @@ void ActivityManager::loop() {
       }
 
     } else if (pendingActivity) {
-      // Current activity has requested a new activity to be launched
-      RenderLock lock;
-
+      // Current activity has requested a new activity to be launched. The lock taken at the top of
+      // the loop covers this branch too.
       if (pendingAction == PendingAction::Replace) {
         // Destroy the current activity
         exitActivity(lock);
@@ -220,7 +234,13 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
 
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   // Note: no lock here, this is usually called by loop() and we may run into deadlock
-  if (currentActivity) {
+  //
+  // The pendingAction test matters as much as the currentActivity one. A deferred transition can
+  // leave currentActivity null between main-loop passes (exitActivity has run, the retry has not),
+  // and taking the immediate path there would install this activity while the queued action is
+  // still set -- which loop() would then apply on top, replacing what was just launched. Queuing
+  // instead supersedes the pending activity, which is what a replace means.
+  if (currentActivity || pendingAction != PendingAction::None) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
     // leading to the "delete this" problem
     pendingActivity = std::move(newActivity);
@@ -262,7 +282,9 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
 
 void ActivityManager::goToSleep(bool fromTimeout) {
   replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
-  loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
+  // Blocking: the sleep screen must be up before the caller powers the device off, so this one
+  // transition cannot be deferred to a later main-loop pass.
+  loop(/*waitForPendingActions=*/true);
 }
 
 void ActivityManager::goToBoot() { replaceActivity(std::make_unique<BootActivity>(renderer, mappedInput)); }
@@ -377,6 +399,14 @@ RenderLock::RenderLock() {
 }
 
 RenderLock::RenderLock([[maybe_unused]] Activity&) {
+  xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
+  isLocked = true;
+}
+
+RenderLock::RenderLock(TryToLock) { isLocked = xSemaphoreTake(activityManager.renderingMutex, 0) == pdTRUE; }
+
+void RenderLock::lockBlocking() {
+  if (isLocked) return;
   xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
   isLocked = true;
 }
