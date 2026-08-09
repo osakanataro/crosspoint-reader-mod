@@ -501,15 +501,16 @@ void SettingsActivity::render(RenderLock&&) {
   // (on/off, enum names), so what is left on the on-demand path is a fraction of the screen.
   {
     UiGlyphPrewarm warm;
-    warm.add(tr(STR_SETTINGS_TITLE));
+    warm.add(UiGlyphPrewarm::Role::Header, tr(STR_SETTINGS_TITLE));
+    // Tab labels are drawn at the header size too (BaseTheme::drawTabBar).
     for (const auto& tab : tabs) {
-      warm.add(tab.label);
+      warm.add(UiGlyphPrewarm::Role::Header, tab.label);
     }
     const int pageItems = GUI.getListPageItems(listRect.height, false);
     const int first = UiGlyphPrewarm::pageStart(selectedSettingIndex - 1, pageItems);
     const int last = std::min(first + pageItems, settingsCount);
     for (int i = first; i < last; i++) {
-      warm.add(I18N.get(settings[i].nameId));
+      warm.add(UiGlyphPrewarm::Role::Body, I18N.get(settings[i].nameId));
     }
     warm.apply(renderer);
   }

@@ -404,14 +404,15 @@ void FileBrowserActivity::render(RenderLock&&) {
   // page shows, and each extra one is a card read for a glyph nothing draws.
   {
     UiGlyphPrewarm warm;
-    warm.add(folderName);
-    warm.add(basepath);
+    warm.add(UiGlyphPrewarm::Role::Header, folderName);
+    // The full path line under the list is drawn at SMALL, same as the per-row extension label.
+    warm.add(UiGlyphPrewarm::Role::Subtitle, basepath);
     const int pageItems = GUI.getListPageItems(contentHeight, false);
     const int first = UiGlyphPrewarm::pageStart(static_cast<int>(selectorIndex), pageItems);
     const int last = std::min(first + pageItems, static_cast<int>(files.size()));
     for (int i = first; i < last; i++) {
-      warm.add(getFileName(files[i]));
-      warm.add(getFileExtension(files[i]));
+      warm.add(UiGlyphPrewarm::Role::Body, getFileName(files[i]));
+      warm.add(UiGlyphPrewarm::Role::Subtitle, getFileExtension(files[i]));
     }
     warm.apply(renderer);
   }

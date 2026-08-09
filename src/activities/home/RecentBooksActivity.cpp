@@ -168,20 +168,20 @@ void RecentBooksActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   {
     UiGlyphPrewarm warm;
-    warm.add(tr(STR_MENU_RECENT_BOOKS));
-    warm.add(labels.btn1);
-    warm.add(labels.btn2);
-    warm.add(labels.btn3);
-    warm.add(labels.btn4);
+    warm.add(UiGlyphPrewarm::Role::Header, tr(STR_MENU_RECENT_BOOKS));
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn1);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn2);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn3);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn4);
     if (recentBooks.empty()) {
-      warm.add(tr(STR_NO_RECENT_BOOKS));
+      warm.add(UiGlyphPrewarm::Role::Body, tr(STR_NO_RECENT_BOOKS));
     } else {
       const int pageItems = GUI.getListPageItems(contentHeight, true);
       const int first = UiGlyphPrewarm::pageStart(static_cast<int>(selectorIndex), pageItems);
       const int last = std::min(first + pageItems, static_cast<int>(recentBooks.size()));
       for (int i = first; i < last; i++) {
-        warm.add(recentBooks[i].title);
-        warm.add(recentBooks[i].author);
+        warm.add(UiGlyphPrewarm::Role::Body, recentBooks[i].title);
+        warm.add(UiGlyphPrewarm::Role::Subtitle, recentBooks[i].author);
       }
     }
     warm.apply(renderer);

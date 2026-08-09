@@ -130,16 +130,16 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
     // Batch-load this page's glyphs before drawing any of them (see UiGlyphPrewarm). Chapter titles
     // are the densest CJK text in the UI, and only the rows on screen are worth reading.
     UiGlyphPrewarm warm;
-    warm.add(tr(STR_SELECT_CHAPTER));
-    warm.add(labels.btn1);
-    warm.add(labels.btn2);
-    warm.add(labels.btn3);
-    warm.add(labels.btn4);
+    warm.add(UiGlyphPrewarm::Role::Header, tr(STR_SELECT_CHAPTER));
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn1);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn2);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn3);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn4);
     const int pageItems = GUI.getListPageItems(contentHeight, false);
     const int first = UiGlyphPrewarm::pageStart(selectorIndex, pageItems);
     const int last = std::min(first + pageItems, totalItems);
     for (int i = first; i < last; i++) {
-      warm.add(epub->getTocItem(i).title);
+      warm.add(UiGlyphPrewarm::Role::Body, epub->getTocItem(i).title);
     }
     warm.apply(renderer);
   }

@@ -283,16 +283,19 @@ void HomeActivity::prewarmUiGlyphs(const std::vector<const char*>& menuItems,
                                    const MappedInputManager::Labels& labels) const {
   UiGlyphPrewarm warm;
   for (const char* item : menuItems) {
-    warm.add(item);
+    warm.add(UiGlyphPrewarm::Role::Body, item);
   }
   for (const char* label : {labels.btn1, labels.btn2, labels.btn3, labels.btn4}) {
-    warm.add(label);
+    warm.add(UiGlyphPrewarm::Role::Body, label);
   }
   // Every recent book, not just the selected one: the header, the cover tile and the menu's
-  // "continue reading" row each show a different book depending on theme and selection.
+  // "continue reading" row each show a different book depending on theme and selection. Titles go
+  // to the header size because that is where the header and the cover tile draw them; the menu row
+  // that also shows one is the exception, and paying a slow path for that single row is cheaper
+  // than loading every title into both sizes.
   for (const auto& book : recentBooks) {
-    warm.add(book.title);
-    warm.add(book.author);
+    warm.add(UiGlyphPrewarm::Role::Header, book.title);
+    warm.add(UiGlyphPrewarm::Role::Subtitle, book.author);
   }
   warm.apply(renderer);
 }
