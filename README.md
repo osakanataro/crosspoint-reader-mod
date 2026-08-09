@@ -1,6 +1,8 @@
-# CrossPoint Reader 改造版
+# CrossPoint Reader OST 改造版
 
 XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader を改造しています。
+命名は面倒くさくなったのでOSakanaTaro版ってことでOST版です。
+
 ### 2026/08/09時点の開発方針
 - XTEINK X3で動けばいい
   - aliexpressで買ったUSB接続ができないバージョンを使用
