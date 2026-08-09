@@ -5,6 +5,7 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -38,7 +39,9 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
+#include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
+#include "util/UiGlyphPrewarm.h"
 
 namespace {
 // PR1 tategaki (vertical writing) auto-detection: no explicit writing-mode setting exists yet,
@@ -421,6 +424,12 @@ void EpubReaderActivity::loop() {
     // always true.
     // cppcheck-suppress knownConditionTrueFalse
     if (section->isBuilding() && buildTickHeapGate()) {
+      // Full speed for the duration of the tick. This runs on the task that samples the buttons,
+      // and the power-saving heuristic reads "no input for 3 s" as idleness -- so a build started
+      // after a page settles drops to LOW_POWER_FREQ and each tick stretches by roughly 16x,
+      // holding input off for seconds at a time. The render task takes the same lock for the same
+      // reason.
+      HalPowerManager::Lock powerLock;
       if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
         LOG_ERR("ERS", "Background section build failed");
         section.reset();
@@ -1108,6 +1117,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // "Indexing" popup on screen with no way forward. Surface an explicit error instead of hanging.
   // clearScreen first so the error popup doesn't overlay the stale "Indexing" popup.
   const auto showBuildError = [this]() {
+    // Snapshot the log ring before anything else: on a device with no serial console this is the
+    // only record of which check inside the section build actually failed. No-op without INPUT_DIAG.
+    InputDiag::captureLogs("section-build-failed");
     renderer.clearScreen();
     GUI.drawPopup(renderer, tr(STR_INDEX_FAILED));
     automaticPageTurnActive = false;
@@ -1197,6 +1209,13 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             ? std::nullopt
             : cachedVisibleTextOffset;
     if (!cacheComplete) {
+      // Hand back whatever the UI screens warmed before asking for memory. A build streams the
+      // chapter through ZIP inflate, which wants two contiguous 8 KB blocks and fails the whole
+      // open ("Failed to index - invalid book") if it cannot get them. The screens release on exit
+      // too, but this covers every route into a build rather than the ones remembered one by one --
+      // the chapter picker was the route that actually broke.
+      UiGlyphPrewarm::release(renderer);
+
       if (section->isPartial()) {
         LOG_DBG("ERS", "Partial cache found (%d pages), resuming build...", section->pageCount);
       } else {
