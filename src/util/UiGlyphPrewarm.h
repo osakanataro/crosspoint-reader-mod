@@ -30,6 +30,13 @@ class UiGlyphPrewarm {
   // Loads the accumulated text into the UI font caches. No-op when nothing was added.
   void apply(const GfxRenderer& renderer) const;
 
+  // Drop what apply() loaded. A screen must call this as it exits: the glyph bitmaps for a
+  // screenful of CJK are tens of KB, and left resident they are tens of KB the next allocation does
+  // not get. A section build needs one contiguous block for ZIP inflate, and a chapter opened
+  // straight from a list screen failed to find one -- "Failed to index - invalid book" -- until the
+  // list gave its cache back on the way out.
+  static void release(const GfxRenderer& renderer);
+
   // First index of the page holding `selectedIndex`, matching how the themes page a list
   // (BaseTheme::getListPageItems). Callers use it to add only the rows on screen; the arithmetic
   // lives here so the four list screens cannot drift apart from each other.

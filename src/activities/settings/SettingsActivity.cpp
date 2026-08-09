@@ -124,6 +124,8 @@ void SettingsActivity::onEnter() {
 
 void SettingsActivity::onExit() {
   Activity::onExit();
+  // Give the prewarmed glyph cache back before the next screen allocates (see UiGlyphPrewarm).
+  UiGlyphPrewarm::release(renderer);
 
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }

@@ -1120,6 +1120,18 @@ void SdCardFont::clearCache() {
   }
 }
 
+void SdCardFont::releaseAllCaches() {
+  clearOverflow();
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    if (!styles_[i].present) continue;
+    // freeStyleMiniData, not resetStyleMiniData: the retention heuristic is exactly what has to be
+    // overridden here (see the header).
+    freeStyleMiniData(styles_[i]);
+    applyGlyphMissCallback(i);
+  }
+  clearPersistentCache();
+}
+
 // --- Advance table ---
 
 void SdCardFont::clearPersistentCache() {

@@ -126,6 +126,8 @@ void HomeActivity::onEnter() {
 
 void HomeActivity::onExit() {
   Activity::onExit();
+  // Give the prewarmed glyph cache back before the next screen allocates (see UiGlyphPrewarm).
+  UiGlyphPrewarm::release(renderer);
 
   // Free the stored cover buffer if any
   freeCoverBuffer();

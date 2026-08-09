@@ -28,7 +28,12 @@ void EpubReaderChapterSelectionActivity::onEnter() {
   requestUpdate();
 }
 
-void EpubReaderChapterSelectionActivity::onExit() { Activity::onExit(); }
+void EpubReaderChapterSelectionActivity::onExit() {
+  Activity::onExit();
+  // Critical here in particular: the reader builds the chosen chapter the moment this screen
+  // pops, and that build needs one contiguous block for ZIP inflate.
+  UiGlyphPrewarm::release(renderer);
+}
 
 void EpubReaderChapterSelectionActivity::loop() {
   const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false);

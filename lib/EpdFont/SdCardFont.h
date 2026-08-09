@@ -71,6 +71,15 @@ class SdCardFont {
   // when font/size/family/glyph-table state changes.
   void clearPersistentCache();
 
+  // Hand every byte back: overflow ring, the per-style mini arenas and the advance tables.
+  //
+  // Distinct from clearCache(), which deliberately retains the arenas when the heap looks roomy and
+  // always keeps the advance tables. That bet pays off for the reader font, re-warmed page after
+  // page from the same book. It does not pay off for a UI fallback font whose screen has just been
+  // torn down: the next thing to run is usually a section build, which needs two contiguous 8 KB
+  // blocks for ZIP inflate and fails outright without them.
+  void releaseAllCaches();
+
   // Returns pointer to the managed EpdFont for a given style.
   // Returns nullptr if the style is not present.
   EpdFont* getEpdFont(uint8_t style = 0);

@@ -197,6 +197,16 @@ void GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t 
   }
 }
 
+void GfxRenderer::releaseFallbackGlyphCaches() const {
+  for (const auto& [primaryId, fallbackId] : fallbackFontMap_) {
+    (void)primaryId;
+    const auto it = sdCardFonts_.find(fallbackId);
+    if (it != sdCardFonts_.end() && it->second != nullptr) {
+      it->second->releaseAllCaches();
+    }
+  }
+}
+
 void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   auto result = fontMap.insert({fontId, font});
   if (!result.second) {

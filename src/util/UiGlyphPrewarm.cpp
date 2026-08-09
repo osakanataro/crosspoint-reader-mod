@@ -41,6 +41,8 @@ void UiGlyphPrewarm::add(const std::string& text) {
   if (!text.empty()) text_ += text;
 }
 
+void UiGlyphPrewarm::release(const GfxRenderer& renderer) { renderer.releaseFallbackGlyphCaches(); }
+
 int UiGlyphPrewarm::pageStart(const int selectedIndex, const int itemsPerPage) {
   if (itemsPerPage <= 0 || selectedIndex <= 0) return 0;
   return (selectedIndex / itemsPerPage) * itemsPerPage;

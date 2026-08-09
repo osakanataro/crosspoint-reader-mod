@@ -149,6 +149,17 @@ class GfxRenderer {
   // FontCacheManager::prewarmCache().
   void prewarmText(int fontId, const char* text, uint8_t styleMask = 0x01) const;
 
+  // Drop the glyph caches held by the registered UI fallback fonts.
+  //
+  // What prewarmText loads stays resident until something drops it, and on this device that is not
+  // free: the glyph bitmaps for a screenful of CJK are tens of KB that the next allocation does not
+  // get. A section build needs one contiguous block for ZIP inflate, so a screen that warmed itself
+  // and then left the caches behind can starve the reader outright.
+  //
+  // Only the fallback fonts, never the reader's own: those are warmed per page by the reader's
+  // PrewarmScope and clearing them here would make it re-read the page it is about to draw.
+  void releaseFallbackGlyphCaches() const;
+
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
