@@ -274,6 +274,26 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
   if (isVertical) {
+    // Spend the pending whitespace run as a separator token.
+    //
+    // characterData drops HTML whitespace as a bare word boundary, which is right for horizontal
+    // layout: that path re-inserts the gap at layout time via getSpaceAdvance() between words that
+    // do not continue. Vertical layout has no such step — layoutVerticalColumns stacks each token by
+    // its own advance and nothing else — so with no token to carry it the space simply vanished and
+    // Latin phrases came out run together ("character length calculator" as one string).
+    //
+    // Emitting a token here rather than adding a rule to the vertical layout keeps the two writing
+    // modes agreeing on where a space belongs, instead of giving vertical its own notion of it.
+    //
+    // Guarded on a non-empty buffer so an empty flush (an inline tag boundary, say) neither spends
+    // the run nor emits a trailing separator, and on a non-empty block so a run that opens a
+    // paragraph is discarded the way CSS collapsing discards it.
+    if (partWordBufferIndex > 0) {
+      if (pendingVerticalWhitespace && currentTextBlock && !currentTextBlock->isEmpty()) {
+        currentTextBlock->addVerticalToken(" ", fontStyle, VerticalTextUtils::VerticalBehavior::Sideways);
+      }
+      pendingVerticalWhitespace = false;
+    }
     // Vertical layout tokenizes per codepoint: each glyph is its own cell, classified
     // (upright CJK / sideways Latin / tate-chu-yoko digits) so layoutVerticalColumns can
     // stack and orient it. Latin runs and 1-2 digit numbers are grouped into one token.
@@ -368,7 +388,8 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
 
 // start a new text block if needed
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
-  nextWordContinues = false;  // New block = new paragraph, no continuation
+  nextWordContinues = false;          // New block = new paragraph, no continuation
+  pendingVerticalWhitespace = false;  // and no separator carried across the paragraph boundary
   if (currentTextBlock) {
     // already have a text block running and it is empty - just reuse it
     if (currentTextBlock->isEmpty()) {
@@ -1298,6 +1319,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       }
       // Whitespace is a real word boundary — reset continuation state
       self->nextWordContinues = false;
+      // Vertical layout needs the run kept as a separator (see flushPartWordBuffer). Only once the
+      // block has content: a run before the first word of a paragraph collapses away.
+      if (self->isVertical && self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+        self->pendingVerticalWhitespace = true;
+      }
       // Skip the whitespace char
       continue;
     }

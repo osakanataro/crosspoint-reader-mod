@@ -97,11 +97,18 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 40
+### Version 41
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 41 keeps HTML whitespace between words as a separator cell in vertical
+layout instead of dropping it as a bare word boundary. Horizontal layout re-inserts
+the gap when it lays out a line, but vertical layout stacks each cell by its own
+advance and had nothing to carry it, so Latin phrases ran together. The extra cell
+shifts every position after it in the column, and a column break pulls back off it
+rather than opening a column with it.
 
 Version 40 keeps a number together with any separator standing between two of its
 digits, so `3.14` and `12:34` become a single sideways run rather than three cells.
@@ -169,7 +176,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 40
+#define EXPECTED_VERSION 41
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 96

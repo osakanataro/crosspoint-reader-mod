@@ -711,8 +711,11 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     for (size_t i = 0; i < words.size(); i++) {
       if (currentY + wordHeights[i] > columnHeight && i > columnStart) {
         size_t breakAt = i;
-        // Kinsoku-head pullback: closing brackets / small kana cannot start a column.
-        while (breakAt > columnStart + 1 && VerticalTextUtils::isKinsokuHead(firstCodepoint(words[breakAt]))) {
+        // Kinsoku-head pullback: closing brackets / small kana cannot start a column. An inter-word
+        // separator is pulled back for the same reason: at the head of a column it reads as an
+        // indent, while at the foot of the previous one it is invisible.
+        while (breakAt > columnStart + 1 &&
+               (words[breakAt] == " " || VerticalTextUtils::isKinsokuHead(firstCodepoint(words[breakAt])))) {
           breakAt--;
         }
         // Kinsoku-tail pullback: opening brackets cannot end a column.

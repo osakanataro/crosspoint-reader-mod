@@ -38,6 +38,10 @@ class ChapterHtmlSlimParser {
   char partWordBuffer[MAX_WORD_SIZE + 1] = {};
   int partWordBufferIndex = 0;
   bool nextWordContinues = false;  // true when next flushed word attaches to previous (inline element boundary)
+  // Vertical layout only: an HTML whitespace run is waiting to be emitted as a separator token.
+  // Held rather than emitted on sight so leading and trailing runs stay collapsed away — it is
+  // spent only when another word actually follows within the same block. See flushPartWordBuffer.
+  bool pendingVerticalWhitespace = false;
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   // Ruby text state
   bool inRuby = false;
