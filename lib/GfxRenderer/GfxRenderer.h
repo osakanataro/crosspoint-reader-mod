@@ -131,6 +131,24 @@ class GfxRenderer {
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   bool isFontCacheScanning() const;
+
+  // Load the glyphs `text` needs before any drawing starts.
+  //
+  // Resolves the fallback first, which is the whole point of routing this through the renderer
+  // instead of calling FontCacheManager::prewarmCache() directly: a CJK string nominally drawn with
+  // a built-in UI font is rendered by the SD fallback registered for that font (setFallbackFont /
+  // resolveTextFontId), and prewarming the primary id would warm a font that has no such glyphs,
+  // leaving every CJK glyph to the on-demand path.
+  //
+  // That path is SdCardFont's 8-entry overflow ring: a seek and a read per glyph, in draw order,
+  // which is scattered order in the file. Prewarming instead sorts by glyph index and reads in a
+  // single forward pass. On a screen carrying more distinct CJK glyphs than the ring holds -- any
+  // Japanese menu -- the difference is seconds per repaint.
+  //
+  // styleMask is a bitmask of (1 << EpdFontFamily::Style), matching
+  // FontCacheManager::prewarmCache().
+  void prewarmText(int fontId, const char* text, uint8_t styleMask = 0x01) const;
+
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }

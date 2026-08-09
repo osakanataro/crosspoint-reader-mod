@@ -172,6 +172,31 @@ void GfxRenderer::FrameBufferLoan::end() {
 
 bool GfxRenderer::isFontCacheScanning() const { return fontCacheManager_ && fontCacheManager_->isScanning(); }
 
+void GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t styleMask) const {
+  if (!fontCacheManager_ || text == nullptr || *text == '\0' || styleMask == 0) return;
+
+  // Group the requested styles by the font that will actually render them, then issue one call per
+  // font. Resolution is per style (resolveTextFontId consults per-style coverage, so two styles can
+  // in principle land on different fonts), but the calls must not be: SdCardFont::prewarm extracts
+  // and dedups the text's codepoints once per call and shares that list across every style in the
+  // mask, so calling it per style repeats a 2 KB allocation and an O(n^2) dedup for nothing.
+  int targets[4] = {};
+  uint8_t masks[4] = {};
+  uint8_t targetCount = 0;
+  for (uint8_t i = 0; i < 4; i++) {
+    if (!(styleMask & (1u << i))) continue;
+    const int resolved = resolveTextFontId(fontId, text, static_cast<EpdFontFamily::Style>(i));
+    uint8_t slot = 0;
+    while (slot < targetCount && targets[slot] != resolved) slot++;
+    if (slot == targetCount) targets[targetCount++] = resolved;
+    masks[slot] |= static_cast<uint8_t>(1u << i);
+  }
+
+  for (uint8_t i = 0; i < targetCount; i++) {
+    fontCacheManager_->prewarmCache(targets[i], text, masks[i]);
+  }
+}
+
 void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   auto result = fontMap.insert({fontId, font});
   if (!result.second) {
