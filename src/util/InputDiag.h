@@ -31,6 +31,13 @@ class InputDiag {
   // different questions.
   static void noteRender(const char* activityName, unsigned long durationMs);
 
+  // Snapshot the RTC log ring into memory, to be written out by the next flush().
+  //
+  // Copies rather than writing on the spot: this is called from failure paths that may already
+  // hold the storage mutex, and the ring is only sixteen lines deep, so waiting for the flush
+  // would let routine debug output evict the very error being chased.
+  static void captureLogs(const char* reason);
+
   // Rewrites the snapshot on the SD card, at most every few seconds.
   static void flush(bool inputActive);
 };
@@ -39,6 +46,7 @@ class InputDiag {
  public:
   static void sample(unsigned long, bool, bool) {}
   static void noteRender(const char*, unsigned long) {}
+  static void captureLogs(const char*) {}
   static void flush(bool) {}
 };
 #endif

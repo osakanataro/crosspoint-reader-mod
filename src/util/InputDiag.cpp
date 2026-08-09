@@ -4,9 +4,11 @@
 
 #include <Arduino.h>
 #include <HalStorage.h>
+#include <Logging.h>
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "activities/RenderLock.h"
 
@@ -49,6 +51,11 @@ uint8_t renderLogNext = 0;
 // File-scope so flush() stays inside the 256-byte stack budget for locals. Only the main loop task
 // calls flush(), so there is no second writer.
 char reportBuf[1024];
+
+// Snapshot of the RTC log ring taken at a failure, waiting to be written out.
+constexpr char LOG_PATH[] = "/input-diag-log.txt";
+char capturedLogs[2048];
+bool capturedLogsPending = false;
 }  // namespace
 
 void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, const bool debouncePending) {
@@ -91,6 +98,17 @@ void InputDiag::noteRender(const char* activityName, const unsigned long duratio
   renderLogNext = static_cast<uint8_t>((renderLogNext + 1) % RENDER_LOG_SIZE);
 }
 
+void InputDiag::captureLogs(const char* reason) {
+  // Keep the first capture. A failure often cascades, and the earliest report is the one that
+  // still names the original cause.
+  if (capturedLogsPending) return;
+  const std::string logs = getLastLogs();
+  const int len = snprintf(capturedLogs, sizeof(capturedLogs), "reason=%s\nuptime_ms=%lu\n\n%s", reason ? reason : "?",
+                           millis(), logs.c_str());
+  if (len <= 0) return;
+  capturedLogsPending = true;
+}
+
 void InputDiag::flush(const bool inputActive) {
   const unsigned long now = millis();
   if (now - lastFlushAt < FLUSH_INTERVAL_MS) {
@@ -114,9 +132,13 @@ void InputDiag::flush(const bool inputActive) {
                      "committed_edges=%u\n"
                      "render_last_ms=%u\n"
                      "render_max_ms=%u\n"
-                     "render_count=%u\n",
+                     "render_count=%u\n"
+                     "heap_free=%u\n"
+                     "heap_min_free=%u\n"
+                     "heap_max_alloc=%u\n",
                      now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
-                     debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderCount);
+                     debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderCount, ESP.getFreeHeap(),
+                     ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
@@ -140,7 +162,9 @@ void InputDiag::flush(const bool inputActive) {
                   "# edges means presses reached the pin and were dropped by the debounce.\n"
                   "# render_* covers drawing plus the panel refresh. The refresh alone is a\n"
                   "# few hundred ms, so a much larger figure is drawing time, not the panel.\n"
-                  "# render_log is name:ms per render, oldest first.\n");
+                  "# render_log is name:ms per render, oldest first.\n"
+                  "# heap_max_alloc is the largest single block still obtainable. A ZIP inflate\n"
+                  "# buffer needs one contiguous block, so that number matters more than the total.\n");
   if (len <= 0) {
     return;
   }
@@ -150,6 +174,14 @@ void InputDiag::flush(const bool inputActive) {
     return;
   }
   file.write(reportBuf, strnlen(reportBuf, sizeof(reportBuf)));
+
+  if (capturedLogsPending) {
+    HalFile logFile;
+    if (Storage.openFileForWrite("DIAG", LOG_PATH, logFile)) {
+      logFile.write(capturedLogs, strnlen(capturedLogs, sizeof(capturedLogs)));
+      capturedLogsPending = false;
+    }
+  }
 
   // Drop the next interval. The SD write above sits between two samples, so measuring across it
   // would report this file's own cost as the worst-case poll gap -- and it would land in the
