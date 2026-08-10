@@ -31,6 +31,11 @@ class InputDiag {
   // different questions.
   static void noteRender(const char* activityName, unsigned long durationMs);
 
+  // One page render's phase breakdown, in milliseconds. renderContents already measures these for
+  // LOG_DBG; on a device with no serial console that measurement had nowhere to go, which is why the
+  // three seconds a page turn costs stayed unattributed through two wrong guesses.
+  static void notePageRender(unsigned long prewarmMs, unsigned long drawMs, unsigned long displayMs);
+
   // Snapshot the RTC log ring into memory, to be written out by the next flush().
   //
   // Copies rather than writing on the spot: this is called from failure paths that may already
@@ -46,6 +51,7 @@ class InputDiag {
  public:
   static void sample(unsigned long, bool, bool) {}
   static void noteRender(const char*, unsigned long) {}
+  static void notePageRender(unsigned long, unsigned long, unsigned long) {}
   static void captureLogs(const char*) {}
   static void flush(bool) {}
 };

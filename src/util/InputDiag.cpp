@@ -52,6 +52,14 @@ uint8_t renderLogNext = 0;
 // calls flush(), so there is no second writer.
 char reportBuf[1024];
 
+// Last and worst page-render phase split.
+uint32_t pageRenderPrewarmMs = 0;
+uint32_t pageRenderDrawMs = 0;
+uint32_t pageRenderDisplayMs = 0;
+uint32_t pageRenderPrewarmMaxMs = 0;
+uint32_t pageRenderDrawMaxMs = 0;
+uint32_t pageRenderDisplayMaxMs = 0;
+
 // Snapshot of the RTC log ring taken at a failure, waiting to be written out.
 constexpr char LOG_PATH[] = "/input-diag-log.txt";
 char capturedLogs[2048];
@@ -98,6 +106,16 @@ void InputDiag::noteRender(const char* activityName, const unsigned long duratio
   renderLogNext = static_cast<uint8_t>((renderLogNext + 1) % RENDER_LOG_SIZE);
 }
 
+void InputDiag::notePageRender(const unsigned long prewarmMs, const unsigned long drawMs,
+                               const unsigned long displayMs) {
+  pageRenderPrewarmMs = static_cast<uint32_t>(prewarmMs);
+  pageRenderDrawMs = static_cast<uint32_t>(drawMs);
+  pageRenderDisplayMs = static_cast<uint32_t>(displayMs);
+  if (pageRenderPrewarmMs > pageRenderPrewarmMaxMs) pageRenderPrewarmMaxMs = pageRenderPrewarmMs;
+  if (pageRenderDrawMs > pageRenderDrawMaxMs) pageRenderDrawMaxMs = pageRenderDrawMs;
+  if (pageRenderDisplayMs > pageRenderDisplayMaxMs) pageRenderDisplayMaxMs = pageRenderDisplayMs;
+}
+
 void InputDiag::captureLogs(const char* reason) {
   // Keep the first capture. A failure often cascades, and the earliest report is the one that
   // still names the original cause.
@@ -135,10 +153,14 @@ void InputDiag::flush(const bool inputActive) {
                      "render_count=%u\n"
                      "heap_free=%u\n"
                      "heap_min_free=%u\n"
-                     "heap_max_alloc=%u\n",
+                     "heap_max_alloc=%u\n"
+                     "page_prewarm_ms=%u (max %u)\n"
+                     "page_draw_ms=%u (max %u)\n"
+                     "page_display_ms=%u (max %u)\n",
                      now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
                      debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderCount, ESP.getFreeHeap(),
-                     ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
+                     ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs, pageRenderPrewarmMaxMs,
+                     pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs, pageRenderDisplayMaxMs);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
@@ -163,6 +185,8 @@ void InputDiag::flush(const bool inputActive) {
                   "# render_* covers drawing plus the panel refresh. The refresh alone is a\n"
                   "# few hundred ms, so a much larger figure is drawing time, not the panel.\n"
                   "# render_log is name:ms per render, oldest first.\n"
+                  "# page_* splits one page render: glyph prewarm from the card, drawing, then the\n"
+                  "# panel refresh. Whichever dominates is where a page turn's cost actually is.\n"
                   "# heap_max_alloc is the largest single block still obtainable. A ZIP inflate\n"
                   "# buffer needs one contiguous block, so that number matters more than the total.\n");
   if (len <= 0) {

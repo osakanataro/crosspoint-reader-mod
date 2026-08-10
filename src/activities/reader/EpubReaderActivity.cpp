@@ -380,6 +380,11 @@ void EpubReaderActivity::loop() {
       if (nextPage < static_cast<int>(section->pageCount)) {
         if (const auto p = section->loadPage(nextPage)) {
           if (auto* fcm = renderer.getFontCacheManager()) {
+            // Full speed for the scan, for the same reason the background build takes this lock: it
+            // runs on the task that samples the buttons, and the power-saving heuristic reads the
+            // pause after a page settles as idleness. At LOW_POWER_FREQ the scan stretched to 2691 ms
+            // measured between button samples -- worse than the build tick it was hiding behind.
+            HalPowerManager::Lock powerLock;
             const auto t0 = millis();
             auto scope = fcm->createPrewarmScope();
             p->render(renderer, SETTINGS.getReaderFontId(), 0, 0);  // scan only, no pixels
@@ -1718,6 +1723,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
   }
   const auto tDisplay = millis();
+  // No-op unless built with INPUT_DIAG. Placed here rather than at the LOG_DBG lines below: those sit
+  // in three per-path branches, while these three phases are each measured exactly once.
+  InputDiag::notePageRender(tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender);
 
   // Tiled grayscale: render each plane band-by-band, leaving the BW
   // framebuffer intact so no full-frame storeBwBuffer is needed; controller

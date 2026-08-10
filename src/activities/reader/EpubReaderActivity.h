@@ -106,7 +106,11 @@ class EpubReaderActivity final : public Activity {
   // being shown) and per loop() tick (background build of a large chapter). Kept small so a
   // background build chunk never noticeably delays input or a pending render.
   static constexpr int BUILD_PAGES_PER_CHUNK = 8;
-  static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 2;
+  // One page, not two. A tick runs on the task that samples the buttons, and two pages of layout
+  // measured ~2 s there -- which is where input latency went once the heap stopped being fragmented
+  // enough to keep the build gate shut. Halving the unit halves the blind window; the build simply
+  // takes more ticks to cover the same ground.
+  static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 1;
 
   // MEMFIX-PORT: background-build heap floor; portable
   // Skip background build ticks below this free-heap floor. The parse path grows
