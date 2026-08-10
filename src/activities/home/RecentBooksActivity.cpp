@@ -39,8 +39,6 @@ void RecentBooksActivity::onEnter() {
 
 void RecentBooksActivity::onExit() {
   Activity::onExit();
-  // Give the prewarmed glyph cache back before the next screen allocates (see UiGlyphPrewarm).
-  UiGlyphPrewarm::release(renderer);
   recentBooks.clear();
 }
 

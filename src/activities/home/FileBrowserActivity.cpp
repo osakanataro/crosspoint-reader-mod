@@ -102,8 +102,6 @@ void FileBrowserActivity::onEnter() {
 
 void FileBrowserActivity::onExit() {
   Activity::onExit();
-  // Give the prewarmed glyph cache back before the next screen allocates (see UiGlyphPrewarm).
-  UiGlyphPrewarm::release(renderer);
   files.clear();
   fileNameBuffer.reset();
 }

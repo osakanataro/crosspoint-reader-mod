@@ -170,6 +170,15 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
 void EpubReaderActivity::onEnter() {
   Activity::onEnter();
 
+  // Take the UI screens' glyph caches back once, here, rather than having every screen give them up
+  // as it exits. Handing them back and warming them again on each hop between Home, the file browser
+  // and settings was churning multi-KB arenas for glyphs those screens still wanted, and it left the
+  // heap with 48 KB free and no 12 KB run in it. Fragmentation is what the reader cannot survive: its
+  // build gate wants a contiguous 16 KB (BACKGROUND_BUILD_MIN_MAX_ALLOC) and ZIP inflate wants two
+  // 8 KB blocks. The reader is the only consumer that big, so this is the only place the UI has to be
+  // asked to let go -- plus once more before a build, for a chapter opened while already reading.
+  UiGlyphPrewarm::release(renderer);
+
   if (!epub) {
     return;
   }
