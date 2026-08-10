@@ -352,14 +352,18 @@ void EpubReaderActivity::loop() {
   // floor. Cross-chapter prewarm is deliberately out of scope (next spine's
   // section isn't loaded).
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
-  if (section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
-      lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
-      ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP && ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
+  if (section && !section->isBuilding() && renderer.hasFrameBuffer() && lastRenderCompleteMs != 0 &&
+      millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS && ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP &&
+      ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
       (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
-    RenderLock lock;  // the page table must not change under the scan
-    // Re-check under the lock: peek() and acquisition are not atomic, so the render
+    // Try, don't wait: this is opportunistic work on the task that samples the buttons, so waiting
+    // for a render to finish costs input for the whole render. Skipping is free -- the next pass
+    // tries again. (A peek() test used to stand in the condition above; peek and acquire are two
+    // steps, which is what the re-check below was compensating for.)
+    RenderLock lock{RenderLock::TryToLock{}};  // the page table must not change under the scan
+    // Re-check under the lock: the outer conditions were read before it was held, so the render
     // task may have reset/replaced the section or moved the page in between.
-    if (section && !section->isBuilding() &&
+    if (lock.isHeld() && section && !section->isBuilding() &&
         (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
       idlePrewarmSpine = currentSpineIndex;
       idlePrewarmPage = section->currentPage;
@@ -384,21 +388,25 @@ void EpubReaderActivity::loop() {
   // render()); crossing this margin is the signal that the reader will actually need pages
   // past the watermark soon. Uses the last render's viewport so pagination matches the
   // partial being extended.
-  if (section && !section->isBuilding() && section->isPartial() && !RenderLock::peek() && buildViewportWidth > 0 &&
+  if (section && !section->isBuilding() && section->isPartial() && buildViewportWidth > 0 &&
       !partialRebuildStartFailed &&
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
-    RenderLock lock;
-    // Reuse the last render's viewport so the extension paginates identically to the partial.
-    ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
-    buildSpec.isVertical = bookIsVertical(epub.get());
-    if (!section->startBuild(buildSpec)) {
-      // Not fatal: the partial keeps serving its pages; crossing the watermark falls back to
-      // the blocking extension in render(). Don't retry every tick.
-      partialRebuildStartFailed = true;
-      LOG_ERR("ERS", "Failed to start deferred partial extension build");
-    } else {
-      LOG_DBG("ERS", "Reader near partial watermark (%d/%d), resuming extension build", section->currentPage,
-              section->pageCount);
+    // Try, don't wait -- same reason as the idle prewarm above. Deferring only delays the
+    // extension by a pass, while waiting costs input for the length of a render.
+    RenderLock lock{RenderLock::TryToLock{}};
+    if (lock.isHeld()) {
+      // Reuse the last render's viewport so the extension paginates identically to the partial.
+      ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+      buildSpec.isVertical = bookIsVertical(epub.get());
+      if (!section->startBuild(buildSpec)) {
+        // Not fatal: the partial keeps serving its pages; crossing the watermark falls back to
+        // the blocking extension in render(). Don't retry every tick.
+        partialRebuildStartFailed = true;
+        LOG_ERR("ERS", "Failed to start deferred partial extension build");
+      } else {
+        LOG_DBG("ERS", "Reader near partial watermark (%d/%d), resuming extension build", section->currentPage,
+                section->pageCount);
+      }
     }
   }
 
@@ -412,10 +420,18 @@ void EpubReaderActivity::loop() {
   // partial's watermark until the build catches up, so the window check would wrongly read
   // "far enough ahead" and stall the build at 0 pages -- then the first turn past the
   // watermark re-parses the whole chapter synchronously. Keep ticking until it finalizes.
-  if (section && section->isBuilding() && !RenderLock::peek() &&
+  if (section && section->isBuilding() &&
       (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD) &&
       buildTickHeapGate()) {
-    RenderLock lock;
+    // Try for the lock rather than waiting on it, and drop this tick if a render holds it. Waiting
+    // stops the task that samples the buttons for the length of that render: measured 3137 ms with a
+    // press lost outright, against 116 ms in the same build when no render was in flight.
+    //
+    // A RenderLock::peek() test used to stand in the condition above, but peeking and then taking
+    // the lock is two steps -- the render task only has to win the gap between them, which the
+    // comment below already acknowledged it can. The try-lock closes the gap instead of narrowing
+    // it. Nothing is lost by skipping: the build resumes on a later pass.
+    RenderLock lock{RenderLock::TryToLock{}};
     // Re-check under the lock: render() (which also holds the RenderLock) may have finalized the
     // build between the outer isBuilding() check and acquiring the lock here, in which case
     // buildSomeMore() would fail and wrongly reset the section. The heap gate must be re-read
@@ -423,7 +439,7 @@ void EpubReaderActivity::loop() {
     // pre-lock heap reading. cppcheck can't see the cross-task mutation, so it flags this as
     // always true.
     // cppcheck-suppress knownConditionTrueFalse
-    if (section->isBuilding() && buildTickHeapGate()) {
+    if (lock.isHeld() && section->isBuilding() && buildTickHeapGate()) {
       // Full speed for the duration of the tick. This runs on the task that samples the buttons,
       // and the power-saving heuristic reads "no input for 3 s" as idleness -- so a build started
       // after a page settles drops to LOW_POWER_FREQ and each tick stretches by roughly 16x,
