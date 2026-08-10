@@ -1683,9 +1683,24 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     renderer.clearScreen();
   }
 
+#ifdef INPUT_DIAG
+  // Discard what the scan pass accumulated: it runs the same loops with drawing suppressed, so
+  // leaving it in would report it alongside the pass that actually puts pixels down.
+  (void)TextBlock::takeVerticalRenderStats();
+#endif
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+#ifdef INPUT_DIAG
+  const auto tBlocks = millis();
+#endif
   renderStatusBar();
   const auto tBwRender = millis();
+#ifdef INPUT_DIAG
+  {
+    const auto vs = TextBlock::takeVerticalRenderStats();
+    InputDiag::noteVerticalRender(vs.bodyMs, vs.bodyCells, vs.rubyMeasureMs, vs.rubyDrawMs, vs.rubyGroups);
+    InputDiag::notePageDrawParts(tBlocks - tPrewarm, tBwRender - tBlocks);
+  }
+#endif
 
   if (pageHasImages) {
     // Double FAST_REFRESH with selective image blanking (pablohc's technique):
@@ -1952,6 +1967,22 @@ void EpubReaderActivity::renderStatusBar() const {
 
   } else if (sb.titleMode == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE) {
     title = epub->getTitle();
+  }
+
+  // Warm the title's glyphs before the bar is drawn or measured.
+  //
+  // This is the one piece of page furniture the reader's PrewarmScope never covered: the scan pass
+  // walks page->render(), and the status bar is drawn after endScanAndPrewarm(). A Japanese chapter
+  // title therefore went through SdCardFont's eight-entry on-demand ring a glyph at a time -- and
+  // truncatedText/getTextWidth measure it before drawText even starts. Measured on an X3: 303 ms of
+  // a 327 ms draw phase was this bar, against 24 ms for the whole page of text beside it.
+  //
+  // Subtitle because the themes draw the bar at SMALL_FONT_ID. Repeat pages cost nothing: the title
+  // does not change, so UiGlyphPrewarm skips the call on the hash.
+  {
+    UiGlyphPrewarm warm;
+    warm.add(UiGlyphPrewarm::Role::Subtitle, title);
+    warm.apply(renderer);
   }
 
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,

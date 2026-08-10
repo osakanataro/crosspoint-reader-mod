@@ -60,6 +60,16 @@ uint32_t pageRenderPrewarmMaxMs = 0;
 uint32_t pageRenderDrawMaxMs = 0;
 uint32_t pageRenderDisplayMaxMs = 0;
 
+uint32_t pageBlocksMs = 0;
+uint32_t pageStatusBarMs = 0;
+
+// renderVertical's split for the last page drawn.
+uint32_t vertBodyMs = 0;
+uint32_t vertBodyCells = 0;
+uint32_t vertRubyMeasureMs = 0;
+uint32_t vertRubyDrawMs = 0;
+uint32_t vertRubyGroups = 0;
+
 // Snapshot of the RTC log ring taken at a failure, waiting to be written out.
 constexpr char LOG_PATH[] = "/input-diag-log.txt";
 char capturedLogs[2048];
@@ -116,6 +126,21 @@ void InputDiag::notePageRender(const unsigned long prewarmMs, const unsigned lon
   if (pageRenderDisplayMs > pageRenderDisplayMaxMs) pageRenderDisplayMaxMs = pageRenderDisplayMs;
 }
 
+void InputDiag::notePageDrawParts(const unsigned long blocksMs, const unsigned long statusBarMs) {
+  pageBlocksMs = static_cast<uint32_t>(blocksMs);
+  pageStatusBarMs = static_cast<uint32_t>(statusBarMs);
+}
+
+void InputDiag::noteVerticalRender(const unsigned long bodyMs, const unsigned long bodyCells,
+                                   const unsigned long rubyMeasureMs, const unsigned long rubyDrawMs,
+                                   const unsigned long rubyGroups) {
+  vertBodyMs = static_cast<uint32_t>(bodyMs);
+  vertBodyCells = static_cast<uint32_t>(bodyCells);
+  vertRubyMeasureMs = static_cast<uint32_t>(rubyMeasureMs);
+  vertRubyDrawMs = static_cast<uint32_t>(rubyDrawMs);
+  vertRubyGroups = static_cast<uint32_t>(rubyGroups);
+}
+
 void InputDiag::captureLogs(const char* reason) {
   // Keep the first capture. A failure often cascades, and the earliest report is the one that
   // still names the original cause.
@@ -156,11 +181,17 @@ void InputDiag::flush(const bool inputActive) {
                      "heap_max_alloc=%u\n"
                      "page_prewarm_ms=%u (max %u)\n"
                      "page_draw_ms=%u (max %u)\n"
-                     "page_display_ms=%u (max %u)\n",
+                     "page_display_ms=%u (max %u)\n"
+                     "page_blocks_ms=%u\n"
+                     "page_statusbar_ms=%u\n"
+                     "vert_body_ms=%u cells=%u\n"
+                     "vert_ruby_measure_ms=%u\n"
+                     "vert_ruby_draw_ms=%u groups=%u\n",
                      now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
                      debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderCount, ESP.getFreeHeap(),
                      ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs, pageRenderPrewarmMaxMs,
-                     pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs, pageRenderDisplayMaxMs);
+                     pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs, pageRenderDisplayMaxMs, pageBlocksMs,
+                     pageStatusBarMs, vertBodyMs, vertBodyCells, vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
@@ -185,6 +216,8 @@ void InputDiag::flush(const bool inputActive) {
                   "# render_* covers drawing plus the panel refresh. The refresh alone is a\n"
                   "# few hundred ms, so a much larger figure is drawing time, not the panel.\n"
                   "# render_log is name:ms per render, oldest first.\n"
+                  "# vert_* splits the vertical draw of the last page. cells and groups are counts,\n"
+                  "# so ms/cell and ms/group say whether the cost is per call or in one place.\n"
                   "# page_* splits one page render: glyph prewarm from the card, drawing, then the\n"
                   "# panel refresh. Whichever dominates is where a page turn's cost actually is.\n"
                   "# heap_max_alloc is the largest single block still obtainable. A ZIP inflate\n"

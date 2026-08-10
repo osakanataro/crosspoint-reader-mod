@@ -36,6 +36,17 @@ class InputDiag {
   // three seconds a page turn costs stayed unattributed through two wrong guesses.
   static void notePageRender(unsigned long prewarmMs, unsigned long drawMs, unsigned long displayMs);
 
+  // The draw phase split one level further: laying the page's blocks down, and the status bar.
+  // Needed because the body-cell loops inside renderVertical accounted for 38 ms of a 520 ms draw --
+  // the rest is somewhere neither of them covers.
+  static void notePageDrawParts(unsigned long blocksMs, unsigned long statusBarMs);
+
+  // Where renderVertical's time went for one page. Vertical drawing measured 2119 ms against
+  // horizontal's 76 ms on identical text; this splits that figure into the body cells, the pass that
+  // measures each ruby run, and the pass that draws it.
+  static void noteVerticalRender(unsigned long bodyMs, unsigned long bodyCells, unsigned long rubyMeasureMs,
+                                 unsigned long rubyDrawMs, unsigned long rubyGroups);
+
   // Snapshot the RTC log ring into memory, to be written out by the next flush().
   //
   // Copies rather than writing on the spot: this is called from failure paths that may already
@@ -52,6 +63,8 @@ class InputDiag {
   static void sample(unsigned long, bool, bool) {}
   static void noteRender(const char*, unsigned long) {}
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
+  static void notePageDrawParts(unsigned long, unsigned long) {}
+  static void noteVerticalRender(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long) {}
   static void captureLogs(const char*) {}
   static void flush(bool) {}
 };

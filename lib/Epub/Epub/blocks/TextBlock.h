@@ -71,6 +71,22 @@ class TextBlock final : public Block {
   void renderVertical(const GfxRenderer& renderer, int fontId, int x, int y) const;
 
  public:
+#ifdef INPUT_DIAG
+  // Diagnostic only: where renderVertical spends its time, accumulated across the blocks of one
+  // page. Vertical drawing measured 2119 ms against horizontal's 76 ms on the same text, and which
+  // of these three carries that is the open question -- guessing at it has been wrong three times.
+  //
+  // Reading the stats zeroes them, so a caller brackets the pass it cares about: the scan pass runs
+  // these same loops and would otherwise be counted alongside the real draw.
+  struct VerticalRenderStats {
+    uint32_t bodyMs;         // stacking and drawing the body cells
+    uint32_t bodyCells;      // how many cells that was
+    uint32_t rubyMeasureMs;  // measuring each ruby run before any of it is placed
+    uint32_t rubyDrawMs;     // drawing the ruby, a glyph at a time
+    uint32_t rubyGroups;     // how many annotations that was
+  };
+  static VerticalRenderStats takeVerticalRenderStats();
+#endif
   // Flatten-on-construct: copies the layout-time vectors into the arena; the
   // vectors die with the caller. On arena OOM the block is empty and valid()
   // is false -- callers must check and fail the line instead of using it.

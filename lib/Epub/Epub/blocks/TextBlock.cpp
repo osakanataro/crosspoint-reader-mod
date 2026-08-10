@@ -10,6 +10,9 @@
 
 #include <climits>
 #include <cstring>
+#ifdef INPUT_DIAG
+#include <Arduino.h>
+#endif
 
 #include "../../../../src/fontIds.h"
 
@@ -280,6 +283,27 @@ int rubyRunSpan(const GfxRenderer& renderer, const int fontId, const char* ruby,
 constexpr int RUBY_GROUP_GAP = 1;
 }  // namespace
 
+#ifdef INPUT_DIAG
+namespace {
+// Accumulated across the blocks of one page; drained by takeVerticalRenderStats().
+uint32_t vBodyMs = 0;
+uint32_t vBodyCells = 0;
+uint32_t vRubyMeasureMs = 0;
+uint32_t vRubyDrawMs = 0;
+uint32_t vRubyGroups = 0;
+}  // namespace
+
+TextBlock::VerticalRenderStats TextBlock::takeVerticalRenderStats() {
+  const VerticalRenderStats stats{vBodyMs, vBodyCells, vRubyMeasureMs, vRubyDrawMs, vRubyGroups};
+  vBodyMs = 0;
+  vBodyCells = 0;
+  vRubyMeasureMs = 0;
+  vRubyDrawMs = 0;
+  vRubyGroups = 0;
+  return stats;
+}
+#endif
+
 void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
   // Each token is stacked at its precomputed (xpos, ypos): CJK and kana upright,
   // Latin runs and the rotating punctuation turned clockwise (see VERTICAL_PUNCTUATION).
@@ -328,6 +352,10 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // groups longer than in horizontal mode, not different in kind.
   const bool blockHasRuby = hasRuby();
 
+#ifdef INPUT_DIAG
+  const uint32_t vBodyStart = millis();
+  vBodyCells += numWords;
+#endif
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
     const int cellX = xposArr[i] + x;
@@ -390,10 +418,17 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // reading runs does not depend on what it annotates. Count the column's readings once,
   // then walk them from the top: what is still to be placed below is room this group may
   // not take, and the foot of the column less that room is the lowest it may end.
+#ifdef INPUT_DIAG
+  vBodyMs += static_cast<uint32_t>(millis() - vBodyStart);
+#endif
+
   if (blockHasRuby) {
     // A ruby glyph is half-width, so it sits in the half cell just right of the body one.
     const int rubyCellWidth = cellWidth / 2;
 
+#ifdef INPUT_DIAG
+    const uint32_t vRubyMeasureStart = millis();
+#endif
     int rubyTotalExtent = 0;
     for (uint16_t i = 0; i < numWords; i++) {
       if (i >= rubyTexts.size() || rubyTexts[i].empty() || (wordStyle(i) & EpdFontFamily::RUBY_CONTINUE) != 0) {
@@ -402,6 +437,10 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
       rubyTotalExtent += rubyRunSpan(renderer, fontId, rubyTexts[i].c_str(), rubyCellWidth) + RUBY_GROUP_GAP;
     }
 
+#ifdef INPUT_DIAG
+    vRubyMeasureMs += static_cast<uint32_t>(millis() - vRubyMeasureStart);
+    const uint32_t vRubyDrawStart = millis();
+#endif
     int rubyPlacedExtent = 0;
     int prevRubyFoot = INT_MIN;
     for (uint16_t i = 0; i < numWords; i++) {
@@ -409,6 +448,9 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
         continue;
       }
       const int cellX = xposArr[i] + x;
+#ifdef INPUT_DIAG
+      vRubyGroups++;
+#endif
       // Ruby runs down the column beside the body. A CJK ruby is stacked a glyph at a
       // time like the body is -- one drawText for the whole string would lay it across
       // the column instead -- while a Latin one is turned clockwise and drawn as a single
@@ -512,6 +554,9 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
         }
       }
     }
+#ifdef INPUT_DIAG
+    vRubyDrawMs += static_cast<uint32_t>(millis() - vRubyDrawStart);
+#endif
   }
 }
 
