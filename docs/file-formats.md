@@ -97,11 +97,16 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 41
+### Version 42
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 42 widens footnote href records from 96 to 256 bytes, so calibre's long
+generated paths survive (upstream #2722). Everything written after a footnote
+record moves with it -- each serialized footnote record goes from 128 to 288
+bytes -- so a version 41 file cannot be read under the new layout.
 
 Version 41 keeps HTML whitespace between words as a separator cell in vertical
 layout instead of dropping it as a bare word boundary. Horizontal layout re-inserts
@@ -176,10 +181,10 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 41
+#define EXPECTED_VERSION 42
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
-#define FOOTNOTE_HREF_LEN 96
+#define FOOTNOTE_HREF_LEN 256
 
 struct String {
     u32 length [[hidden, comment("String byte length")]];

@@ -57,7 +57,10 @@ namespace {
 //      dropping it as a bare word boundary, so Latin phrases no longer run together. The
 //      extra cell shifts every position after it in the column, and column breaks pull back
 //      off it.
-constexpr uint8_t SECTION_FILE_VERSION = 41;
+// v42: Footnote href records grew from 96 to 256 bytes (upstream #2722). The wider record
+//      shifts everything written after it, so a v41 file -- whose records are the narrow
+//      shape -- cannot be read with the new layout.
+constexpr uint8_t SECTION_FILE_VERSION = 42;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

@@ -31,6 +31,7 @@ lib/EpdFont/scripts/output/
 /dependencies.lock
 /sdkconfig.*
 sdkconfig.sticky
+flake.*
 
 # OST build marker (local build counter) and its output images
 /.ost-build
