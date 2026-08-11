@@ -1,6 +1,7 @@
 #include "ActivityManager.h"
 
 #include <FontCacheManager.h>
+#include <HalDisplay.h>
 #include <HalPowerManager.h>
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <esp_task_wdt.h>
 #endif
 
+#include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -92,6 +94,10 @@ void ActivityManager::renderTaskLoop() {
       snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
       const unsigned long renderStart = millis();
 #endif
+      // Night mode inverts only the reading surfaces (appliesNightMode):
+      // resolving the output polarity here, per render, means menus, popups,
+      // and every other activity revert to normal automatically.
+      display.setInverted(SETTINGS.screenInverted != 0 && currentActivity->appliesNightMode());
       currentActivity->render(std::move(lock));
 #ifdef INPUT_DIAG
       InputDiag::noteRender(renderedName, millis() - renderStart);
