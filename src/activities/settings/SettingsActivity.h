@@ -189,6 +189,8 @@ class SettingsActivity final : public UiTabListActivity {
   void stepTab(int direction) override;
   bool handleButtons() override;
   bool handleCustomInput() override;
+  // Tab labels draw at the header size, setting names in the small font.
+  void prewarmFrame(UiGlyphPrewarm& warm) override;
 
   static std::string settingValueText(const SettingInfo& setting);
   void selectCategory(int categoryIndex);

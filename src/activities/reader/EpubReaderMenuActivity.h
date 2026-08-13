@@ -63,6 +63,9 @@ class EpubReaderMenuActivity final : public UiListActivity {
   bool handleButtons() override;
   // Header via GUI.drawHeader inside the safe area for the battery indicator.
   void drawChrome() override;
+  // The book title draws in the header font and can carry far more distinct CJK
+  // characters than the menu labels below it, so it has to be in the pass.
+  void prewarmFrame(UiGlyphPrewarm& warm) override;
 
   void closeCancelled();
 

@@ -279,6 +279,7 @@ void TextSettingsActivity::render(RenderLock&&) {
   if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
 
   renderer.clearScreen();
+  applyFramePrewarm();
 
   const auto pageWidth = renderer.getScreenWidth();
 

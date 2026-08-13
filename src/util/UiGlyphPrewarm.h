@@ -38,9 +38,10 @@ class UiGlyphPrewarm {
   // its cover tile mutates state as it draws. Get a role wrong and that element stays on the slow
   // path; nothing renders incorrectly.
   enum class Role : uint8_t {
-    Header,    // UI_12: headings, tab labels, cover-tile titles
-    Body,      // UI_10: list rows, menu items, button hints
-    Subtitle,  // SMALL: subtitles, authors, right-hand labels, path lines
+    Header,        // UI_12: headings, tab labels, cover-tile titles
+    Body,          // UI_10: list rows, menu items, button hints
+    Subtitle,      // SMALL: subtitles, authors, right-hand labels, path lines
+    SubtitleBold,  // SMALL bold: list rows set in the small font for length (recent books)
   };
 
   void add(Role role, const char* text);
@@ -65,4 +66,5 @@ class UiGlyphPrewarm {
   std::string header_;
   std::string body_;
   std::string subtitle_;
+  std::string subtitleBold_;
 };

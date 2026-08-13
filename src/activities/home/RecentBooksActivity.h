@@ -22,6 +22,8 @@ class RecentBooksActivity final : public UiListActivity {
   // goes home rather than finishing.
   bool handleButtons() override;
   const char* headerTitle() const override { return tr(STR_MENU_RECENT_BOOKS); }
+  // Titles are drawn bold in the small font, authors regular (see buildScreen).
+  void prewarmFrame(UiGlyphPrewarm& warm) override;
   void drawFooter() override;
 
   // Set when a long-press has fired; input is swallowed until Confirm is released

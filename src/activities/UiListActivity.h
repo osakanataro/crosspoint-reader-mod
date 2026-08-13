@@ -3,6 +3,7 @@
 #include "activities/Activity.h"
 #include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
+#include "util/UiGlyphPrewarm.h"
 
 // Base for activities hosting a single FreeInkUI list screen. UiAppHost owns
 // the app-hosting protocol (render target, FreeInkApp, uiReady handshake);
@@ -17,6 +18,7 @@
 class UiListActivity : public Activity, protected UiAppHost {
  public:
   void onEnter() override;
+  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
@@ -64,6 +66,28 @@ class UiListActivity : public Activity, protected UiAppHost {
   virtual void drawChrome();
   // Button hints, drawn after the app renders. Default: Back/Select/Up/Down.
   virtual void drawFooter();
+
+  // --- glyph prewarm ---------------------------------------------------------
+  // Add every string this frame is about to draw (see UiGlyphPrewarm). One pass
+  // has to cover the whole frame: a prewarm rebuilds that font's cache, so
+  // warming the button hints after the rows would drop the rows again, and the
+  // rows are the expensive half.
+  //
+  // The base adds headerTitle() and the default hints. A subclass adds the rows
+  // in view (addVisibleRows) plus whatever a drawChrome/drawFooter override
+  // paints in place of those defaults, and calls this first.
+  virtual void prewarmFrame(UiGlyphPrewarm& warm);
+
+  // Collect the frame's text and load its glyphs. Call from render() before the
+  // first draw; a render() override has to call it itself.
+  void applyFramePrewarm();
+
+  // Add rows [top, top + visible) of `items` for prewarmFrame. labelRole must
+  // match the font props.labelText resolves to -- rows drawn in the small font
+  // (file names, book titles) pass Subtitle, the body-font default covers the
+  // rest. Getting it wrong only leaves that text on the on-demand path.
+  void addVisibleRows(UiGlyphPrewarm& warm, const freeink::ui::ListItem* items, int count,
+                      UiGlyphPrewarm::Role labelRole = UiGlyphPrewarm::Role::Body);
 
   // --- helpers ---------------------------------------------------------------
   // Measure visibleRows for the screen band, apply follow-on-build, clamp the

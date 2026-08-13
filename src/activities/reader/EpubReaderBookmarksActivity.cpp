@@ -243,8 +243,16 @@ void EpubReaderBookmarksActivity::buildScreen(UiScreen& screen) {
   screen.list(props);
 }
 
+void EpubReaderBookmarksActivity::prewarmFrame(UiGlyphPrewarm& warm) {
+  UiListActivity::prewarmFrame(warm);
+  // Bookmark summaries are book text, and the subtitles carry chapter titles.
+  warm.add(UiGlyphPrewarm::Role::Header, tr(STR_BOOKMARKS));
+  addVisibleRows(warm, bookmarkRowItems.data(), static_cast<int>(bookmarkRowItems.size()));
+}
+
 void EpubReaderBookmarksActivity::render(RenderLock&&) {
   renderer.clearScreen();
+  applyFramePrewarm();
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto orientation = renderer.getOrientation();

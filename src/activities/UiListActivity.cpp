@@ -3,6 +3,8 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <algorithm>
+
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -20,6 +22,60 @@ void UiListActivity::onEnter() {
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);
   app.setScreen(&UiListActivity::screenTrampoline, this);
   requestUpdate();
+}
+
+void UiListActivity::onExit() {
+  // A screenful of CJK glyph bitmaps is tens of KB the next allocation does not
+  // get, and picking a row is usually what starts a section build -- which needs
+  // one contiguous block for the ZIP inflate.
+  UiGlyphPrewarm::release(renderer);
+  Activity::onExit();
+}
+
+void UiListActivity::prewarmFrame(UiGlyphPrewarm& warm) {
+  warm.add(UiGlyphPrewarm::Role::Header, headerTitle());
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  warm.add(UiGlyphPrewarm::Role::Body, labels.btn1);
+  warm.add(UiGlyphPrewarm::Role::Body, labels.btn2);
+  warm.add(UiGlyphPrewarm::Role::Body, labels.btn3);
+  warm.add(UiGlyphPrewarm::Role::Body, labels.btn4);
+}
+
+void UiListActivity::applyFramePrewarm() {
+  UiGlyphPrewarm warm;
+  prewarmFrame(warm);
+  warm.apply(renderer);
+}
+
+void UiListActivity::addVisibleRows(UiGlyphPrewarm& warm, const fui::ListItem* items, const int count,
+                                    const UiGlyphPrewarm::Role labelRole) {
+  if (items == nullptr || count <= 0) return;
+
+  const auto& n = activeNav();
+  int rows = n.visibleRows;
+  if (rows <= 1) {
+    // The band is measured during the build (ListNav::syncToProps), so the
+    // first paint of a screen -- the one paint whose glyphs are all cold -- has
+    // only the reset value here. Estimate high from the screen instead: a row
+    // warmed that turns out to be off-screen costs a few glyph reads, while
+    // warming one row of a full screen leaves the rest on the on-demand path.
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const int rowHeight = metrics.listRowHeight > 0 ? metrics.listRowHeight : 1;
+    const int band = renderer.getScreenHeight() - metrics.topPadding - metrics.headerHeight -
+                     metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+    // Bands a screen takes for itself (tab bar, path line, progress line) are
+    // not subtracted, so this reads high -- the direction that costs reads
+    // rather than leaving rows cold.
+    rows = std::max(rows, band / rowHeight);
+  }
+
+  const int first = std::clamp(n.top, 0, count);
+  const int last = std::min(count, first + rows);
+  for (int i = first; i < last; i++) {
+    warm.add(labelRole, items[i].label);
+    warm.add(UiGlyphPrewarm::Role::Subtitle, items[i].subtitle);
+    warm.add(UiGlyphPrewarm::Role::Subtitle, items[i].value);
+  }
 }
 
 void UiListActivity::screenTrampoline(UiScreen& screen, void* user) {
@@ -131,6 +187,7 @@ void UiListActivity::drawFooter() {
 
 void UiListActivity::render(RenderLock&&) {
   renderer.clearScreen();
+  applyFramePrewarm();
   drawChrome();
   renderUi();
   drawFooter();

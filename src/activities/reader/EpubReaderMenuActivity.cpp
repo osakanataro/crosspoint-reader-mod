@@ -199,10 +199,21 @@ void EpubReaderMenuActivity::drawChrome() {
                  title.c_str());
 }
 
+void EpubReaderMenuActivity::prewarmFrame(UiGlyphPrewarm& warm) {
+  UiListActivity::prewarmFrame(warm);
+  warm.add(UiGlyphPrewarm::Role::Header, title);
+  // The progress line buildScreen() draws above the rows, in the small font.
+  warm.add(UiGlyphPrewarm::Role::Subtitle, tr(STR_CHAPTER_PREFIX));
+  warm.add(UiGlyphPrewarm::Role::Subtitle, tr(STR_PAGES_SEPARATOR));
+  warm.add(UiGlyphPrewarm::Role::Subtitle, tr(STR_BOOK_PREFIX));
+  addVisibleRows(warm, menuRowItems, static_cast<int>(menuItems.size()));
+}
+
 void EpubReaderMenuActivity::render(RenderLock&&) {
   if (optionPopup.processRender(renderer, mappedInput)) return;
 
   renderer.clearScreen();
+  applyFramePrewarm();
   drawChrome();
 
   renderUi();

@@ -57,7 +57,7 @@ void RecentBooksActivity::onEnter() {
 }
 
 void RecentBooksActivity::onExit() {
-  Activity::onExit();
+  UiListActivity::onExit();
   recentBooks.clear();
 }
 
@@ -165,6 +165,18 @@ void RecentBooksActivity::buildScreen(UiScreen& screen) {
   props.labelText = label;
   syncListViewport(screen, props, /*hasSubtitle=*/true);
   screen.list(props);
+}
+
+void RecentBooksActivity::prewarmFrame(UiGlyphPrewarm& warm) {
+  UiListActivity::prewarmFrame(warm);
+  // The base added Back/Select/Up/Down; drawFooter() below draws Home/Open.
+  warm.add(UiGlyphPrewarm::Role::Body, tr(STR_HOME));
+  warm.add(UiGlyphPrewarm::Role::Body, tr(STR_OPEN));
+  if (recentBooks.empty()) {
+    warm.add(UiGlyphPrewarm::Role::Body, tr(STR_NO_RECENT_BOOKS));
+    return;
+  }
+  addVisibleRows(warm, rowItems.data(), static_cast<int>(rowItems.size()), UiGlyphPrewarm::Role::SubtitleBold);
 }
 
 void RecentBooksActivity::drawFooter() {

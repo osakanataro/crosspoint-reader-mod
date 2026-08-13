@@ -41,7 +41,7 @@ void FontDownloadActivity::onEnter() {
 }
 
 void FontDownloadActivity::onExit() {
-  Activity::onExit();
+  UiListActivity::onExit();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
@@ -627,6 +627,7 @@ void FontDownloadActivity::render(RenderLock&&) {
   const auto pageHeight = renderer.getScreenHeight();
 
   renderer.clearScreen();
+  applyFramePrewarm();
 
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_FONT_BROWSER));
 

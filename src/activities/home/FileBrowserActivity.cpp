@@ -135,7 +135,7 @@ void FileBrowserActivity::onEnter() {
 }
 
 void FileBrowserActivity::onExit() {
-  Activity::onExit();
+  UiListActivity::onExit();
   files.clear();
   rowNames.clear();
   rowExtensions.clear();
@@ -469,17 +469,33 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   screen.list(props);
 }
 
+void FileBrowserActivity::prewarmFrame(UiGlyphPrewarm& warm) {
+  UiListActivity::prewarmFrame(warm);
+  // Chrome: the folder name in the header, the full path in the small font.
+  warm.add(UiGlyphPrewarm::Role::Header, headerFolderName());
+  warm.add(UiGlyphPrewarm::Role::Subtitle, basepath);
+  // Footer: the base added Back/Select; drawFooter() may draw Home or Open.
+  warm.add(UiGlyphPrewarm::Role::Body, tr(STR_HOME));
+  warm.add(UiGlyphPrewarm::Role::Body, tr(STR_OPEN));
+  if (files.empty()) {
+    warm.add(UiGlyphPrewarm::Role::Body, mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND));
+    return;
+  }
+  addVisibleRows(warm, rowItems.data(), static_cast<int>(rowItems.size()), UiGlyphPrewarm::Role::Subtitle);
+}
+
+std::string FileBrowserActivity::headerFolderName() const {
+  if (mode == Mode::PickFirmware) return std::string(tr(STR_SELECT_FIRMWARE_FILE));
+  return (basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1);
+}
+
 void FileBrowserActivity::drawChrome() {
   const auto pageWidth = renderer.getScreenWidth();
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  std::string folderName =
-      (mode == Mode::PickFirmware)
-          ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
-          : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
   // Header via GUI.drawHeader (already FreeInkUI-themed) for the battery
   // indicator; the rest of the screen renders through the app.
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, headerFolderName().c_str());
 }
 
 void FileBrowserActivity::drawFooter() {

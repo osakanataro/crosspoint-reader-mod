@@ -55,6 +55,11 @@ class FileBrowserActivity final : public UiListActivity {
   // footer labels depend on path depth and picker mode.
   void drawChrome() override;
   void drawFooter() override;
+  // File names and the path line are drawn in the small font (see buildScreen).
+  void prewarmFrame(UiGlyphPrewarm& warm) override;
+  // The header text: the picker's own title, the SD card label at the root, or
+  // the current folder's name. Shared so the prewarm cannot drift from it.
+  std::string headerFolderName() const;
   // forceDelete routes the touch long-press to the delete branch; button
   // navigation leaves it false and relies on getHeldTime() instead.
   // fromButton: only the physical Confirm path may consume the

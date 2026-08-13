@@ -28,6 +28,8 @@ class EpubReaderChapterSelectionActivity final : public UiListActivity {
   bool handleButtons() override;
   // Header is drawn inside the safe area (not full-width like the base).
   void drawChrome() override;
+  // Chapter titles are the densest CJK text in the UI.
+  void prewarmFrame(UiGlyphPrewarm& warm) override;
 
  public:
   explicit EpubReaderChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

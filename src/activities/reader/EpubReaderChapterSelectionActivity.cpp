@@ -126,6 +126,12 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
   screen.list(props);
 }
 
+void EpubReaderChapterSelectionActivity::prewarmFrame(UiGlyphPrewarm& warm) {
+  UiListActivity::prewarmFrame(warm);
+  warm.add(UiGlyphPrewarm::Role::Header, tr(STR_SELECT_CHAPTER));
+  addVisibleRows(warm, tocRowItems.data(), static_cast<int>(tocRowItems.size()));
+}
+
 void EpubReaderChapterSelectionActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);

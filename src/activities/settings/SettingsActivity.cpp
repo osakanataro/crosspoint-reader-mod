@@ -190,7 +190,7 @@ void SettingsActivity::activateIndex(const int index) {
 }
 
 void SettingsActivity::onExit() {
-  Activity::onExit();
+  UiTabListActivity::onExit();
 
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }
@@ -491,10 +491,26 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
   screen.list(props);
 }
 
+void SettingsActivity::prewarmFrame(UiGlyphPrewarm& warm) {
+  UiListActivity::prewarmFrame(warm);
+  warm.add(UiGlyphPrewarm::Role::Header, tr(STR_SETTINGS_TITLE));
+  // Tab labels draw at the header size; the confirm hint is one of them when
+  // the ring sits on the tab bar (see the footer below).
+  for (int i = 0; i < categoryCount; i++) {
+    warm.add(UiGlyphPrewarm::Role::Header, I18N.get(categoryNames[i]));
+    warm.add(UiGlyphPrewarm::Role::Body, I18N.get(categoryNames[i]));
+  }
+  warm.add(UiGlyphPrewarm::Role::Body, tr(STR_TOGGLE));
+  // rowItems_ already carries this pass's value strings (rowValues_, refreshed
+  // by buildScreen), so the labels and their values warm together.
+  addVisibleRows(warm, rowItems_.data(), static_cast<int>(rowItems_.size()), UiGlyphPrewarm::Role::Subtitle);
+}
+
 void SettingsActivity::render(RenderLock&&) {
   if (optionPopup.processRender(renderer, mappedInput)) return;
 
   renderer.clearScreen();
+  applyFramePrewarm();
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto& metrics = UITheme::getInstance().getMetrics();

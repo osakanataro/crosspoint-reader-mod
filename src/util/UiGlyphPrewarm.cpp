@@ -8,9 +8,10 @@ namespace {
 constexpr uint8_t kRegular = 1u << EpdFontFamily::REGULAR;
 constexpr uint8_t kBold = 1u << EpdFontFamily::BOLD;
 
-// Bold is warmed for the header size alone: every EpdFontFamily::BOLD draw in every theme is at
-// UI_12 (BaseTheme header, tabs and popup titles; LyraTheme titles; RoundedRaffTheme's kTitleFontId
-// is UI_12_FONT_ID). Warming bold elsewhere is a second pass over the card for glyphs nothing draws.
+// Bold is warmed only where something draws bold, since each style is a separate cache and a second
+// style is a second pass over the card. That is the header size (BaseTheme header, tabs and popup
+// titles; LyraTheme titles; RoundedRaffTheme's kTitleFontId is UI_12_FONT_ID) and, since the
+// FreeInkUI lists landed, the small size on rows that carry a bold title over a regular subtitle.
 constexpr uint8_t HEADER_STYLES = static_cast<uint8_t>(kRegular | kBold);
 
 // A screen's worth of labels without regrowing. One allocation per role per repaint, released at
@@ -31,6 +32,7 @@ constexpr size_t TEXT_RESERVE = 256;
 uint32_t appliedHeaderHash = 0;
 uint32_t appliedBodyHash = 0;
 uint32_t appliedSubtitleHash = 0;
+uint32_t appliedSubtitleBoldHash = 0;
 
 // FNV-1a. Empty text hashes to 0 so "nothing added" and "nothing applied" compare equal.
 uint32_t textHash(const std::string& text) {
@@ -61,6 +63,9 @@ void UiGlyphPrewarm::add(const Role role, const char* text) {
     case Role::Subtitle:
       append(subtitle_, text);
       break;
+    case Role::SubtitleBold:
+      append(subtitleBold_, text);
+      break;
   }
 }
 
@@ -73,17 +78,21 @@ void UiGlyphPrewarm::apply(const GfxRenderer& renderer) const {
   const uint32_t headerHash = textHash(header_);
   const uint32_t bodyHash = textHash(body_);
   const uint32_t subtitleHash = textHash(subtitle_);
-  if (headerHash == appliedHeaderHash && bodyHash == appliedBodyHash && subtitleHash == appliedSubtitleHash) {
+  const uint32_t subtitleBoldHash = textHash(subtitleBold_);
+  if (headerHash == appliedHeaderHash && bodyHash == appliedBodyHash && subtitleHash == appliedSubtitleHash &&
+      subtitleBoldHash == appliedSubtitleBoldHash) {
     return;  // same labels as last time; the glyphs are still where they were left
   }
 
   if (!header_.empty()) renderer.prewarmText(UI_12_FONT_ID, header_.c_str(), HEADER_STYLES);
   if (!body_.empty()) renderer.prewarmText(UI_10_FONT_ID, body_.c_str(), kRegular);
   if (!subtitle_.empty()) renderer.prewarmText(SMALL_FONT_ID, subtitle_.c_str(), kRegular);
+  if (!subtitleBold_.empty()) renderer.prewarmText(SMALL_FONT_ID, subtitleBold_.c_str(), kBold);
 
   appliedHeaderHash = headerHash;
   appliedBodyHash = bodyHash;
   appliedSubtitleHash = subtitleHash;
+  appliedSubtitleBoldHash = subtitleBoldHash;
 }
 
 void UiGlyphPrewarm::release(const GfxRenderer& renderer) {
@@ -92,6 +101,7 @@ void UiGlyphPrewarm::release(const GfxRenderer& renderer) {
   appliedHeaderHash = 0;
   appliedBodyHash = 0;
   appliedSubtitleHash = 0;
+  appliedSubtitleBoldHash = 0;
 }
 
 int UiGlyphPrewarm::pageStart(const int selectedIndex, const int itemsPerPage) {
