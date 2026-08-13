@@ -276,7 +276,7 @@ families:
 
   - name: BIZUDGothic
     description: "UD Gothic Japanese (MORISAWA, optimized for readability)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
@@ -289,7 +289,7 @@ families:
 
   - name: BIZUDMincho
     description: "UD Mincho Japanese (MORISAWA, optimized for readability)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
@@ -302,7 +302,7 @@ families:
 
   - name: NotoSansJP
     description: "Sans-serif Japanese (JIS X 0213)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
