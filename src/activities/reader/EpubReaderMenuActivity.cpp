@@ -6,6 +6,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGlyphPrewarm.h"
 
 EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                const std::string& title, const int currentPage, const int totalPages,
@@ -49,7 +50,10 @@ void EpubReaderMenuActivity::onEnter() {
   requestUpdate();
 }
 
-void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
+void EpubReaderMenuActivity::onExit() {
+  Activity::onExit();
+  UiGlyphPrewarm::release(renderer);
+}
 
 void EpubReaderMenuActivity::closeCancelled() {
   ActivityResult result;
@@ -167,6 +171,24 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   auto metrics = UITheme::getInstance().getMetrics();
   Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
 
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  {
+    // Batch-load this screen's glyphs before drawing any of them (see UiGlyphPrewarm). The book
+    // title draws in the header font and can carry far more distinct CJK characters than the menu
+    // labels below it -- an unprewarmed title alone measured 29.8s of on-demand SD-card glyph
+    // loads, thrashing SdCardFont's 8-slot overflow ring one character at a time.
+    UiGlyphPrewarm warm;
+    warm.add(UiGlyphPrewarm::Role::Header, title);
+    for (const auto& item : menuItems) {
+      warm.add(UiGlyphPrewarm::Role::Body, I18N.get(item.labelId));
+    }
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn1);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn2);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn3);
+    warm.add(UiGlyphPrewarm::Role::Body, labels.btn4);
+    warm.apply(renderer);
+  }
+
   GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
                  title.c_str());
 
@@ -204,7 +226,6 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
       true);
 
   // Footer / Hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
