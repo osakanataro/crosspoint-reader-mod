@@ -46,6 +46,11 @@ char onDemandGlyphsMaxName[16] = "-";
 uint32_t uiPrewarmFailCount = 0;
 uint32_t uiPrewarmFailMinAlloc = 0;
 
+// Heap the frame's glyph prewarm consumed, worst case, and the samples the two brackets take.
+int32_t uiPrewarmHeapMax = 0;
+uint32_t uiPrewarmHeapAtBegin = 0;
+uint32_t renderHeapAtStart = 0;
+
 uint32_t renderMaxMs = 0;
 uint32_t renderLastMs = 0;
 uint32_t renderCount = 0;
@@ -69,6 +74,10 @@ struct RenderEntry {
   // which neither a snapshot at flush time nor a session minimum could have shown.
   uint16_t heapFreeKb;
   uint16_t heapMaxAllocKb;
+  // Heap this render consumed, in KB: positive means it took memory and had not given it back by
+  // the time it finished. A page turn in a file list read -46 here while its cost went from 473 ms
+  // to 19 s, which is the difference between a render that is slow and a render that is expensive.
+  int16_t heapDeltaKb;
 };
 RenderEntry renderLog[RENDER_LOG_SIZE] = {};
 uint8_t renderLogNext = 0;
@@ -143,6 +152,17 @@ void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, cons
   }
 }
 
+void InputDiag::noteRenderStart() { renderHeapAtStart = ESP.getFreeHeap(); }
+
+void InputDiag::noteUiPrewarmBegin() { uiPrewarmHeapAtBegin = ESP.getFreeHeap(); }
+
+void InputDiag::noteUiPrewarmEnd() {
+  if (uiPrewarmHeapAtBegin == 0) return;
+  const int32_t consumed = static_cast<int32_t>(uiPrewarmHeapAtBegin) - static_cast<int32_t>(ESP.getFreeHeap());
+  if (consumed > uiPrewarmHeapMax) uiPrewarmHeapMax = consumed;
+  uiPrewarmHeapAtBegin = 0;
+}
+
 void InputDiag::noteRender(const char* activityName, const unsigned long durationMs, const uint32_t onDemandGlyphs) {
   renderLastMs = static_cast<uint32_t>(durationMs);
   if (renderLastMs > renderMaxMs) {
@@ -160,8 +180,12 @@ void InputDiag::noteRender(const char* activityName, const unsigned long duratio
   RenderEntry& entry = renderLog[renderLogNext];
   snprintf(entry.name, sizeof(entry.name), "%s", activityName ? activityName : "?");
   entry.ms = renderLastMs;
-  entry.heapFreeKb = static_cast<uint16_t>(ESP.getFreeHeap() / 1024);
+  const uint32_t heapNow = ESP.getFreeHeap();
+  entry.heapFreeKb = static_cast<uint16_t>(heapNow / 1024);
   entry.heapMaxAllocKb = static_cast<uint16_t>(ESP.getMaxAllocHeap() / 1024);
+  const int32_t consumed = static_cast<int32_t>(renderHeapAtStart) - static_cast<int32_t>(heapNow);
+  entry.heapDeltaKb = renderHeapAtStart == 0 ? 0 : static_cast<int16_t>(consumed / 1024);
+  renderHeapAtStart = 0;
   renderLogNext = static_cast<uint8_t>((renderLogNext + 1) % RENDER_LOG_SIZE);
 }
 
@@ -237,42 +261,43 @@ void InputDiag::flush(const bool inputActive) {
   }
   lastFlushAt = now;
 
-  int len =
-      snprintf(reportBuf, sizeof(reportBuf),
-               "uptime_ms=%lu\n"
-               "cpu_mhz_now=%u\n"
-               "cpu_mhz_min=%u\n"
-               "poll_gap_max_fullspeed_ms=%u\n"
-               "poll_gap_max_lowpower_ms=%u\n"
-               "samples_lowpower=%u\n"
-               "debounce_episodes=%u\n"
-               "committed_edges=%u\n"
-               "render_last_ms=%u\n"
-               "render_max_ms=%u (%s)\n"
-               "render_count=%u\n"
-               "heap_free=%u\n"
-               "heap_min_free=%u\n"
-               "heap_max_alloc=%u\n"
-               "page_prewarm_ms=%u (max %u)\n"
-               "page_draw_ms=%u (max %u)\n"
-               "page_display_ms=%u (max %u)\n"
-               "page_blocks_ms=%u\n"
-               "page_statusbar_ms=%u\n"
-               "vert_body_ms=%u cells=%u\n"
-               "vert_ruby_measure_ms=%u\n"
-               "vert_ruby_draw_ms=%u groups=%u\n"
-               "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
-               "build_total_max_ms=%u spine=%d chunks=%d\n"
-               "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
-               "glyph_ondemand_last=%u max=%u (%s)\n",
-               now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
-               debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
-               ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
-               pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
-               pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells, vertRubyMeasureMs,
-               vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex, buildChunkMaxPageBefore,
-               buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex, buildTotalMaxChunkCount,
-               uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName);
+  int len = snprintf(reportBuf, sizeof(reportBuf),
+                     "uptime_ms=%lu\n"
+                     "cpu_mhz_now=%u\n"
+                     "cpu_mhz_min=%u\n"
+                     "poll_gap_max_fullspeed_ms=%u\n"
+                     "poll_gap_max_lowpower_ms=%u\n"
+                     "samples_lowpower=%u\n"
+                     "debounce_episodes=%u\n"
+                     "committed_edges=%u\n"
+                     "render_last_ms=%u\n"
+                     "render_max_ms=%u (%s)\n"
+                     "render_count=%u\n"
+                     "heap_free=%u\n"
+                     "heap_min_free=%u\n"
+                     "heap_max_alloc=%u\n"
+                     "page_prewarm_ms=%u (max %u)\n"
+                     "page_draw_ms=%u (max %u)\n"
+                     "page_display_ms=%u (max %u)\n"
+                     "page_blocks_ms=%u\n"
+                     "page_statusbar_ms=%u\n"
+                     "vert_body_ms=%u cells=%u\n"
+                     "vert_ruby_measure_ms=%u\n"
+                     "vert_ruby_draw_ms=%u groups=%u\n"
+                     "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
+                     "build_total_max_ms=%u spine=%d chunks=%d\n"
+                     "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
+                     "glyph_ondemand_last=%u max=%u (%s)\n"
+                     "ui_prewarm_heap_max=%d\n",
+                     now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
+                     debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
+                     ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
+                     pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
+                     pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells,
+                     vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
+                     buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
+                     buildTotalMaxChunkCount, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast,
+                     onDemandGlyphsMax, onDemandGlyphsMaxName, uiPrewarmHeapMax);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
@@ -282,8 +307,8 @@ void InputDiag::flush(const bool inputActive) {
   for (uint8_t i = 0; i < RENDER_LOG_SIZE && static_cast<size_t>(len) < sizeof(reportBuf); i++) {
     const RenderEntry& entry = renderLog[(renderLogNext + i) % RENDER_LOG_SIZE];
     if (entry.name[0] == '\0') continue;  // ring not full yet
-    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u@%u/%u ", entry.name, entry.ms, entry.heapFreeKb,
-                    entry.heapMaxAllocKb);
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u@%u/%u%+d ", entry.name, entry.ms, entry.heapFreeKb,
+                    entry.heapMaxAllocKb, entry.heapDeltaKb);
   }
   if (static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
@@ -291,7 +316,7 @@ void InputDiag::flush(const bool inputActive) {
 
   len += snprintf(reportBuf + len, sizeof(reportBuf) - len,
                   "\n\n"
-                  "# render_log entries are name:ms@freeKB/maxAllocKB, oldest first.\n"
+                  "# render_log entries are name:ms@freeKB/maxAllocKB+consumedKB, oldest first.\n"
                   "# poll_gap_* is the interval between button samples. A press shorter than\n"
                   "# the gap in force at the time cannot be committed at all.\n"
                   "# One clean press = 2 episodes (down, up) and 2 edges. episodes well above\n"

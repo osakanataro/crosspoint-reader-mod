@@ -147,6 +147,8 @@ void UiGlyphPrewarm::add(const Role role, const std::string& text) {
 }
 
 void UiGlyphPrewarm::apply(const GfxRenderer& renderer) const {
+  // No-op unless built with INPUT_DIAG.
+  InputDiag::noteUiPrewarmBegin();
   // Merge the roles into one entry per font+style pair before warming anything: two calls for the
   // same pair would leave only the second one's glyphs resident.
   WarmTarget targets[ROLE_COUNT];
@@ -189,6 +191,7 @@ void UiGlyphPrewarm::apply(const GfxRenderer& renderer) const {
   // Read after the warms: building one arena can be what pushes the heap under the retention floor
   // that drops another, and that release has to invalidate this record, not be recorded into it.
   appliedGeneration = renderer.glyphCacheGeneration();
+  InputDiag::noteUiPrewarmEnd();
 }
 
 void UiGlyphPrewarm::release(const GfxRenderer& renderer) {

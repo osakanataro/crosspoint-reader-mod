@@ -94,6 +94,7 @@ void ActivityManager::renderTaskLoop() {
       snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
       const unsigned long renderStart = millis();
       const uint32_t onDemandStart = renderer.glyphOnDemandLoads();
+      InputDiag::noteRenderStart();
 #endif
       // Night mode inverts only the reading surfaces (appliesNightMode):
       // resolving the output polarity here, per render, means menus, popups,

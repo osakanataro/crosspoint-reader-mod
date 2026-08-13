@@ -31,9 +31,19 @@ class InputDiag {
   // The activity name is recorded per render because a running maximum cannot say *which* render was
   // slow, and on a screen whose glyph cache warms on first use the first render and the tenth are
   // different questions.
+  // Free heap at the top of a render, for the consumption figure noteRender() reports. Paired so
+  // the sample is taken inside the diagnostic rather than by every caller.
+  static void noteRenderStart();
+
   // onDemandGlyphs: glyphs this render had to read one at a time because the prewarm did not
   // cover them. A prewarm naming the wrong font reports success and shows up only here.
   static void noteRender(const char* activityName, unsigned long durationMs, uint32_t onDemandGlyphs);
+
+  // Bracket the frame's glyph prewarm. Reports the heap it consumed, which separates "the glyph
+  // caches took the memory" from "the render took it somewhere else": a file browser page turn was
+  // seen to consume 46 KB and never give it back, with nothing to say what took it.
+  static void noteUiPrewarmBegin();
+  static void noteUiPrewarmEnd();
 
   // One page render's phase breakdown, in milliseconds. renderContents already measures these for
   // LOG_DBG; on a device with no serial console that measurement had nowhere to go, which is why the
@@ -86,7 +96,10 @@ class InputDiag {
 class InputDiag {
  public:
   static void sample(unsigned long, bool, bool) {}
+  static void noteRenderStart() {}
   static void noteRender(const char*, unsigned long, uint32_t) {}
+  static void noteUiPrewarmBegin() {}
+  static void noteUiPrewarmEnd() {}
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
   static void notePageDrawParts(unsigned long, unsigned long) {}
   static void noteVerticalRender(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long) {}
