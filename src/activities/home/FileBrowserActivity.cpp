@@ -453,17 +453,20 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   // Tap opens/navigates; long-press prompts delete (physical buttons stay in loop()).
   props.inputMask = fui::InputTouch | fui::InputLongPress;
   props.valueInset = 8;  // air between the extension and the row edge
-  // File names in the small font, wrapping onto a second line inside the same
-  // row height (rowHeight is derived from the small font itself: two of its
-  // lines plus 8, so two small lines always fit), so long names show more
-  // text. maxLines=2 doubles as the caller-owned marker: an all-default
-  // smallText fails textStyleUnset and Screen::list() would substitute
-  // bodyText back (FONT_SLOT_SMALL is 0).
-  fui::TextStyle label = screen.theme().smallText;
-  label.maxLines = 2;
-  props.labelText = label;
-  // The trailing value here is just the short extension: skip the balanced
-  // 60%-band wrap cap and let both name lines run the full width before it.
+  // File names on one line, truncated, in the theme's body text (labelText left
+  // unset so Screen::list substitutes it).
+  //
+  // Not the small font with maxLines=2, which is what this drew before: a label
+  // too wide for its slot makes Screen::list grow that row by a line, while
+  // listVisibleRows() -- which is also what decides whether the selection is on
+  // screen -- counts every row at the uniform height. The list then draws 12
+  // rows in a band the navigation believes holds 15, and the cursor walks onto
+  // rows that were never drawn, with no scroll to follow it. Uniform rows keep
+  // the two in agreement.
+  //
+  // Single-line small text cannot express itself here: an all-default smallText
+  // fails textStyleUnset (FONT_SLOT_SMALL is 0) and would be substituted back
+  // anyway, which is why maxLines=2 doubled as the caller-owned marker.
   props.balanceWrappedLabelWithValue = false;
   syncListViewport(screen, props);
   screen.list(props);
@@ -481,7 +484,8 @@ void FileBrowserActivity::prewarmFrame(UiGlyphPrewarm& warm) {
     warm.add(UiGlyphPrewarm::Role::ListRow, mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND));
     return;
   }
-  addVisibleRows(warm, rowItems.data(), static_cast<int>(rowItems.size()), UiGlyphPrewarm::Role::ListSmall);
+  // Rows draw in the theme's body text now (see buildScreen), not the small slot.
+  addVisibleRows(warm, rowItems.data(), static_cast<int>(rowItems.size()), UiGlyphPrewarm::Role::ListRow);
 }
 
 std::string FileBrowserActivity::headerFolderName() const {
