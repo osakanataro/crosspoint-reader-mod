@@ -14,42 +14,57 @@ constexpr uint8_t kBold = 1u << EpdFontFamily::BOLD;
 // scope exit, against the hundreds of card reads it replaces.
 constexpr size_t TEXT_RESERVE = 256;
 
-// One warm: every string this frame draws in this font and style, in one call.
+// One warm: every string this frame draws in this font and this one style, in a single call.
+//
+// Keyed on a single style bit, not the role's mask. SdCardFont holds one cache per style, so two
+// warms whose masks overlap fight over the styles they share: Header (title font, regular+bold) and
+// ListRow (body font, regular) land on the same font once the slots line up, and the second call
+// rebuilt the regular cache the first had just filled. Nothing visibly broke only because titles
+// draw bold -- but which of the two survived depended on the order the roles happen to sit in the
+// enum, and a role added above another would have sent a screenful of rows back to the on-demand
+// path with ui_prewarm_fail still reading 0.
 struct WarmTarget {
   int fontId = 0;
-  uint8_t styles = 0;
+  uint8_t style = 0;  // exactly one (1 << EpdFontFamily::Style) bit
   std::string text;
 };
 
-// What each role resolves to. uiScaleSpec() owns the FreeInkUI slot sizes, so changing a slot there
-// moves the prewarm with it instead of leaving the two to disagree silently.
-WarmTarget targetFor(const UiGlyphPrewarm::Role role) {
+// The font and styles a role draws in. apply() splits the mask into one warm per style.
+//
+// uiScaleSpec() owns the FreeInkUI slot sizes, so changing a slot there moves the prewarm with it
+// instead of leaving the two to disagree silently.
+struct RoleTarget {
+  int fontId = 0;
+  uint8_t styles = 0;
+};
+
+RoleTarget targetFor(const UiGlyphPrewarm::Role role) {
   const auto spec = uiScaleSpec();
-  WarmTarget target;
+  RoleTarget target;
   switch (role) {
     case UiGlyphPrewarm::Role::Header:
       // Bold as well as regular: every EpdFontFamily::BOLD draw in every theme is a title
       // (BaseTheme header, tabs and popup titles; LyraTheme titles; RoundedRaffTheme's
       // kTitleFontId). Warming bold for a role that never draws it is a second pass over the card.
-      target = {spec.titleFontId, static_cast<uint8_t>(kRegular | kBold), {}};
+      target = {spec.titleFontId, static_cast<uint8_t>(kRegular | kBold)};
       break;
     case UiGlyphPrewarm::Role::ListRow:
-      target = {spec.bodyFontId, kRegular, {}};
+      target = {spec.bodyFontId, kRegular};
       break;
     case UiGlyphPrewarm::Role::ListSmall:
-      target = {spec.smallFontId, kRegular, {}};
+      target = {spec.smallFontId, kRegular};
       break;
     case UiGlyphPrewarm::Role::ListSmallBold:
-      target = {spec.smallFontId, kBold, {}};
+      target = {spec.smallFontId, kBold};
       break;
     case UiGlyphPrewarm::Role::ThemeBody:
       // BaseTheme::drawButtonHints and drawButtonMenu draw at this size directly, not through a
       // FreeInkUI slot, so they do not follow uiScaleSpec.
-      target = {UI_10_FONT_ID, kRegular, {}};
+      target = {UI_10_FONT_ID, kRegular};
       break;
     case UiGlyphPrewarm::Role::ThemeSmall:
       // Likewise drawStatusBar, the header's battery percent, and the file browser's path line.
-      target = {SMALL_FONT_ID, kRegular, {}};
+      target = {SMALL_FONT_ID, kRegular};
       break;
   }
   return target;
@@ -67,10 +82,11 @@ WarmTarget targetFor(const UiGlyphPrewarm::Role role) {
 // draw in the title font once the slots line up), and recorded only when the warm reported success:
 // recording it unconditionally made one failure permanent, since every later repaint of the same
 // text then skipped a load that had never happened.
-constexpr uint8_t MAX_TARGETS = 6;
+// One role can contribute to two styles (the title font's regular and bold), so allow for it.
+constexpr uint8_t MAX_TARGETS = 12;  // the six roles, each able to reach a regular and a bold cache
 struct AppliedWarm {
   int fontId = 0;
-  uint8_t styles = 0;
+  uint8_t style = 0;
   uint32_t hash = 0;
 };
 AppliedWarm applied[MAX_TARGETS];
@@ -91,12 +107,12 @@ uint32_t textHash(const std::string& text) {
   return hash;
 }
 
-uint32_t* findApplied(const int fontId, const uint8_t styles) {
+uint32_t* findApplied(const int fontId, const uint8_t style) {
   for (uint8_t i = 0; i < appliedCount; i++) {
-    if (applied[i].fontId == fontId && applied[i].styles == styles) return &applied[i].hash;
+    if (applied[i].fontId == fontId && applied[i].style == style) return &applied[i].hash;
   }
   if (appliedCount >= MAX_TARGETS) return nullptr;
-  applied[appliedCount] = {fontId, styles, 0};
+  applied[appliedCount] = {fontId, style, 0};
   return &applied[appliedCount++].hash;
 }
 
@@ -155,21 +171,26 @@ void UiGlyphPrewarm::apply(const GfxRenderer& renderer) const {
   InputDiag::noteUiPrewarmBegin();
   // Merge the roles into one entry per font+style pair before warming anything: two calls for the
   // same pair would leave only the second one's glyphs resident.
-  WarmTarget targets[ROLE_COUNT];
+  WarmTarget targets[MAX_TARGETS];
   uint8_t targetCount = 0;
   for (uint8_t i = 0; i < ROLE_COUNT; i++) {
     if (text_[i].empty()) continue;
-    const WarmTarget resolved = targetFor(static_cast<Role>(i));
-    uint8_t slot = 0;
-    while (slot < targetCount && (targets[slot].fontId != resolved.fontId || targets[slot].styles != resolved.styles)) {
-      slot++;
+    const RoleTarget resolved = targetFor(static_cast<Role>(i));
+    for (uint8_t bit = 0; bit < 4; bit++) {
+      const auto style = static_cast<uint8_t>(1u << bit);
+      if (!(resolved.styles & style)) continue;
+      uint8_t slot = 0;
+      while (slot < targetCount && (targets[slot].fontId != resolved.fontId || targets[slot].style != style)) {
+        slot++;
+      }
+      if (slot == targetCount) {
+        if (targetCount >= MAX_TARGETS) continue;
+        targets[targetCount] = {resolved.fontId, style, {}};
+        targets[targetCount].text.reserve(TEXT_RESERVE);
+        targetCount++;
+      }
+      targets[slot].text += text_[i];
     }
-    if (slot == targetCount) {
-      targets[targetCount] = resolved;
-      targets[targetCount].text.reserve(TEXT_RESERVE);
-      targetCount++;
-    }
-    targets[slot].text += text_[i];
   }
 
   const uint32_t generation = renderer.glyphCacheGeneration();
@@ -177,11 +198,11 @@ void UiGlyphPrewarm::apply(const GfxRenderer& renderer) const {
   for (uint8_t i = 0; i < targetCount; i++) {
     const WarmTarget& target = targets[i];
     const uint32_t hash = textHash(target.text);
-    uint32_t* record = findApplied(target.fontId, target.styles);
+    uint32_t* record = findApplied(target.fontId, target.style);
     if (!dropped && record != nullptr && *record == hash) {
       continue;  // same text, and nothing has dropped the glyphs since
     }
-    if (warmWithFallback(renderer, target.fontId, target.text, target.styles)) {
+    if (warmWithFallback(renderer, target.fontId, target.text, target.style)) {
       if (record != nullptr) *record = hash;
       continue;
     }

@@ -299,7 +299,9 @@ void HomeActivity::prewarmUiGlyphs(const std::vector<const char*>& menuItems,
   // than loading every title into both sizes.
   for (const auto& book : recentBooks) {
     warm.add(UiGlyphPrewarm::Role::Header, book.title);
-    warm.add(UiGlyphPrewarm::Role::ThemeSmall, book.author);
+    // The author draws at the themes' fixed body size, not their small one: both BaseTheme and
+    // LyraTheme put the cover tile's author line in UI_10.
+    warm.add(UiGlyphPrewarm::Role::ThemeBody, book.author);
   }
   warm.apply(renderer);
 }
