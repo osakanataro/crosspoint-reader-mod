@@ -62,13 +62,20 @@ constexpr uint8_t RENDER_NAME_LEN = 12;
 struct RenderEntry {
   char name[RENDER_NAME_LEN];
   uint32_t ms;
+  // Free heap and the largest run available at the end of this render, in KB. Two numbers because
+  // they answer different questions: free falling and never recovering is something not being given
+  // back, while free holding steady as the largest run shrinks is fragmentation. The prewarm
+  // failures that made a file browser page take six seconds happened with 2 KB as the largest run,
+  // which neither a snapshot at flush time nor a session minimum could have shown.
+  uint16_t heapFreeKb;
+  uint16_t heapMaxAllocKb;
 };
 RenderEntry renderLog[RENDER_LOG_SIZE] = {};
 uint8_t renderLogNext = 0;
 
 // File-scope so flush() stays inside the 256-byte stack budget for locals. Only the main loop task
 // calls flush(), so there is no second writer.
-char reportBuf[1024];
+char reportBuf[1280];
 
 // Last and worst page-render phase split.
 uint32_t pageRenderPrewarmMs = 0;
@@ -153,6 +160,8 @@ void InputDiag::noteRender(const char* activityName, const unsigned long duratio
   RenderEntry& entry = renderLog[renderLogNext];
   snprintf(entry.name, sizeof(entry.name), "%s", activityName ? activityName : "?");
   entry.ms = renderLastMs;
+  entry.heapFreeKb = static_cast<uint16_t>(ESP.getFreeHeap() / 1024);
+  entry.heapMaxAllocKb = static_cast<uint16_t>(ESP.getMaxAllocHeap() / 1024);
   renderLogNext = static_cast<uint8_t>((renderLogNext + 1) % RENDER_LOG_SIZE);
 }
 
@@ -273,7 +282,8 @@ void InputDiag::flush(const bool inputActive) {
   for (uint8_t i = 0; i < RENDER_LOG_SIZE && static_cast<size_t>(len) < sizeof(reportBuf); i++) {
     const RenderEntry& entry = renderLog[(renderLogNext + i) % RENDER_LOG_SIZE];
     if (entry.name[0] == '\0') continue;  // ring not full yet
-    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u ", entry.name, entry.ms);
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u@%u/%u ", entry.name, entry.ms, entry.heapFreeKb,
+                    entry.heapMaxAllocKb);
   }
   if (static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
@@ -281,6 +291,7 @@ void InputDiag::flush(const bool inputActive) {
 
   len += snprintf(reportBuf + len, sizeof(reportBuf) - len,
                   "\n\n"
+                  "# render_log entries are name:ms@freeKB/maxAllocKB, oldest first.\n"
                   "# poll_gap_* is the interval between button samples. A press shorter than\n"
                   "# the gap in force at the time cannot be committed at all.\n"
                   "# One clean press = 2 episodes (down, up) and 2 edges. episodes well above\n"
