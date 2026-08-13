@@ -392,9 +392,8 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   // UiAppHelpers.h) rather than overwriting the previously-published
   // instance in place, since some other FreeInkApp could be mid-read of it.
   const fui::ThemeTokens& tokens = refreshSharedUiThemeTokens(ui.target);
-  // Header status text (battery percent, right label) stays at the fixed
-  // small font like the legacy headers; the uiScale small font is for list
-  // subtitles.
+  // Header status text (battery percent, right label) stays at the fixed small font like the legacy
+  // headers, whatever the uiScale small slot is bound to.
   ui.target.setFont(fui::GfxRendererTarget::FONT_SMALL, SMALL_FONT_ID);
   const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
   const fui::Rect band{static_cast<int16_t>(rect.x), static_cast<int16_t>(rect.y), static_cast<int16_t>(rect.width),

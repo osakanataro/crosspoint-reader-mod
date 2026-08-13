@@ -100,6 +100,38 @@ uint32_t* findApplied(const int fontId, const uint8_t styles) {
   return &applied[appliedCount++].hash;
 }
 
+// Largest length not past `limit` that ends on a UTF-8 boundary, so a shortened warm asks for whole
+// codepoints.
+size_t utf8Truncate(const std::string& text, size_t limit) {
+  if (limit >= text.size()) return text.size();
+  while (limit > 0 && (static_cast<unsigned char>(text[limit]) & 0xC0) == 0x80) limit--;
+  return limit;
+}
+
+// Load `text` into `fontId`, and on failure again with half of it, then a quarter.
+//
+// The arena a warm builds is one contiguous block, so on a fragmented heap the ask can simply not
+// fit -- measured on an X3 with 23 KB free and 8.6 KB as the largest run. A warm that gives up
+// entirely leaves the whole screen on the on-demand path, which cost 4355 glyph reads and 58 s in
+// one file browser render. Half a screenful resident costs about half that: this degrades in
+// proportion rather than collapsing. Text is added top row first, so the half that survives is the
+// half nearest the top of the list.
+//
+// Returns true only for a warm that took the whole text; a shortened one is reported as a failure
+// so the record does not claim the rest is resident.
+bool warmWithFallback(const GfxRenderer& renderer, const int fontId, const std::string& text, const uint8_t styles) {
+  if (renderer.prewarmText(fontId, text.c_str(), styles)) return true;
+
+  constexpr uint8_t MAX_SHRINK_STEPS = 2;
+  size_t limit = text.size();
+  for (uint8_t step = 0; step < MAX_SHRINK_STEPS; step++) {
+    limit = utf8Truncate(text, limit / 2);
+    if (limit == 0) break;
+    if (renderer.prewarmText(fontId, text.substr(0, limit).c_str(), styles)) break;
+  }
+  return false;
+}
+
 void append(std::string& target, const char* text) {
   if (text == nullptr || *text == '\0') return;
   if (target.capacity() == 0) target.reserve(TEXT_RESERVE);
@@ -143,13 +175,14 @@ void UiGlyphPrewarm::apply(const GfxRenderer& renderer) const {
     if (!dropped && record != nullptr && *record == hash) {
       continue;  // same text, and nothing has dropped the glyphs since
     }
-    if (renderer.prewarmText(target.fontId, target.text.c_str(), target.styles)) {
+    if (warmWithFallback(renderer, target.fontId, target.text, target.styles)) {
       if (record != nullptr) *record = hash;
       continue;
     }
-    // The text is still on the on-demand path: record it as unwarmed so the next repaint tries
-    // again rather than trusting a load that did not happen. No-op unless built with INPUT_DIAG --
-    // a failed warm is invisible from the outside, the screen simply gets slow.
+    // Some of the text is still on the on-demand path: record it as unwarmed so the next repaint
+    // tries the whole set again rather than trusting a load that did not happen, and so the rows
+    // that missed out are not skipped once the heap has room again. No-op unless built with
+    // INPUT_DIAG -- a failed warm is invisible from the outside, the screen simply gets slow.
     if (record != nullptr) *record = 0;
     InputDiag::noteUiPrewarmFailure();
   }
