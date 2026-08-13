@@ -51,6 +51,13 @@ int32_t uiPrewarmHeapMax = 0;
 uint32_t uiPrewarmHeapAtBegin = 0;
 uint32_t renderHeapAtStart = 0;
 
+// Geometry of the last list screen built (see noteListBand).
+int16_t listBandY = 0;
+int16_t listBandHeight = 0;
+int16_t listRowHeightPx = 0;
+int16_t listVisibleRowCount = 0;
+int16_t listScreenHeight = 0;
+
 uint32_t renderMaxMs = 0;
 uint32_t renderLastMs = 0;
 uint32_t renderCount = 0;
@@ -150,6 +157,15 @@ void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, cons
   if (committedEdge) {
     committedEdges++;
   }
+}
+
+void InputDiag::noteListBand(const int bandY, const int bandHeight, const int rowHeight, const int visibleRows,
+                             const int screenHeight) {
+  listBandY = static_cast<int16_t>(bandY);
+  listBandHeight = static_cast<int16_t>(bandHeight);
+  listRowHeightPx = static_cast<int16_t>(rowHeight);
+  listVisibleRowCount = static_cast<int16_t>(visibleRows);
+  listScreenHeight = static_cast<int16_t>(screenHeight);
 }
 
 void InputDiag::noteRenderStart() { renderHeapAtStart = ESP.getFreeHeap(); }
@@ -261,43 +277,45 @@ void InputDiag::flush(const bool inputActive) {
   }
   lastFlushAt = now;
 
-  int len = snprintf(reportBuf, sizeof(reportBuf),
-                     "uptime_ms=%lu\n"
-                     "cpu_mhz_now=%u\n"
-                     "cpu_mhz_min=%u\n"
-                     "poll_gap_max_fullspeed_ms=%u\n"
-                     "poll_gap_max_lowpower_ms=%u\n"
-                     "samples_lowpower=%u\n"
-                     "debounce_episodes=%u\n"
-                     "committed_edges=%u\n"
-                     "render_last_ms=%u\n"
-                     "render_max_ms=%u (%s)\n"
-                     "render_count=%u\n"
-                     "heap_free=%u\n"
-                     "heap_min_free=%u\n"
-                     "heap_max_alloc=%u\n"
-                     "page_prewarm_ms=%u (max %u)\n"
-                     "page_draw_ms=%u (max %u)\n"
-                     "page_display_ms=%u (max %u)\n"
-                     "page_blocks_ms=%u\n"
-                     "page_statusbar_ms=%u\n"
-                     "vert_body_ms=%u cells=%u\n"
-                     "vert_ruby_measure_ms=%u\n"
-                     "vert_ruby_draw_ms=%u groups=%u\n"
-                     "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
-                     "build_total_max_ms=%u spine=%d chunks=%d\n"
-                     "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
-                     "glyph_ondemand_last=%u max=%u (%s)\n"
-                     "ui_prewarm_heap_max=%d\n",
-                     now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
-                     debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
-                     ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
-                     pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
-                     pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells,
-                     vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
-                     buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
-                     buildTotalMaxChunkCount, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast,
-                     onDemandGlyphsMax, onDemandGlyphsMaxName, uiPrewarmHeapMax);
+  int len =
+      snprintf(reportBuf, sizeof(reportBuf),
+               "uptime_ms=%lu\n"
+               "cpu_mhz_now=%u\n"
+               "cpu_mhz_min=%u\n"
+               "poll_gap_max_fullspeed_ms=%u\n"
+               "poll_gap_max_lowpower_ms=%u\n"
+               "samples_lowpower=%u\n"
+               "debounce_episodes=%u\n"
+               "committed_edges=%u\n"
+               "render_last_ms=%u\n"
+               "render_max_ms=%u (%s)\n"
+               "render_count=%u\n"
+               "heap_free=%u\n"
+               "heap_min_free=%u\n"
+               "heap_max_alloc=%u\n"
+               "page_prewarm_ms=%u (max %u)\n"
+               "page_draw_ms=%u (max %u)\n"
+               "page_display_ms=%u (max %u)\n"
+               "page_blocks_ms=%u\n"
+               "page_statusbar_ms=%u\n"
+               "vert_body_ms=%u cells=%u\n"
+               "vert_ruby_measure_ms=%u\n"
+               "vert_ruby_draw_ms=%u groups=%u\n"
+               "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
+               "build_total_max_ms=%u spine=%d chunks=%d\n"
+               "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
+               "glyph_ondemand_last=%u max=%u (%s)\n"
+               "ui_prewarm_heap_max=%d\n"
+               "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
+               now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
+               debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
+               ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
+               pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
+               pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells, vertRubyMeasureMs,
+               vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex, buildChunkMaxPageBefore,
+               buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex, buildTotalMaxChunkCount,
+               uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName,
+               uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }

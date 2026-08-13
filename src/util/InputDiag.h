@@ -39,6 +39,12 @@ class InputDiag {
   // cover them. A prewarm naming the wrong font reports success and shows up only here.
   static void noteRender(const char* activityName, unsigned long durationMs, uint32_t onDemandGlyphs);
 
+  // The band the last list screen handed FreeInkUI, the row pitch it drew at, and the row count
+  // that fits by that arithmetic. A row laid out below the glass is still selectable, so the
+  // cursor can walk off the visible area and the viewport will not follow it -- comparing this
+  // count against the rows actually on screen says whether the band is taller than the panel.
+  static void noteListBand(int bandY, int bandHeight, int rowHeight, int visibleRows, int screenHeight);
+
   // Bracket the frame's glyph prewarm. Reports the heap it consumed, which separates "the glyph
   // caches took the memory" from "the render took it somewhere else": a file browser page turn was
   // seen to consume 46 KB and never give it back, with nothing to say what took it.
@@ -98,6 +104,7 @@ class InputDiag {
   static void sample(unsigned long, bool, bool) {}
   static void noteRenderStart() {}
   static void noteRender(const char*, unsigned long, uint32_t) {}
+  static void noteListBand(int, int, int, int, int) {}
   static void noteUiPrewarmBegin() {}
   static void noteUiPrewarmEnd() {}
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
