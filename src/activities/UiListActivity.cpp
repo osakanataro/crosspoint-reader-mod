@@ -18,6 +18,11 @@ UiListActivity::UiListActivity(const char* name, GfxRenderer& renderer, MappedIn
 
 void UiListActivity::onEnter() {
   Activity::onEnter();
+  // Hand back every SD-card glyph cache before the first build, the reading font's included: a list
+  // opened over the reader has to warm a screenful of CJK out of whatever the book left behind, and
+  // what it left behind is not drawn while this screen is up. The prewarm's own record follows the
+  // release through SdCardFont's generation counter, so nothing is left believing it is still warm.
+  renderer.releaseAllSdGlyphCaches();
   activeNav().reset();
   resetUi();
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);

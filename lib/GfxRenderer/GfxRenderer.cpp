@@ -233,6 +233,13 @@ void GfxRenderer::releaseFallbackGlyphCaches() const {
   }
 }
 
+void GfxRenderer::releaseAllSdGlyphCaches() const {
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) font->releaseAllCaches();
+  }
+}
+
 void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   auto result = fontMap.insert({fontId, font});
   if (!result.second) {

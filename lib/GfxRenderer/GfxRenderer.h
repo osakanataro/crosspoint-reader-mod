@@ -175,6 +175,16 @@ class GfxRenderer {
   // PrewarmScope and clearing them here would make it re-read the page it is about to draw.
   void releaseFallbackGlyphCaches() const;
 
+  // The same, for every registered SD-card font rather than the UI fallbacks alone -- including the
+  // reading-size font, which no other path frees.
+  //
+  // For a screen that opens over the reader: the reader stays alive underneath with its glyph
+  // arenas, kern tables and advance tables resident, and none of that is drawn while the screen is
+  // up. Measured on an X3, a chapter list opened over an open book had 13 KB free and 9 KB as its
+  // largest run against a prewarm that wanted 26 KB, so the warm failed and the render read 5640
+  // glyphs one at a time -- 78 s. The reader rebuilds what it needs on its next render (~400 ms).
+  void releaseAllSdGlyphCaches() const;
+
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
