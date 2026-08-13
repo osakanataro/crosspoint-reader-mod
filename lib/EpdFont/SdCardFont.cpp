@@ -746,7 +746,7 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
 
 // --- Prewarm ---
 
-int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly) {
+int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly, bool withKernLig) {
   if (!loaded_) return -1;
   styleMask = resolveStyleMask(styleMask);
   if (styleMask == 0) return 0;
@@ -801,7 +801,7 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   // Skip during metadata-only prewarm (layout measurement) to avoid loading
   // kern/lig data for all styles upfront (~22KB per style). Kern/lig is
   // loaded per-style in prewarmStyle() during the full render prewarm instead.
-  if (!metadataOnly) {
+  if (!metadataOnly && withKernLig) {
     for (uint8_t si = 0; si < MAX_STYLES; si++) {
       if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
       auto& s = styles_[si];
@@ -847,7 +847,7 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   bool failed = false;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    const int missed = prewarmStyle(si, codepoints.get(), cpCount, metadataOnly);
+    const int missed = prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, withKernLig);
     if (missed < 0) {
       failed = true;
     } else {
@@ -859,7 +859,8 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   return failed ? -1 : totalMissed;
 }
 
-int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly) {
+int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly,
+                             bool withKernLig) {
   auto& s = styles_[styleIdx];
 
   // Idle-prewarm hit: mini data persists across PrewarmScopes (resetStyleMiniData
@@ -1123,8 +1124,11 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // per-page mini kern matrix restricted to class pairs reachable from this
   // page's codepoints. Skip during metadata-only prewarm — layout only needs
   // advanceX and the mini kern would be thrown away before rendering.
+  // withKernLig=false skips it outright: a caller that knows its text does not kern (the UI
+  // fallback is only ever reached by strings carrying CJK) pays neither the persistent class
+  // tables nor the per-page matrix, which together were the bulk of a UI prewarm's heap.
   bool kernLigOk = false;
-  if (!metadataOnly) {
+  if (!metadataOnly && withKernLig) {
     if (loadStyleKernLigatureData(s)) {
       kernLigOk = buildMiniKernMatrix(s, codepoints, cpCount);
     }

@@ -119,15 +119,19 @@ size_t utf8Truncate(const std::string& text, size_t limit) {
 //
 // Returns true only for a warm that took the whole text; a shortened one is reported as a failure
 // so the record does not claim the rest is resident.
+// Kerning and ligatures are skipped throughout: a UI string only reaches an SD fallback font when
+// it carries CJK, which does not kern, and the tables were most of what the warm allocated.
+constexpr bool UI_KERN_LIG = false;
+
 bool warmWithFallback(const GfxRenderer& renderer, const int fontId, const std::string& text, const uint8_t styles) {
-  if (renderer.prewarmText(fontId, text.c_str(), styles)) return true;
+  if (renderer.prewarmText(fontId, text.c_str(), styles, UI_KERN_LIG)) return true;
 
   constexpr uint8_t MAX_SHRINK_STEPS = 2;
   size_t limit = text.size();
   for (uint8_t step = 0; step < MAX_SHRINK_STEPS; step++) {
     limit = utf8Truncate(text, limit / 2);
     if (limit == 0) break;
-    if (renderer.prewarmText(fontId, text.substr(0, limit).c_str(), styles)) break;
+    if (renderer.prewarmText(fontId, text.substr(0, limit).c_str(), styles, UI_KERN_LIG)) break;
   }
   return false;
 }

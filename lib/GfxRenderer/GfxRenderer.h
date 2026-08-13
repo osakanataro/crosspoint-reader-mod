@@ -145,7 +145,13 @@ class GfxRenderer {
   //
   // Returns false when the text is still on the on-demand path afterwards, so a caller that skips
   // repeat work for text it believes it already warmed can tell that belief from a fact.
-  bool prewarmText(int fontId, const char* text, uint8_t styleMask = 0x01) const;
+  //
+  // withKernLig=false drops the kerning and ligature tables from what gets loaded. Text that
+  // reaches an SD fallback font is CJK-bearing by construction (resolveTextFontId only routes it
+  // there for glyphs the primary cannot render), and CJK does not kern, so a UI caller pays for
+  // tables nothing consults -- most of the heap one prewarm asked for, on a device where that ask
+  // is what aborts an allocation elsewhere.
+  bool prewarmText(int fontId, const char* text, uint8_t styleMask = 0x01, bool withKernLig = true) const;
 
   // Bumped whenever any registered SD-card font drops its prewarmed glyph data. Below
   // SdCardFont's retention floor -- and free heap sits under it while a book is open -- a

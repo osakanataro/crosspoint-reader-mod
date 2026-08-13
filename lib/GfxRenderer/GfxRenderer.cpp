@@ -176,7 +176,8 @@ void GfxRenderer::FrameBufferLoan::end() {
 
 bool GfxRenderer::isFontCacheScanning() const { return fontCacheManager_ && fontCacheManager_->isScanning(); }
 
-bool GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t styleMask) const {
+bool GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t styleMask,
+                              const bool withKernLig) const {
   if (!fontCacheManager_ || text == nullptr || *text == '\0' || styleMask == 0) return false;
 
   // Group the requested styles by the font that will actually render them, then issue one call per
@@ -199,7 +200,7 @@ bool GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t 
   bool warmed = targetCount > 0;
   for (uint8_t i = 0; i < targetCount; i++) {
     // Every target has to land: one style left cold is one style drawn a glyph at a time.
-    if (!fontCacheManager_->prewarmCache(targets[i], text, masks[i])) warmed = false;
+    if (!fontCacheManager_->prewarmCache(targets[i], text, masks[i], withKernLig)) warmed = false;
   }
   return warmed;
 }

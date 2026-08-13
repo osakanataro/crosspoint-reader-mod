@@ -19,7 +19,8 @@ class FontCacheManager {
   // False when the text is still on the on-demand path afterwards: the font is
   // unknown, or an SD-card font could not build its cache (out of heap, card
   // read failed). Glyphs the font simply does not cover still count as success.
-  bool prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
+  // withKernLig=false skips the kern/ligature tables for SD-card fonts (see SdCardFont::prewarm).
+  bool prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F, bool withKernLig = true);
   void logStats(const char* label = "render");
   void resetStats();
 

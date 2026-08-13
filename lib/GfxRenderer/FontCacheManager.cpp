@@ -19,11 +19,11 @@ void FontCacheManager::clearCache() {
   }
 }
 
-bool FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
+bool FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask, bool withKernLig) {
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
-    int missed = it->second->prewarm(utf8Text, styleMask);
+    int missed = it->second->prewarm(utf8Text, styleMask, /*metadataOnly=*/false, withKernLig);
     if (missed < 0) {
       LOG_DBG("FCM", "prewarmCache(SD): build failed, text stays on demand (styleMask=0x%02X)", styleMask);
       return false;

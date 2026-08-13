@@ -47,7 +47,11 @@ class SdCardFont {
   // read failed. The two are worth telling apart: an uncovered glyph is warm as
   // it will ever be, while after -1 nothing is resident and the text is back on
   // the on-demand path.
-  int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false);
+  //
+  // withKernLig=false skips the kerning and ligature tables: the persistent per-style class tables
+  // and the per-page kern matrix. Worth it for text that cannot kern -- the UI fallback fonts are
+  // only reached by strings carrying CJK -- where they were most of what a prewarm allocated.
+  int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false, bool withKernLig = true);
 
   // Glyphs read one at a time through the overflow ring since boot, i.e. glyphs the prewarm did not
   // cover. A screen whose prewarm names the wrong font still reports success, and the only outward
@@ -343,7 +347,7 @@ class SdCardFont {
   template <typename Iter>
   int buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
                              const char* extraText = nullptr);
-  int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly);
+  int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool withKernLig);
 
   // Global helpers
   void freeAll();
