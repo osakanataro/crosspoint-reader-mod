@@ -13,12 +13,16 @@ class GfxRenderer;
 // first lets the same glyphs be read sorted by position, in a single forward pass. On the home
 // screen that was the difference between ~6000 ms and ~630 ms per repaint.
 //
-// Text is added per role rather than in one heap. Three separate .cpfont files back the UI sizes,
-// each with its own cache, and handing all three the same text loaded every glyph three times over:
-// the chapter picker was reading a screenful of chapter titles into the header font that draws five
-// characters of heading, and into the subtitle font it never used at all. Beyond the wasted reads
-// that tripled the memory held, which pushed free heap under SdCardFont's retention floor -- so the
-// arenas were dropped between repaints and every repaint paid the cold cost again.
+// Text is added per role, and a role names WHAT DRAWS THE TEXT rather than a font size. The font
+// each role resolves to is decided in one place (apply(), from uiScaleSpec()), because that mapping
+// is not stable: the FreeInkUI conversion moved the list slots up a size, and a prewarm that kept
+// naming sizes warmed the 8 pt font while the rows drew at 10 pt. Every glyph then came off the
+// on-demand path with the prewarm reporting success -- 34 s per repaint on a file browser page of
+// Japanese file names, with nothing in the diagnostics to say why.
+//
+// Roles that resolve to the same font AND style are warmed in one call: SdCardFont rebuilds a
+// style's cache per prewarm, so a second call for the same pair would drop what the first loaded.
+// Different styles of one font hold separate caches and do not interfere.
 //
 // Latin-only setups are unaffected either way: their UI glyphs come from the built-in fonts, and
 // GfxRenderer::prewarmText resolves to the SD fallback only for text that needs it.
@@ -29,19 +33,15 @@ class GfxRenderer;
 // extra one is a card read for a glyph nothing draws.
 class UiGlyphPrewarm {
  public:
-  // Which of the three UI sizes draws the text. The themes fix this mapping: headers, tab labels
-  // and cover-tile titles are UI_12 (also the only size any theme draws bold), list rows, menu
-  // items and button hints are UI_10, and subtitles and right-hand labels are SMALL.
-  //
-  // Naming a font here is a deliberate coupling. The alternative -- a scan pass that records what
-  // each drawText actually used -- means drawing the screen twice, which the home screen cannot do:
-  // its cover tile mutates state as it draws. Get a role wrong and that element stays on the slow
-  // path; nothing renders incorrectly.
+  // What draws the text. Get one wrong and that text stays on the slow path; nothing renders
+  // incorrectly.
   enum class Role : uint8_t {
-    Header,        // UI_12: headings, tab labels, cover-tile titles
-    Body,          // UI_10: list rows, menu items, button hints
-    Subtitle,      // SMALL: subtitles, authors, right-hand labels, path lines
-    SubtitleBold,  // SMALL bold: list rows set in the small font for length (recent books)
+    Header,         // GUI.drawHeader's title (uiScaleSpec title font, the one place bold is drawn)
+    ListRow,        // FreeInkUI text in theme().bodyText: list row labels, centred empty-state text
+    ListSmall,      // FreeInkUI text in theme().smallText: subtitles, values, small-font row labels
+    ListSmallBold,  // the same slot in bold: recent-books titles
+    ThemeBody,      // the firmware themes' fixed body size: button hints, the home menu's rows
+    ThemeSmall,     // their fixed small size: the reader status bar, the file browser's path line
   };
 
   void add(Role role, const char* text);
@@ -59,12 +59,11 @@ class UiGlyphPrewarm {
 
   // First index of the page holding `selectedIndex`, matching how the themes page a list
   // (BaseTheme::getListPageItems). Callers use it to add only the rows on screen; the arithmetic
-  // lives here so the four list screens cannot drift apart from each other.
+  // lives here so the list screens cannot drift apart from each other.
   static int pageStart(int selectedIndex, int itemsPerPage);
 
  private:
-  std::string header_;
-  std::string body_;
-  std::string subtitle_;
-  std::string subtitleBold_;
+  static constexpr uint8_t ROLE_COUNT = 6;
+
+  std::string text_[ROLE_COUNT];
 };

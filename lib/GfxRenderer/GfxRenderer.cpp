@@ -201,6 +201,15 @@ bool GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t 
   return warmed;
 }
 
+uint32_t GfxRenderer::glyphOnDemandLoads() const {
+  uint32_t loads = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) loads += font->overflowLoads();
+  }
+  return loads;
+}
+
 uint32_t GfxRenderer::glyphCacheGeneration() const {
   uint32_t generation = 0;
   for (const auto& [fontId, font] : sdCardFonts_) {

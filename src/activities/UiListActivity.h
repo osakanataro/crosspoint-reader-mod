@@ -83,11 +83,12 @@ class UiListActivity : public Activity, protected UiAppHost {
   void applyFramePrewarm();
 
   // Add rows [top, top + visible) of `items` for prewarmFrame. labelRole must
-  // match the font props.labelText resolves to -- rows drawn in the small font
-  // (file names, book titles) pass Subtitle, the body-font default covers the
-  // rest. Getting it wrong only leaves that text on the on-demand path.
+  // match what buildScreen puts in props.labelText: screens that set it to
+  // theme().smallText (file names, book titles) pass ListSmall or
+  // ListSmallBold, and the ListRow default covers the ones that leave it to the
+  // theme. Getting it wrong only leaves that text on the on-demand path.
   void addVisibleRows(UiGlyphPrewarm& warm, const freeink::ui::ListItem* items, int count,
-                      UiGlyphPrewarm::Role labelRole = UiGlyphPrewarm::Role::Body);
+                      UiGlyphPrewarm::Role labelRole = UiGlyphPrewarm::Role::ListRow);
 
   // --- helpers ---------------------------------------------------------------
   // Measure visibleRows for the screen band, apply follow-on-build, clamp the

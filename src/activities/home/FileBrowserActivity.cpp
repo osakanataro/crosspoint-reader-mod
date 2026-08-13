@@ -473,15 +473,15 @@ void FileBrowserActivity::prewarmFrame(UiGlyphPrewarm& warm) {
   UiListActivity::prewarmFrame(warm);
   // Chrome: the folder name in the header, the full path in the small font.
   warm.add(UiGlyphPrewarm::Role::Header, headerFolderName());
-  warm.add(UiGlyphPrewarm::Role::Subtitle, basepath);
+  warm.add(UiGlyphPrewarm::Role::ThemeSmall, basepath);
   // Footer: the base added Back/Select; drawFooter() may draw Home or Open.
-  warm.add(UiGlyphPrewarm::Role::Body, tr(STR_HOME));
-  warm.add(UiGlyphPrewarm::Role::Body, tr(STR_OPEN));
+  warm.add(UiGlyphPrewarm::Role::ThemeBody, tr(STR_HOME));
+  warm.add(UiGlyphPrewarm::Role::ThemeBody, tr(STR_OPEN));
   if (files.empty()) {
-    warm.add(UiGlyphPrewarm::Role::Body, mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND));
+    warm.add(UiGlyphPrewarm::Role::ListRow, mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND));
     return;
   }
-  addVisibleRows(warm, rowItems.data(), static_cast<int>(rowItems.size()), UiGlyphPrewarm::Role::Subtitle);
+  addVisibleRows(warm, rowItems.data(), static_cast<int>(rowItems.size()), UiGlyphPrewarm::Role::ListSmall);
 }
 
 std::string FileBrowserActivity::headerFolderName() const {

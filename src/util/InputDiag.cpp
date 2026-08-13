@@ -32,6 +32,13 @@ uint32_t cpuMhzMin = 0;
 bool wasPending = false;
 // Written from the render task, read by flush() on the main task. Aligned 32-bit scalars on a
 // single core, and nothing downstream acts on them, so a stale read only misreports a diagnostic.
+// Glyphs a render read one at a time, because the prewarm did not cover them. A prewarm that names
+// the wrong font reports success and drops no data, so this is the only number that shows it: it
+// climbs by a screenful on every repaint while ui_prewarm_fail stays at zero.
+uint32_t onDemandGlyphsLast = 0;
+uint32_t onDemandGlyphsMax = 0;
+char onDemandGlyphsMaxName[16] = "-";
+
 // UI glyph prewarms that reported failure: the text stayed on the on-demand path, so the screen
 // draws through SdCardFont's 8-entry overflow ring. Counted because the failure is silent from the
 // outside -- the screen just gets slow -- and the usual cause is that the mini bitmap arena no
@@ -129,13 +136,19 @@ void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, cons
   }
 }
 
-void InputDiag::noteRender(const char* activityName, const unsigned long durationMs) {
+void InputDiag::noteRender(const char* activityName, const unsigned long durationMs, const uint32_t onDemandGlyphs) {
   renderLastMs = static_cast<uint32_t>(durationMs);
   if (renderLastMs > renderMaxMs) {
     renderMaxMs = renderLastMs;
     snprintf(renderMaxName, sizeof(renderMaxName), "%s", activityName ? activityName : "?");
   }
   renderCount++;
+
+  onDemandGlyphsLast = onDemandGlyphs;
+  if (onDemandGlyphs > onDemandGlyphsMax) {
+    onDemandGlyphsMax = onDemandGlyphs;
+    snprintf(onDemandGlyphsMaxName, sizeof(onDemandGlyphsMaxName), "%s", activityName ? activityName : "?");
+  }
 
   RenderEntry& entry = renderLog[renderLogNext];
   snprintf(entry.name, sizeof(entry.name), "%s", activityName ? activityName : "?");
@@ -215,40 +228,42 @@ void InputDiag::flush(const bool inputActive) {
   }
   lastFlushAt = now;
 
-  int len = snprintf(reportBuf, sizeof(reportBuf),
-                     "uptime_ms=%lu\n"
-                     "cpu_mhz_now=%u\n"
-                     "cpu_mhz_min=%u\n"
-                     "poll_gap_max_fullspeed_ms=%u\n"
-                     "poll_gap_max_lowpower_ms=%u\n"
-                     "samples_lowpower=%u\n"
-                     "debounce_episodes=%u\n"
-                     "committed_edges=%u\n"
-                     "render_last_ms=%u\n"
-                     "render_max_ms=%u (%s)\n"
-                     "render_count=%u\n"
-                     "heap_free=%u\n"
-                     "heap_min_free=%u\n"
-                     "heap_max_alloc=%u\n"
-                     "page_prewarm_ms=%u (max %u)\n"
-                     "page_draw_ms=%u (max %u)\n"
-                     "page_display_ms=%u (max %u)\n"
-                     "page_blocks_ms=%u\n"
-                     "page_statusbar_ms=%u\n"
-                     "vert_body_ms=%u cells=%u\n"
-                     "vert_ruby_measure_ms=%u\n"
-                     "vert_ruby_draw_ms=%u groups=%u\n"
-                     "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
-                     "build_total_max_ms=%u spine=%d chunks=%d\n"
-                     "ui_prewarm_fail=%u (max_alloc_then=%u)\n",
-                     now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
-                     debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
-                     ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
-                     pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
-                     pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells,
-                     vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
-                     buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
-                     buildTotalMaxChunkCount, uiPrewarmFailCount, uiPrewarmFailMinAlloc);
+  int len =
+      snprintf(reportBuf, sizeof(reportBuf),
+               "uptime_ms=%lu\n"
+               "cpu_mhz_now=%u\n"
+               "cpu_mhz_min=%u\n"
+               "poll_gap_max_fullspeed_ms=%u\n"
+               "poll_gap_max_lowpower_ms=%u\n"
+               "samples_lowpower=%u\n"
+               "debounce_episodes=%u\n"
+               "committed_edges=%u\n"
+               "render_last_ms=%u\n"
+               "render_max_ms=%u (%s)\n"
+               "render_count=%u\n"
+               "heap_free=%u\n"
+               "heap_min_free=%u\n"
+               "heap_max_alloc=%u\n"
+               "page_prewarm_ms=%u (max %u)\n"
+               "page_draw_ms=%u (max %u)\n"
+               "page_display_ms=%u (max %u)\n"
+               "page_blocks_ms=%u\n"
+               "page_statusbar_ms=%u\n"
+               "vert_body_ms=%u cells=%u\n"
+               "vert_ruby_measure_ms=%u\n"
+               "vert_ruby_draw_ms=%u groups=%u\n"
+               "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
+               "build_total_max_ms=%u spine=%d chunks=%d\n"
+               "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
+               "glyph_ondemand_last=%u max=%u (%s)\n",
+               now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
+               debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
+               ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
+               pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
+               pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells, vertRubyMeasureMs,
+               vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex, buildChunkMaxPageBefore,
+               buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex, buildTotalMaxChunkCount,
+               uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }

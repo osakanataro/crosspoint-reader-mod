@@ -287,10 +287,10 @@ void HomeActivity::prewarmUiGlyphs(const std::vector<const char*>& menuItems,
                                    const MappedInputManager::Labels& labels) const {
   UiGlyphPrewarm warm;
   for (const char* item : menuItems) {
-    warm.add(UiGlyphPrewarm::Role::Body, item);
+    warm.add(UiGlyphPrewarm::Role::ThemeBody, item);
   }
   for (const char* label : {labels.btn1, labels.btn2, labels.btn3, labels.btn4}) {
-    warm.add(UiGlyphPrewarm::Role::Body, label);
+    warm.add(UiGlyphPrewarm::Role::ThemeBody, label);
   }
   // Every recent book, not just the selected one: the header, the cover tile and the menu's
   // "continue reading" row each show a different book depending on theme and selection. Titles go
@@ -299,7 +299,7 @@ void HomeActivity::prewarmUiGlyphs(const std::vector<const char*>& menuItems,
   // than loading every title into both sizes.
   for (const auto& book : recentBooks) {
     warm.add(UiGlyphPrewarm::Role::Header, book.title);
-    warm.add(UiGlyphPrewarm::Role::Subtitle, book.author);
+    warm.add(UiGlyphPrewarm::Role::ThemeSmall, book.author);
   }
   warm.apply(renderer);
 }

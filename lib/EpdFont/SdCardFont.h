@@ -49,6 +49,11 @@ class SdCardFont {
   // the on-demand path.
   int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false);
 
+  // Glyphs read one at a time through the overflow ring since boot, i.e. glyphs the prewarm did not
+  // cover. A screen whose prewarm names the wrong font still reports success, and the only outward
+  // sign is that this climbs by a screenful on every repaint.
+  uint32_t overflowLoads() const { return overflowLoads_; }
+
   // Bumped every time mini data is dropped -- by the retention floor in
   // resetStyleMiniData(), by releaseAllCaches(), or by a failed rebuild. A
   // caller that remembers what it last prewarmed compares this to know whether
@@ -296,6 +301,7 @@ class SdCardFont {
   Stats stats_;
   uint32_t contentHash_ = 0;
   uint32_t miniGeneration_ = 0;
+  uint32_t overflowLoads_ = 0;
   bool loaded_ = false;
 
   // Per-style helpers

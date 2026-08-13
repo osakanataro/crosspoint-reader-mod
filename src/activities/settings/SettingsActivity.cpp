@@ -494,16 +494,20 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
 void SettingsActivity::prewarmFrame(UiGlyphPrewarm& warm) {
   UiListActivity::prewarmFrame(warm);
   warm.add(UiGlyphPrewarm::Role::Header, tr(STR_SETTINGS_TITLE));
-  // Tab labels draw at the header size; the confirm hint is one of them when
-  // the ring sits on the tab bar (see the footer below).
+  // Which slot the tab bar draws its labels in is a theme decision, the same
+  // one UiTabListActivity::buildScreen makes (full-slot pills take the body
+  // text, label-hugging pills the small text). A category name is also the
+  // confirm hint while the ring sits on the tab bar, hence the hint role too.
+  const auto tabRole = UITheme::getInstance().getMetrics().tabPillFullSlot ? UiGlyphPrewarm::Role::ListRow
+                                                                           : UiGlyphPrewarm::Role::ListSmall;
   for (int i = 0; i < categoryCount; i++) {
-    warm.add(UiGlyphPrewarm::Role::Header, I18N.get(categoryNames[i]));
-    warm.add(UiGlyphPrewarm::Role::Body, I18N.get(categoryNames[i]));
+    warm.add(tabRole, I18N.get(categoryNames[i]));
+    warm.add(UiGlyphPrewarm::Role::ThemeBody, I18N.get(categoryNames[i]));
   }
-  warm.add(UiGlyphPrewarm::Role::Body, tr(STR_TOGGLE));
+  warm.add(UiGlyphPrewarm::Role::ThemeBody, tr(STR_TOGGLE));
   // rowItems_ already carries this pass's value strings (rowValues_, refreshed
   // by buildScreen), so the labels and their values warm together.
-  addVisibleRows(warm, rowItems_.data(), static_cast<int>(rowItems_.size()), UiGlyphPrewarm::Role::Subtitle);
+  addVisibleRows(warm, rowItems_.data(), static_cast<int>(rowItems_.size()), UiGlyphPrewarm::Role::ListSmall);
 }
 
 void SettingsActivity::render(RenderLock&&) {

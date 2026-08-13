@@ -93,6 +93,7 @@ void ActivityManager::renderTaskLoop() {
       char renderedName[16];
       snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
       const unsigned long renderStart = millis();
+      const uint32_t onDemandStart = renderer.glyphOnDemandLoads();
 #endif
       // Night mode inverts only the reading surfaces (appliesNightMode):
       // resolving the output polarity here, per render, means menus, popups,
@@ -101,7 +102,7 @@ void ActivityManager::renderTaskLoop() {
       currentActivity->render(std::move(lock));
 #ifdef INPUT_DIAG
       const unsigned long renderDurationMs = millis() - renderStart;
-      InputDiag::noteRender(renderedName, renderDurationMs);
+      InputDiag::noteRender(renderedName, renderDurationMs, renderer.glyphOnDemandLoads() - onDemandStart);
       // A render this slow isn't drawing -- it's stuck somewhere upstream (SD I/O, glyph
       // cache, allocation). The 16-line log ring is system-wide and short, so whatever ran
       // during the stall is likely still in it right now; a routine render would evict it

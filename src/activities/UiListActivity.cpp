@@ -35,10 +35,10 @@ void UiListActivity::onExit() {
 void UiListActivity::prewarmFrame(UiGlyphPrewarm& warm) {
   warm.add(UiGlyphPrewarm::Role::Header, headerTitle());
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  warm.add(UiGlyphPrewarm::Role::Body, labels.btn1);
-  warm.add(UiGlyphPrewarm::Role::Body, labels.btn2);
-  warm.add(UiGlyphPrewarm::Role::Body, labels.btn3);
-  warm.add(UiGlyphPrewarm::Role::Body, labels.btn4);
+  warm.add(UiGlyphPrewarm::Role::ThemeBody, labels.btn1);
+  warm.add(UiGlyphPrewarm::Role::ThemeBody, labels.btn2);
+  warm.add(UiGlyphPrewarm::Role::ThemeBody, labels.btn3);
+  warm.add(UiGlyphPrewarm::Role::ThemeBody, labels.btn4);
 }
 
 void UiListActivity::applyFramePrewarm() {
@@ -73,8 +73,8 @@ void UiListActivity::addVisibleRows(UiGlyphPrewarm& warm, const fui::ListItem* i
   const int last = std::min(count, first + rows);
   for (int i = first; i < last; i++) {
     warm.add(labelRole, items[i].label);
-    warm.add(UiGlyphPrewarm::Role::Subtitle, items[i].subtitle);
-    warm.add(UiGlyphPrewarm::Role::Subtitle, items[i].value);
+    warm.add(UiGlyphPrewarm::Role::ListSmall, items[i].subtitle);
+    warm.add(UiGlyphPrewarm::Role::ListSmall, items[i].value);
   }
 }
 

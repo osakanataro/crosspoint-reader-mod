@@ -31,7 +31,9 @@ class InputDiag {
   // The activity name is recorded per render because a running maximum cannot say *which* render was
   // slow, and on a screen whose glyph cache warms on first use the first render and the tenth are
   // different questions.
-  static void noteRender(const char* activityName, unsigned long durationMs);
+  // onDemandGlyphs: glyphs this render had to read one at a time because the prewarm did not
+  // cover them. A prewarm naming the wrong font reports success and shows up only here.
+  static void noteRender(const char* activityName, unsigned long durationMs, uint32_t onDemandGlyphs);
 
   // One page render's phase breakdown, in milliseconds. renderContents already measures these for
   // LOG_DBG; on a device with no serial console that measurement had nowhere to go, which is why the
@@ -84,7 +86,7 @@ class InputDiag {
 class InputDiag {
  public:
   static void sample(unsigned long, bool, bool) {}
-  static void noteRender(const char*, unsigned long) {}
+  static void noteRender(const char*, unsigned long, uint32_t) {}
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
   static void notePageDrawParts(unsigned long, unsigned long) {}
   static void noteVerticalRender(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long) {}

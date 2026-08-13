@@ -2093,7 +2093,7 @@ void EpubReaderActivity::renderStatusBar() const {
   // does not change, so UiGlyphPrewarm skips the call on the hash.
   {
     UiGlyphPrewarm warm;
-    warm.add(UiGlyphPrewarm::Role::Subtitle, title);
+    warm.add(UiGlyphPrewarm::Role::ThemeSmall, title);
     warm.apply(renderer);
   }
 

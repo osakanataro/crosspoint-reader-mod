@@ -153,6 +153,11 @@ class GfxRenderer {
   // separates "warmed once" from "still warm".
   uint32_t glyphCacheGeneration() const;
 
+  // Glyphs the registered SD-card fonts have read one at a time since boot, because the prewarm did
+  // not cover them. Measured per render, this separates "the prewarm is not landing" from "the
+  // drawing itself is slow" without needing the log ring to still hold the evidence.
+  uint32_t glyphOnDemandLoads() const;
+
   // Drop the glyph caches held by the registered UI fallback fonts.
   //
   // What prewarmText loads stays resident until something drops it, and on this device that is not
