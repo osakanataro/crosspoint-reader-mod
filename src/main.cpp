@@ -196,10 +196,9 @@ void enterDeepSleep(bool fromTimeout = false) {
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&
        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
-  // A custom sleep image already provides retained boot-time content. Keep it
-  // on-panel until the first useful reader or home paint replaces it.
-  APP_STATE.showBootScreen =
-      !(isQuickResumeSleep || SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM);
+  // Every sleep mode leaves a complete retained frame on the e-ink panel. Keep
+  // it visible until the first useful reader or home paint replaces it.
+  APP_STATE.showBootScreen = false;
 
   APP_STATE.saveToFile();
 
@@ -210,9 +209,8 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   if (isQuickResumeSleep) {
     saveSleepFrameBuffer();
-  } else if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM &&
-             Storage.exists(SLEEP_FRAME_FILE)) {
-    // A stale Quick Resume frame must not turn a custom wake into the loading-icon path.
+  } else if (Storage.exists(SLEEP_FRAME_FILE)) {
+    // A stale Quick Resume frame must not replace the selected sleep screen during wake.
     Storage.remove(SLEEP_FRAME_FILE);
   }
 
@@ -299,12 +297,26 @@ void setup() {
   halTiltSensor.begin();
   halClock.begin();
 
+  // First of two USB samples (second below, before display bring-up): the SOF
+  // verdict needs two samples a frame apart, and it must be settled before the
+  // first refresh — the boot paint's light-sleep slices would otherwise kill a
+  // live CDC link whenever the charge-based check reads false (full battery,
+  // data-only cable). See HalGPIO::pollUsbState().
+  gpio.pollUsbState();
+
+  // Light-sleep through the render task's e-ink BUSY wait (0.3-2 s of pure pin
+  // polling) in short slices, waking exactly on the BUSY pin's completion level
+  // (falls back to plain polling when WiFi/USB blocks light sleep)
+  display.setBusyWaitSliceHook(
+      [](int8_t busyPin, uint8_t busyLevel) { return powerManager.onEinkBusyWaitSlice(busyPin, busyLevel); });
+
   LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
 
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter
   if (!Storage.begin()) {
     LOG_ERR("MAIN", "SD card initialization failed");
+    gpio.pollUsbState();  // settle the USB verdict before the error paint (see above)
     setupDisplayAndFonts(isSilentReboot);
     activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
     return;
@@ -369,10 +381,17 @@ void setup() {
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
   // HalDisplay::begin), so the first paint is FAST_REFRESH (~500ms) over the
   // retained frame and input dispatches against a visible UI.
-  const BootResume resume = isSilentReboot              ? BootResume::Silent
-                            : !APP_STATE.showBootScreen ? BootResume::SplashlessWake
-                                                        : BootResume::Splash;
+  // Only a verified deep-sleep wake may use the one-shot persisted flag.
+  // Otherwise a stale flag could suppress the splash on a cold boot.
+  const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
+  const BootResume resume = isSilentReboot                             ? BootResume::Silent
+                            : isSleepWake && !APP_STATE.showBootScreen ? BootResume::SplashlessWake
+                                                                       : BootResume::Splash;
   bool allowFastInitialReaderRefresh = false;
+
+  // Second USB sample (first one right after powerManager.begin()): settles the
+  // SOF host-link verdict before the first refresh can slice-sleep.
+  gpio.pollUsbState();
 
   setupDisplayAndFonts(resume != BootResume::Splash);
 
@@ -387,7 +406,7 @@ void setup() {
       // us in a splashless-with-no-frame loop on the next boot.
       APP_STATE.showBootScreen = true;
       APP_STATE.saveToFile();
-      if (loadSleepFrameBuffer()) {
+      if (Storage.exists(SLEEP_FRAME_FILE) && loadSleepFrameBuffer()) {
         const bool useDifferentialRefresh = gpio.deviceIsX3();
         if (useDifferentialRefresh) {
           // begin() clears the X3 controller RAM, so restore the saved frame as
@@ -403,8 +422,6 @@ void setup() {
         } else {
           renderer.displayBuffer(HalDisplay::HALF_REFRESH);
         }
-      } else if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM) {
-        activityManager.goToBoot();  // frame file missing, fall back to the splash
       }
       break;
     case BootResume::Splash:
@@ -464,6 +481,16 @@ void setup() {
   allowSleepAt = millis() + 2000;
 }
 
+// delay() counts ticks, and the tick stops while onEinkBusyWaitSlice() light-sleeps
+// the chip (millis() is RTC-corrected on wake; the tick is not). A delay(10) mid-refresh
+// would stretch to ~210 ms and starve button sampling. millis() stays honest.
+static void delayWallClock(const unsigned long ms) {
+  const unsigned long deadline = millis() + ms;
+  while (static_cast<long>(millis() - deadline) < 0) {
+    vTaskDelay(1);
+  }
+}
+
 void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
@@ -472,6 +499,12 @@ void loop() {
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
+
+  // No-op unless built with INPUT_DIAG. Sampled against the poll above so the recorded interval is
+  // the real gpio.update() period, including whatever the rest of the loop and the render task cost.
+  const bool inputEdge = gpio.wasAnyPressed() || gpio.wasAnyReleased();
+  const bool inputPending = gpio.isDebouncePending();
+  InputDiag::sample(loopStartTime, inputEdge, inputPending);
 
   renderer.setFadingFix(SETTINGS.fadingFix);
 
@@ -488,13 +521,20 @@ void loop() {
     if (line.startsWith("CMD:")) {
       String cmd = line.substring(4);
       cmd.trim();
+      bool handled = true;
       if (cmd == "SCREENSHOT") {
         const uint32_t bufferSize = display.getBufferSize();
         logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
+      } else {
+        handled = false;
       }
+      // Raw print, not LOG_*: debugging_monitor.py keys on this ack to report
+      // command success, so it must survive LOG_LEVEL=0 builds. Commands
+      // compiled out of this build report unknown.
+      logSerial.printf(handled ? "CMDACK:%s\n" : "CMDERR:unknown:%s\n", cmd.c_str());
     }
   }
 
@@ -513,31 +553,6 @@ void loop() {
     wakePowerReleasePending = false;
     return;
   }
-
-  // Hold full speed while the buttons are live, decided on levels rather than the edges above.
-  //
-  // InputManager commits a state change only once two consecutive samples agree, so a press has to
-  // outlast one poll period to be seen at all. The idle path below polls every 50 ms at
-  // LOW_POWER_FREQ (10 MHz on X3, where the loop body itself is 16x slower), which is longer than a
-  // normal tap: the press lands in one sample and the release in the next, each resetting the
-  // debounce timer, and no edge is ever emitted. Since the frequency was previously restored only
-  // on a *committed* edge, nothing could break that loop -- which is why menu presses went missing
-  // until one happened to be held long enough, and the ones after it then registered instantly.
-  //
-  // isAnyPressed() covers the other half: a hold emits one press edge, so 3 s into holding a side
-  // button to scroll a list the edge-only check above let the CPU drop to 10 MHz mid-scroll.
-  //
-  // Deliberately kept out of lastActivityTime. These are raw ADC-ladder levels, and a drifted
-  // divider that reads as a stuck or flickering button must not be able to hold off auto-sleep.
-  const bool debouncePending = gpio.isDebouncePending();
-  const bool inputActive = debouncePending || gpio.isAnyPressed();
-  if (inputActive) {
-    powerManager.setPowerSaving(false);
-  }
-
-  // No-op unless built with INPUT_DIAG. Sampled here so the recorded interval is the real
-  // gpio.update() period, including whatever the rest of the loop and the render task cost.
-  InputDiag::sample(loopStartTime, gpio.wasAnyPressed() || gpio.wasAnyReleased(), debouncePending);
 
   static bool screenshotButtonsReleased = true;
   static bool screenshotComboActive = false;
@@ -608,6 +623,9 @@ void loop() {
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
 
+  // Body complete: releases the slice hook's yield (see onEinkBusyWaitSlice).
+  powerManager.noteMainLoopIteration();
+
   const unsigned long loopDuration = millis() - loopStartTime;
   if (loopDuration > maxLoopDuration) {
     maxLoopDuration = loopDuration;
@@ -618,7 +636,7 @@ void loop() {
 
   // Last, so the SD write it may perform is outside the loop duration measured above. No-op unless
   // built with INPUT_DIAG.
-  InputDiag::flush(inputActive);
+  InputDiag::flush(inputEdge || inputPending);
 
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
@@ -626,17 +644,41 @@ void loop() {
   if (activityManager.skipLoopDelay()) {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
-  } else if (debouncePending) {
-    // Re-sample well inside InputManager's 5 ms debounce window so the pending change commits on one
-    // of the next few iterations. Without this the idle 50 ms delay outlasts the press itself and the
-    // change is dropped rather than delayed.
-    delay(2);
-  } else if (inputActive || millis() - lastActivityTime < HalPowerManager::IDLE_POWER_SAVING_MS) {
-    // Short delay to prevent tight loop while still being responsive
-    delay(10);
   } else {
-    // If we've been inactive for a while, increase the delay to save power
-    powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
-    delay(50);
+    const unsigned long idleMs = millis() - lastActivityTime;
+    if (idleMs >= HalPowerManager::IDLE_LIGHT_SLEEP_MS) {
+      // Idle: light-sleep between input polls instead of busy-delaying (same poll cadence).
+      // Race-to-sleep: run the brief wake windows at normal clock, not LOW_POWER_FREQ.
+      // The board's sleep-floor current is paid per-millisecond regardless of CPU
+      // speed, so finishing the per-wake work ~16x faster and returning to sleep
+      // costs less charge than stretching the window at 10 MHz (measured at 10 MHz:
+      // 8.8 mA for 4.5 ms per wake). The downclock below only serves the pre-sleep
+      // 100 Hz delay-poll phase. The lightSleep()-rejected fallback delay() then
+      // also runs at normal clock, but that only happens when USB (externally
+      // powered), WiFi, or a render Lock (full speed wanted anyway) is active.
+      powerManager.setPowerSaving(false);
+      if (gpio.isDebouncePending()) {
+        // A raw button-state change is mid-debounce: commitment needs a second
+        // matching sample, so poll again quickly instead of sleeping a slice —
+        // a tap shorter than the 50 ms cadence would otherwise land in a single
+        // sample and be dropped, and every press would commit a slice late.
+        delayWallClock(10);
+      } else if (!powerManager.lightSleep(gpio)) {
+        // Light sleep declined = a render Lock, USB, or WiFi is active — the
+        // chip is at full clock anyway, so poll at 100 Hz. A 50 ms cadence
+        // here dropped sub-slice power taps (a press needs two samples >=5 ms
+        // apart to commit), which made short-press sleep flaky during renders
+        // — exactly when a render Lock forces this fallback.
+        delayWallClock(10);
+      }
+    } else {
+      // Response window after recent input: keep 100 Hz polling for snappy interaction,
+      // but downclock once rapid-input bursts have settled — renders re-raise the clock
+      // via HalPowerManager::Lock, so full speed only serves loop bookkeeping here
+      if (idleMs >= HalPowerManager::IDLE_DOWNCLOCK_MS) {
+        powerManager.setPowerSaving(true);
+      }
+      delayWallClock(10);
+    }
   }
 }
