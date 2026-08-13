@@ -460,7 +460,11 @@ void EpubReaderActivity::loop() {
       // holding input off for seconds at a time. The render task takes the same lock for the same
       // reason.
       HalPowerManager::Lock powerLock;
-      if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
+      const uint16_t pageCountBeforeTick = section->pageCount;
+      const unsigned long tickStartMs = millis();
+      const bool tickOk = section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK);
+      InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeTick, section->pageCount, millis() - tickStartMs);
+      if (!tickOk) {
         LOG_ERR("ERS", "Background section build failed");
         section.reset();
         requestUpdate();
@@ -1136,6 +1140,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   if (!epub) {
     return;
   }
+  buildAccumMsThisRender = 0;
+  buildChunkCountThisRender = 0;
 
   const auto showPendingSyncSaveError = [this]() {
     if (!pendingSyncSaveError) return;
@@ -1367,7 +1373,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
               // The predictive gates guessed fast but the build blew the silent budget.
               showBuildPopup();
             }
-            if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+            const uint16_t pageCountBeforeChunk = section->pageCount;
+            const unsigned long chunkStartMs = millis();
+            const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+            const unsigned long chunkMs = millis() - chunkStartMs;
+            InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+            buildAccumMsThisRender += chunkMs;
+            buildChunkCountThisRender++;
+            if (!chunkOk) {
               LOG_ERR("ERS", "Failed during incremental section build");
               section.reset();
               buildPopupPending = false;
@@ -1449,7 +1462,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     }
     // Extend until either the target page exists or the build completes.
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
-      if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+      const uint16_t pageCountBeforeChunk = section->pageCount;
+      const unsigned long chunkStartMs = millis();
+      const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+      const unsigned long chunkMs = millis() - chunkStartMs;
+      InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+      buildAccumMsThisRender += chunkMs;
+      buildChunkCountThisRender++;
+      if (!chunkOk) {
         LOG_ERR("ERS", "Failed during incremental section build");
         section.reset();
         showBuildError();
@@ -1460,13 +1480,24 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // For an in-progress incremental build, make sure the page we're about to show has been laid out.
   if (section->isBuilding()) {
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
-      if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+      const uint16_t pageCountBeforeChunk = section->pageCount;
+      const unsigned long chunkStartMs = millis();
+      const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+      const unsigned long chunkMs = millis() - chunkStartMs;
+      InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+      buildAccumMsThisRender += chunkMs;
+      buildChunkCountThisRender++;
+      if (!chunkOk) {
         LOG_ERR("ERS", "Failed during incremental section build");
         section.reset();
         showBuildError();
         return;
       }
     }
+  }
+
+  if (buildChunkCountThisRender > 0) {
+    InputDiag::noteBuildTotal(currentSpineIndex, buildAccumMsThisRender, buildChunkCountThisRender);
   }
 
   // The requested page is now as built as it will get. If it still lands past the end,

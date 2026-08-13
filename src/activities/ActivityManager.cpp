@@ -100,7 +100,19 @@ void ActivityManager::renderTaskLoop() {
       display.setInverted(SETTINGS.screenInverted != 0 && currentActivity->appliesNightMode());
       currentActivity->render(std::move(lock));
 #ifdef INPUT_DIAG
-      InputDiag::noteRender(renderedName, millis() - renderStart);
+      const unsigned long renderDurationMs = millis() - renderStart;
+      InputDiag::noteRender(renderedName, renderDurationMs);
+      // A render this slow isn't drawing -- it's stuck somewhere upstream (SD I/O, glyph
+      // cache, allocation). The 16-line log ring is system-wide and short, so whatever ran
+      // during the stall is likely still in it right now; a routine render would evict it
+      // within a few more renders. captureLogs() keeps only the first capture, so repeat
+      // stalls this session don't overwrite the one that still has the culprit.
+      constexpr unsigned long SLOW_RENDER_CAPTURE_MS = 5000;
+      if (renderDurationMs >= SLOW_RENDER_CAPTURE_MS) {
+        char reason[48];
+        snprintf(reason, sizeof(reason), "slow-render %s %lums", renderedName, renderDurationMs);
+        InputDiag::captureLogs(reason);
+      }
 #endif
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.

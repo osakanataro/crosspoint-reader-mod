@@ -169,6 +169,13 @@ class EpubReaderActivity final : public Activity {
   // drawn. Gates showBuildPopup() so the parser's popup callback (which persists into
   // background buildSomeMore chunks) can never draw over a displayed page.
   bool buildPopupPending = false;
+  // Sum of every buildSomeMore() call's duration made while catching a page up to its
+  // target within one render() call, and how many chunks that took. A single chunk can
+  // look cheap (BUILD_PAGES_PER_CHUNK pages, sub-second) while the loop around it still
+  // iterates dozens of times to reach a distant target -- noteBuildChunk's per-chunk max
+  // misses that; this catches the render-level total instead. Reset at the top of render().
+  unsigned long buildAccumMsThisRender = 0;
+  int buildChunkCountThisRender = 0;
   // Draw the indexing popup mid-build (parser image-probe callback and deadline backstop).
   void showBuildPopup();
   // Map the cached content position into the rebuilt section (used after a

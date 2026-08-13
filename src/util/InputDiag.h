@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // Serial-free input timing diagnostics.
 //
 // The USB-write-locked X3 units have no usable serial console, so the numbers that decide whether a
@@ -47,6 +49,22 @@ class InputDiag {
   static void noteVerticalRender(unsigned long bodyMs, unsigned long bodyCells, unsigned long rubyMeasureMs,
                                  unsigned long rubyDrawMs, unsigned long rubyGroups);
 
+  // One Section::buildSomeMore() call: the spine item, the page-count watermark before and
+  // after, and how long it took. buildSomeMore has no internal time budget -- it lays out
+  // whatever chunk it's given as one atomic call, holding RenderLock (and, from most call
+  // sites, HalPowerManager::Lock) for the duration -- so a single pathological page anywhere
+  // in a chapter can freeze input for as long as that one call takes. render_max_ms alone
+  // can't say *where*: this pins the worst chunk to a spine index and page range so a repeat
+  // capture can point at the actual content instead of just the duration.
+  static void noteBuildChunk(int spineIndex, uint16_t pageCountBefore, uint16_t pageCountAfter,
+                             unsigned long durationMs);
+
+  // Sum of every buildSomeMore() call made to catch one render's target page up, across
+  // however many chunks that took. A render can be slow from many cheap chunks in a long
+  // loop just as easily as from one expensive one; noteBuildChunk's per-chunk max misses
+  // that shape entirely, so this pins the worst render-level total separately.
+  static void noteBuildTotal(int spineIndex, unsigned long totalMs, int chunkCount);
+
   // Snapshot the RTC log ring into memory, to be written out by the next flush().
   //
   // Copies rather than writing on the spot: this is called from failure paths that may already
@@ -65,6 +83,8 @@ class InputDiag {
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
   static void notePageDrawParts(unsigned long, unsigned long) {}
   static void noteVerticalRender(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long) {}
+  static void noteBuildChunk(int, uint16_t, uint16_t, unsigned long) {}
+  static void noteBuildTotal(int, unsigned long, int) {}
   static void captureLogs(const char*) {}
   static void flush(bool) {}
 };

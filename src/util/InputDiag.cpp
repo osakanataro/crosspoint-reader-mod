@@ -35,6 +35,10 @@ bool wasPending = false;
 uint32_t renderMaxMs = 0;
 uint32_t renderLastMs = 0;
 uint32_t renderCount = 0;
+// Which activity produced renderMaxMs. render_log's 12-entry ring rolls the culprit
+// out of view long before a slow session ends; this pins it for the whole session.
+constexpr uint8_t RENDER_MAX_NAME_LEN = 16;
+char renderMaxName[RENDER_MAX_NAME_LEN] = {};
 
 // Ring of the most recent renders, so the report shows the shape over time rather than one maximum
 // with no context. Names are truncated rather than pointed at: the activity that produced a render
@@ -74,6 +78,19 @@ uint32_t vertRubyGroups = 0;
 constexpr char LOG_PATH[] = "/input-diag-log.txt";
 char capturedLogs[2048];
 bool capturedLogsPending = false;
+
+// Worst single buildSomeMore() call this session, by duration.
+uint32_t buildChunkMaxMs = 0;
+int buildChunkMaxSpineIndex = -1;
+uint16_t buildChunkMaxPageBefore = 0;
+uint16_t buildChunkMaxPageAfter = 0;
+
+// Worst render-level total across all buildSomeMore() calls made to catch one page up,
+// by summed duration -- distinct from buildChunkMaxMs, which only sees the single worst
+// chunk and misses a render slowed by many small ones.
+uint32_t buildTotalMaxMs = 0;
+int buildTotalMaxSpineIndex = -1;
+int buildTotalMaxChunkCount = 0;
 }  // namespace
 
 void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, const bool debouncePending) {
@@ -107,7 +124,10 @@ void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, cons
 
 void InputDiag::noteRender(const char* activityName, const unsigned long durationMs) {
   renderLastMs = static_cast<uint32_t>(durationMs);
-  if (renderLastMs > renderMaxMs) renderMaxMs = renderLastMs;
+  if (renderLastMs > renderMaxMs) {
+    renderMaxMs = renderLastMs;
+    snprintf(renderMaxName, sizeof(renderMaxName), "%s", activityName ? activityName : "?");
+  }
   renderCount++;
 
   RenderEntry& entry = renderLog[renderLogNext];
@@ -141,6 +161,22 @@ void InputDiag::noteVerticalRender(const unsigned long bodyMs, const unsigned lo
   vertRubyGroups = static_cast<uint32_t>(rubyGroups);
 }
 
+void InputDiag::noteBuildChunk(const int spineIndex, const uint16_t pageCountBefore, const uint16_t pageCountAfter,
+                               const unsigned long durationMs) {
+  if (static_cast<uint32_t>(durationMs) <= buildChunkMaxMs) return;
+  buildChunkMaxMs = static_cast<uint32_t>(durationMs);
+  buildChunkMaxSpineIndex = spineIndex;
+  buildChunkMaxPageBefore = pageCountBefore;
+  buildChunkMaxPageAfter = pageCountAfter;
+}
+
+void InputDiag::noteBuildTotal(const int spineIndex, const unsigned long totalMs, const int chunkCount) {
+  if (static_cast<uint32_t>(totalMs) <= buildTotalMaxMs) return;
+  buildTotalMaxMs = static_cast<uint32_t>(totalMs);
+  buildTotalMaxSpineIndex = spineIndex;
+  buildTotalMaxChunkCount = chunkCount;
+}
+
 void InputDiag::captureLogs(const char* reason) {
   // Keep the first capture. A failure often cascades, and the earliest report is the one that
   // still names the original cause.
@@ -164,34 +200,39 @@ void InputDiag::flush(const bool inputActive) {
   }
   lastFlushAt = now;
 
-  int len = snprintf(reportBuf, sizeof(reportBuf),
-                     "uptime_ms=%lu\n"
-                     "cpu_mhz_now=%u\n"
-                     "cpu_mhz_min=%u\n"
-                     "poll_gap_max_fullspeed_ms=%u\n"
-                     "poll_gap_max_lowpower_ms=%u\n"
-                     "samples_lowpower=%u\n"
-                     "debounce_episodes=%u\n"
-                     "committed_edges=%u\n"
-                     "render_last_ms=%u\n"
-                     "render_max_ms=%u\n"
-                     "render_count=%u\n"
-                     "heap_free=%u\n"
-                     "heap_min_free=%u\n"
-                     "heap_max_alloc=%u\n"
-                     "page_prewarm_ms=%u (max %u)\n"
-                     "page_draw_ms=%u (max %u)\n"
-                     "page_display_ms=%u (max %u)\n"
-                     "page_blocks_ms=%u\n"
-                     "page_statusbar_ms=%u\n"
-                     "vert_body_ms=%u cells=%u\n"
-                     "vert_ruby_measure_ms=%u\n"
-                     "vert_ruby_draw_ms=%u groups=%u\n",
-                     now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
-                     debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderCount, ESP.getFreeHeap(),
-                     ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs, pageRenderPrewarmMaxMs,
-                     pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs, pageRenderDisplayMaxMs, pageBlocksMs,
-                     pageStatusBarMs, vertBodyMs, vertBodyCells, vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups);
+  int len =
+      snprintf(reportBuf, sizeof(reportBuf),
+               "uptime_ms=%lu\n"
+               "cpu_mhz_now=%u\n"
+               "cpu_mhz_min=%u\n"
+               "poll_gap_max_fullspeed_ms=%u\n"
+               "poll_gap_max_lowpower_ms=%u\n"
+               "samples_lowpower=%u\n"
+               "debounce_episodes=%u\n"
+               "committed_edges=%u\n"
+               "render_last_ms=%u\n"
+               "render_max_ms=%u (%s)\n"
+               "render_count=%u\n"
+               "heap_free=%u\n"
+               "heap_min_free=%u\n"
+               "heap_max_alloc=%u\n"
+               "page_prewarm_ms=%u (max %u)\n"
+               "page_draw_ms=%u (max %u)\n"
+               "page_display_ms=%u (max %u)\n"
+               "page_blocks_ms=%u\n"
+               "page_statusbar_ms=%u\n"
+               "vert_body_ms=%u cells=%u\n"
+               "vert_ruby_measure_ms=%u\n"
+               "vert_ruby_draw_ms=%u groups=%u\n"
+               "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
+               "build_total_max_ms=%u spine=%d chunks=%d\n",
+               now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
+               debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
+               ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
+               pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
+               pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells, vertRubyMeasureMs,
+               vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex, buildChunkMaxPageBefore,
+               buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex, buildTotalMaxChunkCount);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
@@ -221,7 +262,14 @@ void InputDiag::flush(const bool inputActive) {
                   "# page_* splits one page render: glyph prewarm from the card, drawing, then the\n"
                   "# panel refresh. Whichever dominates is where a page turn's cost actually is.\n"
                   "# heap_max_alloc is the largest single block still obtainable. A ZIP inflate\n"
-                  "# buffer needs one contiguous block, so that number matters more than the total.\n");
+                  "# buffer needs one contiguous block, so that number matters more than the total.\n"
+                  "# build_chunk_max_ms is the single slowest Section::buildSomeMore() call this\n"
+                  "# session -- it has no internal time budget, so one pathological page freezes\n"
+                  "# input for its whole duration. pages=X..Y is the watermark before/after the\n"
+                  "# call; the slow content is in that page range of the given spine index.\n"
+                  "# build_total_max_ms is the worst render's summed buildSomeMore() time across\n"
+                  "# all its chunks. A high total with a low build_chunk_max_ms means many small\n"
+                  "# chunks, not one slow page -- chunks=N says how many it took to catch up.\n");
   if (len <= 0) {
     return;
   }
