@@ -65,6 +65,11 @@ class InputDiag {
   // that shape entirely, so this pins the worst render-level total separately.
   static void noteBuildTotal(int spineIndex, unsigned long totalMs, int chunkCount);
 
+  // One UI glyph prewarm that reported failure (see UiGlyphPrewarm). Records the count and the
+  // tightest max-alloc seen at such a failure, so a slow list screen can be attributed to the
+  // prewarm not landing rather than to the drawing itself.
+  static void noteUiPrewarmFailure();
+
   // Snapshot the RTC log ring into memory, to be written out by the next flush().
   //
   // Copies rather than writing on the spot: this is called from failure paths that may already
@@ -85,6 +90,7 @@ class InputDiag {
   static void noteVerticalRender(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long) {}
   static void noteBuildChunk(int, uint16_t, uint16_t, unsigned long) {}
   static void noteBuildTotal(int, unsigned long, int) {}
+  static void noteUiPrewarmFailure() {}
   static void captureLogs(const char*) {}
   static void flush(bool) {}
 };

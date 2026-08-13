@@ -173,8 +173,8 @@ void GfxRenderer::FrameBufferLoan::end() {
 
 bool GfxRenderer::isFontCacheScanning() const { return fontCacheManager_ && fontCacheManager_->isScanning(); }
 
-void GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t styleMask) const {
-  if (!fontCacheManager_ || text == nullptr || *text == '\0' || styleMask == 0) return;
+bool GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t styleMask) const {
+  if (!fontCacheManager_ || text == nullptr || *text == '\0' || styleMask == 0) return false;
 
   // Group the requested styles by the font that will actually render them, then issue one call per
   // font. Resolution is per style (resolveTextFontId consults per-style coverage, so two styles can
@@ -193,9 +193,21 @@ void GfxRenderer::prewarmText(const int fontId, const char* text, const uint8_t 
     masks[slot] |= static_cast<uint8_t>(1u << i);
   }
 
+  bool warmed = targetCount > 0;
   for (uint8_t i = 0; i < targetCount; i++) {
-    fontCacheManager_->prewarmCache(targets[i], text, masks[i]);
+    // Every target has to land: one style left cold is one style drawn a glyph at a time.
+    if (!fontCacheManager_->prewarmCache(targets[i], text, masks[i])) warmed = false;
   }
+  return warmed;
+}
+
+uint32_t GfxRenderer::glyphCacheGeneration() const {
+  uint32_t generation = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) generation += font->miniGeneration();
+  }
+  return generation;
 }
 
 void GfxRenderer::releaseFallbackGlyphCaches() const {

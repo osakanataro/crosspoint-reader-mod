@@ -42,8 +42,19 @@ class SdCardFont {
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
   // Default 0x0F = all present styles.
   // When metadataOnly=true, only glyph metrics are loaded (no bitmap data).
-  // Returns number of glyphs that couldn't be loaded (0 on full success).
+  // Returns the number of glyphs the font does not cover (0 on full success),
+  // or -1 when a style could not be built at all -- out of heap, or the card
+  // read failed. The two are worth telling apart: an uncovered glyph is warm as
+  // it will ever be, while after -1 nothing is resident and the text is back on
+  // the on-demand path.
   int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false);
+
+  // Bumped every time mini data is dropped -- by the retention floor in
+  // resetStyleMiniData(), by releaseAllCaches(), or by a failed rebuild. A
+  // caller that remembers what it last prewarmed compares this to know whether
+  // that memory still describes the font, since a successful prewarm can be
+  // released again the moment the scope that built it ends.
+  uint32_t miniGeneration() const { return miniGeneration_; }
 
   // Build a compact advance-only table for layout measurement.
   // Extracts ALL unique codepoints from words (no MAX_PAGE_GLYPHS cap),
@@ -284,6 +295,7 @@ class SdCardFont {
 
   Stats stats_;
   uint32_t contentHash_ = 0;
+  uint32_t miniGeneration_ = 0;
   bool loaded_ = false;
 
   // Per-style helpers

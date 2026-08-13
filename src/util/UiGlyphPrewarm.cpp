@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 
+#include "InputDiag.h"
 #include "fontIds.h"
 
 namespace {
@@ -29,10 +30,19 @@ constexpr size_t TEXT_RESERVE = 256;
 // A hash rather than the strings: keeping three std::strings resident forever to save a call is the
 // wrong trade on 380 KB. A collision skips a warm that was needed, which leaves that text on the
 // on-demand path -- slower, never wrong.
+//
+// Recorded only for a role whose prewarm reported success, and only alongside the glyph cache
+// generation it was recorded under. Recording it unconditionally made a single failure permanent:
+// a warm that could not build its arena (the mini bitmap wants one contiguous block, and max-alloc
+// runs at ~15 KB with a book open) still counted as done, so every later repaint of the same text
+// skipped it and drew through the 8-entry overflow ring -- 34 s on a file browser page of Japanese
+// names. The generation covers the other way in: a warm that succeeded and was then released by
+// SdCardFont's retention floor.
 uint32_t appliedHeaderHash = 0;
 uint32_t appliedBodyHash = 0;
 uint32_t appliedSubtitleHash = 0;
 uint32_t appliedSubtitleBoldHash = 0;
+uint32_t appliedGeneration = 0;
 
 // FNV-1a. Empty text hashes to 0 so "nothing added" and "nothing applied" compare equal.
 uint32_t textHash(const std::string& text) {
@@ -79,20 +89,31 @@ void UiGlyphPrewarm::apply(const GfxRenderer& renderer) const {
   const uint32_t bodyHash = textHash(body_);
   const uint32_t subtitleHash = textHash(subtitle_);
   const uint32_t subtitleBoldHash = textHash(subtitleBold_);
-  if (headerHash == appliedHeaderHash && bodyHash == appliedBodyHash && subtitleHash == appliedSubtitleHash &&
-      subtitleBoldHash == appliedSubtitleBoldHash) {
-    return;  // same labels as last time; the glyphs are still where they were left
+  const uint32_t generation = renderer.glyphCacheGeneration();
+  if (generation == appliedGeneration && headerHash == appliedHeaderHash && bodyHash == appliedBodyHash &&
+      subtitleHash == appliedSubtitleHash && subtitleBoldHash == appliedSubtitleBoldHash) {
+    return;  // same labels, and nothing has dropped the glyphs since
   }
 
-  if (!header_.empty()) renderer.prewarmText(UI_12_FONT_ID, header_.c_str(), HEADER_STYLES);
-  if (!body_.empty()) renderer.prewarmText(UI_10_FONT_ID, body_.c_str(), kRegular);
-  if (!subtitle_.empty()) renderer.prewarmText(SMALL_FONT_ID, subtitle_.c_str(), kRegular);
-  if (!subtitleBold_.empty()) renderer.prewarmText(SMALL_FONT_ID, subtitleBold_.c_str(), kBold);
+  // A role that reports failure is recorded as unwarmed, so the next repaint tries again rather
+  // than trusting a load that did not happen.
+  const auto warm = [&renderer](const int fontId, const std::string& text, const uint8_t styles,
+                                const uint32_t hash) -> uint32_t {
+    if (text.empty()) return 0;
+    if (renderer.prewarmText(fontId, text.c_str(), styles)) return hash;
+    // No-op unless built with INPUT_DIAG. A failed warm is invisible from the outside: the screen
+    // simply draws a glyph at a time.
+    InputDiag::noteUiPrewarmFailure();
+    return 0;
+  };
 
-  appliedHeaderHash = headerHash;
-  appliedBodyHash = bodyHash;
-  appliedSubtitleHash = subtitleHash;
-  appliedSubtitleBoldHash = subtitleBoldHash;
+  appliedHeaderHash = warm(UI_12_FONT_ID, header_, HEADER_STYLES, headerHash);
+  appliedBodyHash = warm(UI_10_FONT_ID, body_, kRegular, bodyHash);
+  appliedSubtitleHash = warm(SMALL_FONT_ID, subtitle_, kRegular, subtitleHash);
+  appliedSubtitleBoldHash = warm(SMALL_FONT_ID, subtitleBold_, kBold, subtitleBoldHash);
+  // Read after the warms: building one arena can be what pushes the heap under the retention floor
+  // that drops another, and that release has to invalidate this record, not be recorded into it.
+  appliedGeneration = renderer.glyphCacheGeneration();
 }
 
 void UiGlyphPrewarm::release(const GfxRenderer& renderer) {
@@ -102,6 +123,7 @@ void UiGlyphPrewarm::release(const GfxRenderer& renderer) {
   appliedBodyHash = 0;
   appliedSubtitleHash = 0;
   appliedSubtitleBoldHash = 0;
+  appliedGeneration = renderer.glyphCacheGeneration();
 }
 
 int UiGlyphPrewarm::pageStart(const int selectedIndex, const int itemsPerPage) {

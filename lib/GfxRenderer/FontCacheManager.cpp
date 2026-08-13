@@ -19,19 +19,23 @@ void FontCacheManager::clearCache() {
   }
 }
 
-void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
+bool FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
     int missed = it->second->prewarm(utf8Text, styleMask);
+    if (missed < 0) {
+      LOG_DBG("FCM", "prewarmCache(SD): build failed, text stays on demand (styleMask=0x%02X)", styleMask);
+      return false;
+    }
     if (missed > 0) {
       LOG_DBG("FCM", "prewarmCache(SD): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
     }
-    return;
+    return true;
   }
 
   // Standard compressed font prewarm path: loop over all requested styles
-  if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return;
+  if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return false;
 
   for (uint8_t i = 0; i < 4; i++) {
     if (!(styleMask & (1 << i))) continue;
@@ -43,6 +47,7 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
       LOG_DBG("FCM", "prewarmCache: %d glyph(s) not cached for style %d", missed, i);
     }
   }
+  return true;
 }
 
 void FontCacheManager::logStats(const char* label) {

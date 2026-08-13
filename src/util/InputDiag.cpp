@@ -32,6 +32,13 @@ uint32_t cpuMhzMin = 0;
 bool wasPending = false;
 // Written from the render task, read by flush() on the main task. Aligned 32-bit scalars on a
 // single core, and nothing downstream acts on them, so a stale read only misreports a diagnostic.
+// UI glyph prewarms that reported failure: the text stayed on the on-demand path, so the screen
+// draws through SdCardFont's 8-entry overflow ring. Counted because the failure is silent from the
+// outside -- the screen just gets slow -- and the usual cause is that the mini bitmap arena no
+// longer fits in one contiguous block, which heap_max_alloc alone cannot confirm.
+uint32_t uiPrewarmFailCount = 0;
+uint32_t uiPrewarmFailMinAlloc = 0;
+
 uint32_t renderMaxMs = 0;
 uint32_t renderLastMs = 0;
 uint32_t renderCount = 0;
@@ -177,6 +184,14 @@ void InputDiag::noteBuildTotal(const int spineIndex, const unsigned long totalMs
   buildTotalMaxChunkCount = chunkCount;
 }
 
+void InputDiag::noteUiPrewarmFailure() {
+  uiPrewarmFailCount++;
+  const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+  if (uiPrewarmFailMinAlloc == 0 || maxAlloc < uiPrewarmFailMinAlloc) {
+    uiPrewarmFailMinAlloc = maxAlloc;
+  }
+}
+
 void InputDiag::captureLogs(const char* reason) {
   // Keep the first capture. A failure often cascades, and the earliest report is the one that
   // still names the original cause.
@@ -200,39 +215,40 @@ void InputDiag::flush(const bool inputActive) {
   }
   lastFlushAt = now;
 
-  int len =
-      snprintf(reportBuf, sizeof(reportBuf),
-               "uptime_ms=%lu\n"
-               "cpu_mhz_now=%u\n"
-               "cpu_mhz_min=%u\n"
-               "poll_gap_max_fullspeed_ms=%u\n"
-               "poll_gap_max_lowpower_ms=%u\n"
-               "samples_lowpower=%u\n"
-               "debounce_episodes=%u\n"
-               "committed_edges=%u\n"
-               "render_last_ms=%u\n"
-               "render_max_ms=%u (%s)\n"
-               "render_count=%u\n"
-               "heap_free=%u\n"
-               "heap_min_free=%u\n"
-               "heap_max_alloc=%u\n"
-               "page_prewarm_ms=%u (max %u)\n"
-               "page_draw_ms=%u (max %u)\n"
-               "page_display_ms=%u (max %u)\n"
-               "page_blocks_ms=%u\n"
-               "page_statusbar_ms=%u\n"
-               "vert_body_ms=%u cells=%u\n"
-               "vert_ruby_measure_ms=%u\n"
-               "vert_ruby_draw_ms=%u groups=%u\n"
-               "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
-               "build_total_max_ms=%u spine=%d chunks=%d\n",
-               now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
-               debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
-               ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
-               pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
-               pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells, vertRubyMeasureMs,
-               vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex, buildChunkMaxPageBefore,
-               buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex, buildTotalMaxChunkCount);
+  int len = snprintf(reportBuf, sizeof(reportBuf),
+                     "uptime_ms=%lu\n"
+                     "cpu_mhz_now=%u\n"
+                     "cpu_mhz_min=%u\n"
+                     "poll_gap_max_fullspeed_ms=%u\n"
+                     "poll_gap_max_lowpower_ms=%u\n"
+                     "samples_lowpower=%u\n"
+                     "debounce_episodes=%u\n"
+                     "committed_edges=%u\n"
+                     "render_last_ms=%u\n"
+                     "render_max_ms=%u (%s)\n"
+                     "render_count=%u\n"
+                     "heap_free=%u\n"
+                     "heap_min_free=%u\n"
+                     "heap_max_alloc=%u\n"
+                     "page_prewarm_ms=%u (max %u)\n"
+                     "page_draw_ms=%u (max %u)\n"
+                     "page_display_ms=%u (max %u)\n"
+                     "page_blocks_ms=%u\n"
+                     "page_statusbar_ms=%u\n"
+                     "vert_body_ms=%u cells=%u\n"
+                     "vert_ruby_measure_ms=%u\n"
+                     "vert_ruby_draw_ms=%u groups=%u\n"
+                     "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
+                     "build_total_max_ms=%u spine=%d chunks=%d\n"
+                     "ui_prewarm_fail=%u (max_alloc_then=%u)\n",
+                     now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
+                     debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
+                     ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
+                     pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
+                     pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells,
+                     vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
+                     buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
+                     buildTotalMaxChunkCount, uiPrewarmFailCount, uiPrewarmFailMinAlloc);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }

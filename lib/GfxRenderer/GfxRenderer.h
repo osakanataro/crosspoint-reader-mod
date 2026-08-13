@@ -142,7 +142,16 @@ class GfxRenderer {
   //
   // styleMask is a bitmask of (1 << EpdFontFamily::Style), matching
   // FontCacheManager::prewarmCache().
-  void prewarmText(int fontId, const char* text, uint8_t styleMask = 0x01) const;
+  //
+  // Returns false when the text is still on the on-demand path afterwards, so a caller that skips
+  // repeat work for text it believes it already warmed can tell that belief from a fact.
+  bool prewarmText(int fontId, const char* text, uint8_t styleMask = 0x01) const;
+
+  // Bumped whenever any registered SD-card font drops its prewarmed glyph data. Below
+  // SdCardFont's retention floor -- and free heap sits under it while a book is open -- a
+  // successful prewarm is released again as soon as the scope that built it ends, so this is what
+  // separates "warmed once" from "still warm".
+  uint32_t glyphCacheGeneration() const;
 
   // Drop the glyph caches held by the registered UI fallback fonts.
   //
