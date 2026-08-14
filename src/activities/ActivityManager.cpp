@@ -1,10 +1,16 @@
 #include "ActivityManager.h"
 
 #include <FontCacheManager.h>
+#include <HalDisplay.h>
 #include <HalPowerManager.h>
 
 #include <algorithm>
 
+#ifdef DEBUG_RENDER_WATCHDOG
+#include <esp_task_wdt.h>
+#endif
+
+#include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
@@ -18,6 +24,7 @@
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/InputDiag.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -35,6 +42,27 @@ void ActivityManager::begin() {
                           renderTaskCore  // Keep long renders/cover decodes off CPU 0's idle watchdog when available
   );
   assert(renderTaskHandle != nullptr && "Failed to create render task");
+
+#ifdef DEBUG_RENDER_WATCHDOG
+  // Development safety net, off in every shipped build.
+  //
+  // A render that never returns leaves the device with no way back. The render task is
+  // subscribed to no watchdog and the idle task is not checked either (sdkconfig.default:
+  // CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0 is not set), while powering off is decided in
+  // loop() -- the task the stuck render is starving. Nothing on the outside of the case
+  // can interrupt it: the reset button is under the glued-down screen. The only remedy is
+  // to flatten the battery, which takes a day or more, and that cost is paid by every
+  // experiment that goes wrong.
+  //
+  // Watching the render turns that into a reboot. The timeout is deliberately loose: a
+  // first render can legitimately take seconds (SD font cache generation, cover decode),
+  // and this only has to tell "slow" apart from "never".
+  esp_task_wdt_config_t wdtConfig = {};
+  wdtConfig.timeout_ms = 30000;
+  wdtConfig.idle_core_mask = 0;
+  wdtConfig.trigger_panic = true;
+  esp_task_wdt_reconfigure(&wdtConfig);
+#endif
 }
 
 void ActivityManager::renderTaskTrampoline(void* param) {
@@ -45,12 +73,49 @@ void ActivityManager::renderTaskTrampoline(void* param) {
 void ActivityManager::renderTaskLoop() {
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#ifdef DEBUG_RENDER_WATCHDOG
+    // Subscribed around the render alone. This task spends the rest of its life blocked on
+    // the notify above, where a watchdog would fire on a device that is merely idle. The
+    // window it covers therefore includes waiting for the render lock, which is where a
+    // render already stuck would hold it.
+    esp_task_wdt_add(nullptr);
+#endif
     // Acquire the lock before reading currentActivity to avoid a TOCTOU race
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+#ifdef INPUT_DIAG
+      // Snapshot the name onto the stack before rendering. render() receives the lock by value and
+      // may release it partway, after which the main task can pop and destroy this activity -- so
+      // reading the name after render() returns is not safe. Guarded rather than routed through the
+      // no-op InputDiag stub because the snapshot itself would otherwise cost every build a copy.
+      char renderedName[16];
+      snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
+      const unsigned long renderStart = millis();
+      const uint32_t onDemandStart = renderer.glyphOnDemandLoads();
+      InputDiag::noteRenderStart();
+#endif
+      // Night mode inverts only the reading surfaces (appliesNightMode):
+      // resolving the output polarity here, per render, means menus, popups,
+      // and every other activity revert to normal automatically.
+      display.setInverted(SETTINGS.screenInverted != 0 && currentActivity->appliesNightMode());
       currentActivity->render(std::move(lock));
+#ifdef INPUT_DIAG
+      const unsigned long renderDurationMs = millis() - renderStart;
+      InputDiag::noteRender(renderedName, renderDurationMs, renderer.glyphOnDemandLoads() - onDemandStart);
+      // A render this slow isn't drawing -- it's stuck somewhere upstream (SD I/O, glyph
+      // cache, allocation). The 16-line log ring is system-wide and short, so whatever ran
+      // during the stall is likely still in it right now; a routine render would evict it
+      // within a few more renders. captureLogs() keeps only the first capture, so repeat
+      // stalls this session don't overwrite the one that still has the culprit.
+      constexpr unsigned long SLOW_RENDER_CAPTURE_MS = 5000;
+      if (renderDurationMs >= SLOW_RENDER_CAPTURE_MS) {
+        char reason[48];
+        snprintf(reason, sizeof(reason), "slow-render %s %lums", renderedName, renderDurationMs);
+        InputDiag::captureLogs(reason);
+      }
+#endif
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
@@ -61,11 +126,18 @@ void ActivityManager::renderTaskLoop() {
     if (waiter) {
       xTaskNotify(waiter, 1, eIncrement);
     }
+#ifdef DEBUG_RENDER_WATCHDOG
+    esp_task_wdt_delete(nullptr);
+#endif
   }
 }
 
-void ActivityManager::loop() {
-  if (currentActivity) {
+void ActivityManager::loop(const bool waitForPendingActions) {
+  // Skip the outgoing activity once a transition is queued. Pending work is no longer guaranteed to
+  // finish inside this call, so without the guard an activity that has already called finish() keeps
+  // receiving loop() calls while it waits, and a still-held button can trigger a second transition
+  // on top of the first.
+  if (currentActivity && pendingAction == PendingAction::None) {
     if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
       if (currentActivity->handleHomeGesture()) {
         return;
@@ -79,9 +151,20 @@ void ActivityManager::loop() {
   }
 
   while (pendingAction != PendingAction::None) {
-    if (pendingAction == PendingAction::Pop) {
-      RenderLock lock;
+    // Try for the lock rather than waiting on it. The render task holds it for a whole render --
+    // measured at 1.4 s on a page turn -- and this runs on the task that samples the buttons, so
+    // waiting here means no input is read for that entire stretch. A press that starts and ends
+    // inside the gap is not merely delayed, it is never observed. Deferring costs one more
+    // main-loop iteration; the action stays pending and is retried on the next pass.
+    RenderLock lock{RenderLock::TryToLock{}};
+    if (!lock.isHeld()) {
+      // Callers that cannot come back later (goToSleep needs the sleep screen up before the device
+      // powers off) ask to wait instead.
+      if (!waitForPendingActions) return;
+      lock.lockBlocking();
+    }
 
+    if (pendingAction == PendingAction::Pop) {
       if (!currentActivity) {
         // Should never happen in practice
         LOG_ERR("ACT", "Pop set but currentActivity is null; ignoring pop request");
@@ -126,9 +209,8 @@ void ActivityManager::loop() {
       }
 
     } else if (pendingActivity) {
-      // Current activity has requested a new activity to be launched
-      RenderLock lock;
-
+      // Current activity has requested a new activity to be launched. The lock taken at the top of
+      // the loop covers this branch too.
       if (pendingAction == PendingAction::Replace) {
         // Destroy the current activity
         exitActivity(lock);
@@ -172,7 +254,13 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
 
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   // Note: no lock here, this is usually called by loop() and we may run into deadlock
-  if (currentActivity) {
+  //
+  // The pendingAction test matters as much as the currentActivity one. A deferred transition can
+  // leave currentActivity null between main-loop passes (exitActivity has run, the retry has not),
+  // and taking the immediate path there would install this activity while the queued action is
+  // still set -- which loop() would then apply on top, replacing what was just launched. Queuing
+  // instead supersedes the pending activity, which is what a replace means.
+  if (currentActivity || pendingAction != PendingAction::None) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
     // leading to the "delete this" problem
     pendingActivity = std::move(newActivity);
@@ -208,13 +296,15 @@ void ActivityManager::goToBrowser() {
   }
 }
 
-void ActivityManager::goToReader(std::string path) {
-  replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
+  replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh));
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {
   replaceActivity(std::make_unique<SleepActivity>(renderer, mappedInput, fromTimeout));
-  loop();  // Important: sleep screen must be rendered immediately, the caller will go to sleep right after this returns
+  // Blocking: the sleep screen must be up before the caller powers the device off, so this one
+  // transition cannot be deferred to a later main-loop pass.
+  loop(/*waitForPendingActions=*/true);
 }
 
 void ActivityManager::goToBoot() { replaceActivity(std::make_unique<BootActivity>(renderer, mappedInput)); }
@@ -269,6 +359,8 @@ bool ActivityManager::isReaderActivity() const {
          (currentActivity && currentActivity->isReaderActivity());
 }
 
+bool ActivityManager::handleForcedRefresh() { return currentActivity && currentActivity->handleForcedRefresh(); }
+
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 
 ScreenshotInfo ActivityManager::getScreenshotInfo() const {
@@ -316,7 +408,11 @@ void ActivityManager::requestUpdateAndWait() {
   assert(!holdingRenderLock && "Cannot call requestUpdateAndWait() while holding RenderLock");
 
   xTaskNotify(renderTaskHandle, 1, eIncrement);
+  // Tell the power manager the loop is parked here: it cannot poll input until the
+  // render finishes, so the BUSY-wait slice hook should not yield to it meanwhile.
+  powerManager.noteRenderWaitBegin();
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  powerManager.noteRenderWaitEnd();
 }
 
 // RenderLock
@@ -327,6 +423,14 @@ RenderLock::RenderLock() {
 }
 
 RenderLock::RenderLock([[maybe_unused]] Activity&) {
+  xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
+  isLocked = true;
+}
+
+RenderLock::RenderLock(TryToLock) { isLocked = xSemaphoreTake(activityManager.renderingMutex, 0) == pdTRUE; }
+
+void RenderLock::lockBlocking() {
+  if (isLocked) return;
   xSemaphoreTake(activityManager.renderingMutex, portMAX_DELAY);
   isLocked = true;
 }

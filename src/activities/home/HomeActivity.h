@@ -71,6 +71,9 @@ class HomeActivity final : public Activity {
   void freeCoverBuffer();     // Free the stored cover buffer
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
+  // Batch-load the glyphs render() is about to draw. See the definition for why this is not left to
+  // the on-demand path.
+  void prewarmUiGlyphs(const std::vector<const char*>& menuItems, const MappedInputManager::Labels& labels) const;
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

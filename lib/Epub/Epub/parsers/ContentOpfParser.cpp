@@ -133,6 +133,13 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && (strcmp(name, "spine") == 0 || strcmp(name, "opf:spine") == 0)) {
     self->state = IN_SPINE;
+    // page-progression-direction="rtl" marks a right-to-left / vertical book (tategaki auto-detect).
+    for (int i = 0; atts[i]; i += 2) {
+      if (strcmp(atts[i], "page-progression-direction") == 0) {
+        self->pageProgressionRtl = (strcmp(atts[i + 1], "rtl") == 0);
+        break;
+      }
+    }
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
@@ -320,9 +327,13 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       }
     }
     if (!guideHref.empty()) {
-      if (type == "text" || (type == "start" && !self->textReferenceHref.empty())) {
+      // EPUB 2 guides often mark every content file as "text", so that type
+      // does not identify a reliable first-reading location. Only use the
+      // explicit "start" semantic; otherwise the reader opens at spine index 0.
+      if (type == "start" && !self->hasExplicitStartReference) {
         LOG_DBG("COF", "Found %s reference in guide: %s", type.c_str(), guideHref.c_str());
         self->textReferenceHref = guideHref;
+        self->hasExplicitStartReference = type == "start";
       } else if ((type == "cover" || type == "cover-page") && self->guideCoverPageHref.empty()) {
         LOG_DBG("COF", "Found cover reference in guide: %s", guideHref.c_str());
         self->guideCoverPageHref = guideHref;

@@ -1,0 +1,88 @@
+Japanese sample EPUBs for exercising the reader by hand on a device. Kept apart
+from test/epubs so this fork's own material, with its own provenance, does not
+mix into the upstream set. Nothing here is loaded by the gtest suites; copy a
+file to an SD card and open it.
+
+The four files
+--------------
+
+One book, built four ways:
+
+                         full CSS (~144 KB)      minimal CSS (~2 KB)
+  vertical, ppd=rtl      test_vertical_ja        test_vertical_ja_minicss
+  horizontal, ppd=ltr    test_horizontal_ja      test_horizontal_ja_minicss
+
+The chapter XHTML is byte-identical across a row, and across a column it differs
+by one attribute -- class="vrtl" against class="hltr" on the body element. So the
+set isolates two variables independently:
+
+  along a row     writing mode, with the stylesheet held constant
+  down a column   stylesheet size, with the writing mode held constant
+
+That makes a difference attributable. A rendering fault that appears in the
+minimal-CSS file too is in the layout engine; one that only appears with the full
+stylesheet is in CSS handling. A fault present in both writing modes is not a
+tategaki bug, whatever it looks like.
+
+The horizontal pair also serves as the regression check for vertical work: the
+vertical branch must not disturb it, and having the same text on both sides means
+a regression shows up as a difference rather than as a hunch.
+
+What the text covers
+--------------------
+
+12 chapters, 196 ruby instances, 41 of them read in Latin script. They include
+annotations long enough to overhang their base word and to overhang the head and
+foot of a column. Also list items, tilde variants (U+FF5E, U+301C, U+223C,
+U+02DC), fullwidth and halfwidth digit runs of one, two and three digits,
+fullwidth operators (＝ ＜ ＞ ≠ ≒), exclamation/question pairs, Greek letters,
+and line-break positions where kinsoku rules apply. Most of the vertical fixes on
+this branch were found with it.
+
+The last chapter is about ruby alone, and each of its paragraphs is one question:
+long marks and brackets inside a reading, readings that are a single Latin letter
+or carry a hyphen, period, apostrophe or space, readings that are only digits
+(where the body's own rule sets one and two upright and turns three), readings in
+Cyrillic and Greek, readings that mix scripts, one-character bases carrying
+readings far longer than themselves and set next to each other so they have to
+collide, monoruby that fits its base exactly against monoruby that does not, and
+a long passage seeded with annotated words so that some of them land on a column
+break -- which they do not yet survive.
+
+Provenance
+----------
+
+Text by OSAKANA TARO, published on Kakuyomu under the handle memoro and reused
+here by its author. CSS derived from the EBPAJ EPUB 3 production guide template
+set, ver. 1.1.4.
+
+The EPUBs are built from that Kakuyomu source by NovelToEpub, a PowerShell script
+at https://github.com/osakanataro/NovelToEpub, so they can be rebuilt rather than
+hand-edited -- fix the text on Kakuyomu, re-run, replace the files.
+
+Run the four from one working directory of your own, then copy the results here.
+KAKUYOMU below stands for https://kakuyomu.jp/works/2912051602969738484.
+
+  pwsh NovelToEpub.txt -Url KAKUYOMU -MaxCacheAgeHours 0.1 -OutputDir test_vertical_ja.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -MinimalCss -OutputDir test_vertical_ja_minicss.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -Horizontal -OutputDir test_horizontal_ja.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -Horizontal -MinimalCss -OutputDir test_horizontal_ja_minicss.epub
+
+-OutputDir names the file when its value ends in .epub, and a directory otherwise.
+Naming each one is what keeps the four apart: without it every run writes the
+work's own title and the previous file is gone.
+
+Run them from the same directory, and not from this one. The episode cache is a
+.cache directory beside the output, so a shared working directory is what lets the
+four share one fetch -- and pointing them here would leave that cache in the repo,
+which .gitignore does not cover outside the root.
+
+The script caches each episode it fetches, and -MaxCacheAgeHours defaults to 0,
+which disables age-based expiry: a cached episode is reused however old it is.
+Pass -MaxCacheAgeHours 0.1 on the *first* command only, as above, so it re-checks
+Kakuyomu for revisions. The remaining three run within those six minutes and
+reuse what the first fetched, so the site is polled once rather than four times.
+
+Rebuild all four together. They are only worth what their shared text is worth,
+and the source gains chapters over time -- regenerating one alone silently breaks
+the comparison the set exists for.

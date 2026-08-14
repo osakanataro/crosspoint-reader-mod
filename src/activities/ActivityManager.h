@@ -75,7 +75,12 @@ class ActivityManager {
   ~ActivityManager() { assert(false); /* should never be called */ };
 
   void begin();
-  void loop();
+  // Runs the current activity and applies any queued transition.
+  //
+  // waitForPendingActions makes the transition synchronous. The default defers it when the render
+  // task holds the render lock, so the caller's loop keeps sampling input; pass true only when the
+  // caller cannot come back for it (goToSleep, which powers off right after this returns).
+  void loop(bool waitForPendingActions = false);
 
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);
@@ -86,7 +91,7 @@ class ActivityManager {
   void goToFileBrowser(std::string path = {});
   void goToRecentBooks();
   void goToBrowser();
-  void goToReader(std::string path);
+  void goToReader(std::string path, bool allowFastInitialRefresh = false);
   void goToSleep(bool fromTimeout = false);
   void goToBoot();
   void goToFullScreenMessage(std::string message, EpdFontFamily::Style style = EpdFontFamily::REGULAR);
@@ -102,6 +107,7 @@ class ActivityManager {
 
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
+  bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
 

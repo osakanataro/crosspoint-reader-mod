@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -41,8 +42,28 @@ class SdCardFont {
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
   // Default 0x0F = all present styles.
   // When metadataOnly=true, only glyph metrics are loaded (no bitmap data).
-  // Returns number of glyphs that couldn't be loaded (0 on full success).
-  int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false);
+  // Returns the number of glyphs the font does not cover (0 on full success),
+  // or -1 when a style could not be built at all -- out of heap, or the card
+  // read failed. The two are worth telling apart: an uncovered glyph is warm as
+  // it will ever be, while after -1 nothing is resident and the text is back on
+  // the on-demand path.
+  //
+  // withKernLig=false skips the kerning and ligature tables: the persistent per-style class tables
+  // and the per-page kern matrix. Worth it for text that cannot kern -- the UI fallback fonts are
+  // only reached by strings carrying CJK -- where they were most of what a prewarm allocated.
+  int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false, bool withKernLig = true);
+
+  // Glyphs read one at a time through the overflow ring since boot, i.e. glyphs the prewarm did not
+  // cover. A screen whose prewarm names the wrong font still reports success, and the only outward
+  // sign is that this climbs by a screenful on every repaint.
+  uint32_t overflowLoads() const { return overflowLoads_; }
+
+  // Bumped every time mini data is dropped -- by the retention floor in
+  // resetStyleMiniData(), by releaseAllCaches(), or by a failed rebuild. A
+  // caller that remembers what it last prewarmed compares this to know whether
+  // that memory still describes the font, since a successful prewarm can be
+  // released again the moment the scope that built it ends.
+  uint32_t miniGeneration() const { return miniGeneration_; }
 
   // Build a compact advance-only table for layout measurement.
   // Extracts ALL unique codepoints from words (no MAX_PAGE_GLYPHS cap),
@@ -51,7 +72,7 @@ class SdCardFont {
   // (e.g. shaped Arabic presentation forms the measurement path will look up).
   // Returns number of codepoints not found in font coverage.
   int buildAdvanceTable(const char* utf8Text, uint8_t styleMask = 0x0F, const char* extraText = nullptr);
-  int buildAdvanceTable(const std::vector<std::string>& words, bool includeHyphen, uint8_t styleMask = 0x0F,
+  int buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask = 0x0F,
                         const char* extraText = nullptr);
 
   // Look up advanceX for a codepoint from the advance table.
@@ -69,6 +90,15 @@ class SdCardFont {
   // Drop the persistent advance cache. Call when unloading the SD font or
   // when font/size/family/glyph-table state changes.
   void clearPersistentCache();
+
+  // Hand every byte back: overflow ring, the per-style mini arenas and the advance tables.
+  //
+  // Distinct from clearCache(), which deliberately retains the arenas when the heap looks roomy and
+  // always keeps the advance tables. That bet pays off for the reader font, re-warmed page after
+  // page from the same book. It does not pay off for a UI fallback font whose screen has just been
+  // torn down: the next thing to run is usually a section build, which needs two contiguous 8 KB
+  // blocks for ZIP inflate and fails outright without them.
+  void releaseAllCaches();
 
   // Returns pointer to the managed EpdFont for a given style.
   // Returns nullptr if the style is not present.
@@ -92,6 +122,12 @@ class SdCardFont {
 
   // Returns the bitmap for an on-demand-loaded (overflow) glyph.
   const uint8_t* getOverflowBitmap(const EpdGlyph* glyph) const;
+
+  // Resolves a prewarmed mini glyph's chunked bitmap. `ctx` is the glyphMissCtx
+  // (an OverflowContext identifying the style); `dataOffset` is the glyph's
+  // virtual offset into the style's chunked arena. Returns nullptr if the chunk
+  // is absent or out of range. Called by GfxRenderer::getGlyphBitmap().
+  const uint8_t* miniGlyphBitmap(const void* ctx, uint32_t dataOffset) const;
 
   // Extract SdCardFont* from an opaque glyphMissCtx pointer.
   // Used by GfxRenderer::getGlyphBitmap() to recover the SdCardFont from EpdFontData::glyphMissCtx.
@@ -127,6 +163,18 @@ class SdCardFont {
     uint8_t kernRightClassCount = 0;
     uint8_t ligaturePairCount = 0;
   };
+
+  // The per-style mini bitmap arena is stored as a list of fixed-size chunks
+  // rather than one contiguous block. A whole page's 2bpp glyph bitmaps can run
+  // tens of KB; on a fragmented heap a single contiguous allocation of that size
+  // fails even when the same bytes are available as several smaller free blocks.
+  // Chunking lets the arena be assembled from blocks the allocator can actually
+  // provide. Each glyph's bitmap is placed wholly within one chunk (never
+  // straddling a boundary), so a glyph is addressed by a virtual offset that
+  // maps to (chunk index, offset-in-chunk) via miniGlyphBitmap().
+  static constexpr uint32_t MINI_BM_CHUNK_SHIFT = 12;  // 4 KB chunks
+  static constexpr uint32_t MINI_BM_CHUNK_SIZE = 1u << MINI_BM_CHUNK_SHIFT;
+  static constexpr uint32_t MINI_BM_MAX_CHUNKS = 24;  // 96 KB ceiling per style/page
 
   // All per-style data: file offsets, intervals, kern/lig, prewarm cache, EpdFont
   struct PerStyle {
@@ -187,7 +235,10 @@ class SdCardFont {
     EpdFontData miniData{};
     EpdUnicodeInterval* miniIntervals = nullptr;
     EpdGlyph* miniGlyphs = nullptr;
-    uint8_t* miniBitmap = nullptr;
+    // Chunked mini bitmap arena (see MINI_BM_CHUNK_* above). Chunks are allocated
+    // on demand during prewarm; miniBitmapChunkCount is how many are live.
+    uint8_t* miniBitmapChunks[MINI_BM_MAX_CHUNKS] = {};
+    uint32_t miniBitmapChunkCount = 0;
     uint32_t miniIntervalCount = 0;
     uint32_t miniGlyphCount = 0;
     uint32_t miniIntervalCapacity = 0;
@@ -274,6 +325,8 @@ class SdCardFont {
 
   Stats stats_;
   uint32_t contentHash_ = 0;
+  uint32_t miniGeneration_ = 0;
+  uint32_t overflowLoads_ = 0;
   bool loaded_ = false;
 
   // Per-style helpers
@@ -294,7 +347,7 @@ class SdCardFont {
   template <typename Iter>
   int buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask,
                              const char* extraText = nullptr);
-  int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly);
+  int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool withKernLig);
 
   // Global helpers
   void freeAll();

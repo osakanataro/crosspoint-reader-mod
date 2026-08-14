@@ -6,10 +6,16 @@ All POD fields are written in the ESP32 little-endian representation used by
 
 ## `book.bin`
 
-### Version 7
+### Version 11
 
 `book.bin` stores EPUB metadata plus lookup tables for spine and TOC entries.
 The current firmware writes this version from `BookMetadataCache`.
+
+Version 11 appends `pageProgressionRtl` to the metadata block: the spine's
+`page-progression-direction="rtl"` attribute, used to auto-detect vertical
+(tategaki) books.
+
+Version 10 changed how ambiguous EPUB guide text references are treated.
 
 ImHex pattern:
 
@@ -18,7 +24,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 7
+#define EXPECTED_VERSION 11
 #define MAX_STRING_LENGTH 65535
 
 struct String {
@@ -39,6 +45,7 @@ struct Metadata {
     String language [[comment("Book language code")]];
     String coverItemHref [[comment("Path to cover image")]];
     String textReferenceHref [[comment("Path to guided first text reference")]];
+    u8 pageProgressionRtl [[comment("Spine page-progression-direction is rtl (vertical/RTL book)")]];
 };
 
 struct SpineEntry {
@@ -90,11 +97,59 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 30
+### Version 42
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
+
+Version 42 widens footnote href records from 96 to 256 bytes, so calibre's long
+generated paths survive (upstream #2722). Everything written after a footnote
+record moves with it -- each serialized footnote record goes from 128 to 288
+bytes -- so a version 41 file cannot be read under the new layout.
+
+Version 41 keeps HTML whitespace between words as a separator cell in vertical
+layout instead of dropping it as a bare word boundary. Horizontal layout re-inserts
+the gap when it lays out a line, but vertical layout stacks each cell by its own
+advance and had nothing to carry it, so Latin phrases ran together. The extra cell
+shifts every position after it in the column, and a column break pulls back off it
+rather than opening a column with it.
+
+Version 40 keeps a number together with any separator standing between two of its
+digits, so `3.14` and `12:34` become a single sideways run rather than three cells.
+The number of cells in a column changes, and with it every position after one.
+
+Version 39 sets an exclamation/question pair (`!?` `!!` `??` `?!`) as tate-chu-yoko,
+one upright cell, where it used to be a sideways Latin run. The cell's height changes
+with it, moving everything after it in the column.
+
+Version 38 gives vertical blocks their ruby: the layout now hands each column the
+slice of `rubyTexts` belonging to its words instead of dropping them at the column
+boundary. The byte layout does not change — a ruby string per word has always been
+written, it was simply always empty for vertical blocks — so a version 37 file still
+parses, just into a book with no annotations. The bump forces the re-layout.
+
+Version 37 adds vertical writing (tategaki) on top of version 36: the header
+carries the `isVertical` and `verticalCharSpacing` cache-key fields, and each
+TextBlock serializes an `isVertical` flag plus — for vertical blocks — a per-word
+`ypos` array inside the word arena (see `TextBlock.h` for the arena layout).
+Numbered 37 rather than 36 because upstream consumed 36 for the change below
+while the tategaki branch was out.
+
+Version 36 keeps ruby inside the right border when text is justified and stops
+CJK text breaking into unwanted short lines. Both change word positions, so v35
+caches no longer match.
+
+Version 35 adds a header offset and a `uint32_t` entry per page for the
+visible-text offset LUT. The other section LUTs remain unchanged.
+
+Version 34 is binary-identical to version 33 in the upstream sense (word-gap
+suppression narrowed to tokens glued together in the source, so v33's collapsed
+Hangul-word spacing no longer matches what the layout engine produces) — this
+number was also briefly used by the tategaki branch's own pre-merge changes
+before it adopted vertical writing under version 37 instead.
+
+Version 33 added `<ruby>`/`<rt>` support (`<rp>` tags are skipped).
 
 Version 30 is binary-identical to version 29. The version was bumped because
 Arabic contextual shaping changed text measurement (`getTextAdvanceX` now
@@ -107,8 +162,9 @@ superscript, and subscript. The format also includes:
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
 - page offset LUT
+- per-page visible-text offset LUT (zero-based Unicode codepoints in `<body>`)
 - anchor-to-page map for fragment and footnote navigation
-- paragraph and list-item LUTs used by KOReader sync page refinement
+- paragraph and list-item LUTs retained for navigation and legacy sync fallback
 - optional per-word Focus Reading split metadata
 - per-page footnote entries
 - serialized word style bits for underline, strikethrough, superscript, and
@@ -125,10 +181,10 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 30
+#define EXPECTED_VERSION 42
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
-#define FOOTNOTE_HREF_LEN 96
+#define FOOTNOTE_HREF_LEN 256
 
 struct String {
     u32 length [[hidden, comment("String byte length")]];
@@ -187,11 +243,15 @@ struct BlockStyle {
 struct TextBlock {
     u16 wordCount;
     u8 hasFocus;
+    u8 isVertical [[comment("Tategaki block: arena carries a per-word wordYPos array")]];
     u16 textBytes [[comment("Total size of text[], including one NUL per word")]];
 
     if (wordCount > 0) {
         u16 textOff[wordCount] [[comment("Byte offset of word i's text within text[]")]];
         s16 wordXPos[wordCount];
+        if (isVertical != 0) {
+            s16 wordYPos[wordCount] [[comment("Per-word stacking position within the column")]];
+        }
         if (hasFocus != 0) {
             u16 wordFocusSuffixX[wordCount] [[comment("Suffix x offset from word start")]];
         }
@@ -201,6 +261,8 @@ struct TextBlock {
         }
         char text[textBytes] [[comment("All words back to back, each NUL-terminated")]];
     }
+
+    String wordRuby[wordCount] [[comment("Per-word ruby annotation text, empty when none")]];
 
     BlockStyle blockStyle;
 };
@@ -293,6 +355,7 @@ struct SectionBin {
     u32 anchorMapOffset;
     u32 paragraphLutOffset;
     u32 listItemLutOffset;
+    u32 visibleTextLutOffset;
 
     Page pages[pageCount];
 
@@ -313,6 +376,10 @@ struct SectionBin {
 
     if (listItemLutOffset != 0 && paragraphLutOffset != 0) {
         u16 listItemIndex[paragraphLut.count] @ listItemLutOffset;
+    }
+
+    if (visibleTextLutOffset != 0) {
+	u32 visibleTextOffset[pageCount] @ visibleTextLutOffset;
     }
 };
 

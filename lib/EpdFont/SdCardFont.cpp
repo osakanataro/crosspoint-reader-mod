@@ -99,8 +99,11 @@ void SdCardFont::freeStyleMiniData(PerStyle& s) {
   s.miniIntervals = nullptr;
   delete[] s.miniGlyphs;
   s.miniGlyphs = nullptr;
-  delete[] s.miniBitmap;
-  s.miniBitmap = nullptr;
+  for (auto& chunk : s.miniBitmapChunks) {
+    delete[] chunk;
+    chunk = nullptr;
+  }
+  s.miniBitmapChunkCount = 0;
   s.miniIntervalCount = 0;
   s.miniGlyphCount = 0;
   s.miniIntervalCapacity = 0;
@@ -111,6 +114,9 @@ void SdCardFont::freeStyleMiniData(PerStyle& s) {
   freeStyleMiniKern(s);
   memset(&s.miniData, 0, sizeof(s.miniData));
   s.epdFont.data = &s.stubData;
+  // Every path that drops mini data runs through here, so this is the one place
+  // that can tell a caller its "already prewarmed" note is stale.
+  miniGeneration_++;
 }
 
 void SdCardFont::resetStyleMiniData(PerStyle& s) {
@@ -740,7 +746,7 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
 
 // --- Prewarm ---
 
-int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly) {
+int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly, bool withKernLig) {
   if (!loaded_) return -1;
   styleMask = resolveStyleMask(styleMask);
   if (styleMask == 0) return 0;
@@ -795,7 +801,7 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   // Skip during metadata-only prewarm (layout measurement) to avoid loading
   // kern/lig data for all styles upfront (~22KB per style). Kern/lig is
   // loaded per-style in prewarmStyle() during the full render prewarm instead.
-  if (!metadataOnly) {
+  if (!metadataOnly && withKernLig) {
     for (uint8_t si = 0; si < MAX_STYLES; si++) {
       if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
       auto& s = styles_[si];
@@ -833,18 +839,28 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   // Sort codepoints for ordered interval building
   std::sort(codepoints.get(), codepoints.get() + cpCount);
 
-  // Prewarm each requested style
+  // Prewarm each requested style. A style that could not be built at all is
+  // reported as a failure for the whole call rather than folded into the missed
+  // count: nothing of it is resident, so a caller that remembers "this text is
+  // warm" would be remembering something that never happened.
   int totalMissed = 0;
+  bool failed = false;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    totalMissed += prewarmStyle(si, codepoints.get(), cpCount, metadataOnly);
+    const int missed = prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, withKernLig);
+    if (missed < 0) {
+      failed = true;
+    } else {
+      totalMissed += missed;
+    }
   }
 
   stats_.prewarmTotalMs = millis() - startMs;
-  return totalMissed;
+  return failed ? -1 : totalMissed;
 }
 
-int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly) {
+int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly,
+                             bool withKernLig) {
   auto& s = styles_[styleIdx];
 
   // Idle-prewarm hit: mini data persists across PrewarmScopes (resetStyleMiniData
@@ -885,7 +901,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   CpGlyphMapping* mappings = new (std::nothrow) CpGlyphMapping[cpCount];
   if (!mappings) {
     LOG_ERR("SDCF", "Failed to allocate mapping array for style %u", styleIdx);
-    return static_cast<int>(cpCount);
+    return -1;
   }
 
   uint32_t validCount = 0;
@@ -921,7 +937,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   if (!ensureArrayCapacity(s.miniIntervals, s.miniIntervalCapacity, validCount)) {
     LOG_ERR("SDCF", "Failed to allocate mini intervals for style %u", styleIdx);
     delete[] mappings;
-    return static_cast<int>(cpCount);
+    return -1;
   }
 
   s.miniIntervalCount = 0;
@@ -941,7 +957,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     LOG_ERR("SDCF", "Failed to allocate mini glyphs for style %u", styleIdx);
     delete[] mappings;
     freeStyleMiniData(s);
-    return static_cast<int>(cpCount);
+    return -1;
   }
   s.miniGlyphCount = validCount;
 
@@ -951,7 +967,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     LOG_ERR("SDCF", "Failed to allocate read order for style %u", styleIdx);
     delete[] mappings;
     freeStyleMiniData(s);
-    return static_cast<int>(cpCount);
+    return -1;
   }
   for (uint32_t i = 0; i < validCount; i++) readOrder[i] = i;
   std::sort(readOrder, readOrder + validCount,
@@ -963,7 +979,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     delete[] readOrder;
     delete[] mappings;
     freeStyleMiniData(s);
-    return static_cast<int>(cpCount);
+    return -1;
   }
 
   unsigned long sdStart = millis();
@@ -988,7 +1004,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         delete[] readOrder;
         delete[] mappings;
         freeStyleMiniData(s);
-        return static_cast<int>(cpCount);
+        return -1;
       }
       seekCount++;
     }
@@ -997,7 +1013,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       delete[] readOrder;
       delete[] mappings;
       freeStyleMiniData(s);
-      return static_cast<int>(cpCount);
+      return -1;
     }
     lastReadIndex = gIdx;
   }
@@ -1010,30 +1026,66 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       totalBitmapSize += s.miniGlyphs[i].dataLength;
     }
 
-    if (!ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, totalBitmapSize)) {
-      LOG_ERR("SDCF", "Failed to allocate mini bitmap (%u bytes) for style %u", totalBitmapSize, styleIdx);
-      delete[] readOrder;
-      delete[] mappings;
-      freeStyleMiniData(s);
-      return static_cast<int>(cpCount);
-    }
-    s.miniBitmapUsed = totalBitmapSize;  // underuse-hysteresis signal for resetStyleMiniData
-
     // Read bitmap data sorted by file offset
     std::sort(readOrder, readOrder + validCount,
               [&](uint32_t a, uint32_t b) { return s.miniGlyphs[a].dataOffset < s.miniGlyphs[b].dataOffset; });
 
-    uint32_t miniBitmapOffset = 0;
+    // Assemble the bitmap arena from on-demand 4 KB chunks (see MINI_BM_CHUNK_*).
+    // `span` is the running virtual offset into the arena; each glyph is placed
+    // wholly within one chunk, skipping past a boundary rather than straddling it.
+    // glyph.dataOffset becomes the virtual offset, decoded at render time by
+    // miniGlyphBitmap(). Chunks are allocated only as span reaches them, so a
+    // sparse page never allocates the full ceiling.
+    uint32_t span = 0;
     uint32_t lastBitmapEnd = UINT32_MAX;
     for (uint32_t i = 0; i < validCount; i++) {
       uint32_t mapIdx = readOrder[i];
       EpdGlyph& glyph = s.miniGlyphs[mapIdx];
+      const uint32_t len = glyph.dataLength;
 
-      if (glyph.dataLength == 0) {
-        glyph.dataOffset = miniBitmapOffset;
+      if (len == 0) {
+        glyph.dataOffset = span;
         continue;
       }
+      if (len > MINI_BM_CHUNK_SIZE) {
+        // A single glyph larger than one chunk cannot be placed. Real fonts never
+        // hit this (a 4 KB 2bpp glyph would be enormous); bail rather than corrupt.
+        LOG_ERR("SDCF", "Prewarm: glyph %u B exceeds chunk %u B (style %u)", len, MINI_BM_CHUNK_SIZE, styleIdx);
+        file.close();
+        delete[] readOrder;
+        delete[] mappings;
+        freeStyleMiniData(s);
+        return -1;
+      }
 
+      // Skip to the next chunk boundary if this glyph would straddle one.
+      const uint32_t within = span & (MINI_BM_CHUNK_SIZE - 1);
+      if (within != 0 && within + len > MINI_BM_CHUNK_SIZE) {
+        span += MINI_BM_CHUNK_SIZE - within;
+      }
+      const uint32_t chunkIdx = span >> MINI_BM_CHUNK_SHIFT;
+      if (chunkIdx >= MINI_BM_MAX_CHUNKS) {
+        LOG_ERR("SDCF", "Prewarm: mini bitmap needs > %u chunks (style %u)", MINI_BM_MAX_CHUNKS, styleIdx);
+        file.close();
+        delete[] readOrder;
+        delete[] mappings;
+        freeStyleMiniData(s);
+        return -1;
+      }
+      if (!s.miniBitmapChunks[chunkIdx]) {
+        s.miniBitmapChunks[chunkIdx] = new (std::nothrow) uint8_t[MINI_BM_CHUNK_SIZE];
+        if (!s.miniBitmapChunks[chunkIdx]) {
+          LOG_ERR("SDCF", "Failed to allocate mini bitmap chunk %u (style %u)", chunkIdx, styleIdx);
+          file.close();
+          delete[] readOrder;
+          delete[] mappings;
+          freeStyleMiniData(s);
+          return -1;
+        }
+        if (chunkIdx + 1 > s.miniBitmapChunkCount) s.miniBitmapChunkCount = chunkIdx + 1;
+      }
+
+      const uint32_t off = span & (MINI_BM_CHUNK_SIZE - 1);
       uint32_t fileOff = s.bitmapFileOffset + glyph.dataOffset;
       if (fileOff != lastBitmapEnd) {
         if (!file.seekSet(fileOff)) {
@@ -1042,22 +1094,25 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
           delete[] readOrder;
           delete[] mappings;
           freeStyleMiniData(s);
-          return static_cast<int>(cpCount);
+          return -1;
         }
         seekCount++;
       }
-      if (file.read(s.miniBitmap + miniBitmapOffset, glyph.dataLength) != static_cast<int>(glyph.dataLength)) {
+      if (file.read(s.miniBitmapChunks[chunkIdx] + off, len) != static_cast<int>(len)) {
         LOG_ERR("SDCF", "Prewarm: short bitmap read (style %u)", styleIdx);
         delete[] readOrder;
         delete[] mappings;
         freeStyleMiniData(s);
-        return static_cast<int>(cpCount);
+        return -1;
       }
-      lastBitmapEnd = fileOff + glyph.dataLength;
+      lastBitmapEnd = fileOff + len;
 
-      glyph.dataOffset = miniBitmapOffset;
-      miniBitmapOffset += glyph.dataLength;
+      glyph.dataOffset = span;
+      span += len;
     }
+    // Footprint including inter-chunk padding: the underuse-hysteresis signal.
+    s.miniBitmapUsed = span;
+    s.miniBitmapCapacity = s.miniBitmapChunkCount * MINI_BM_CHUNK_SIZE;
   }
 
   uint32_t sdTime = millis() - sdStart;
@@ -1069,8 +1124,11 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // per-page mini kern matrix restricted to class pairs reachable from this
   // page's codepoints. Skip during metadata-only prewarm — layout only needs
   // advanceX and the mini kern would be thrown away before rendering.
+  // withKernLig=false skips it outright: a caller that knows its text does not kern (the UI
+  // fallback is only ever reached by strings carrying CJK) pays neither the persistent class
+  // tables nor the per-page matrix, which together were the bulk of a UI prewarm's heap.
   bool kernLigOk = false;
-  if (!metadataOnly) {
+  if (!metadataOnly && withKernLig) {
     if (loadStyleKernLigatureData(s)) {
       kernLigOk = buildMiniKernMatrix(s, codepoints, cpCount);
     }
@@ -1080,7 +1138,10 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   s.miniMetadataOnly = metadataOnly;
   s.miniHysteresisPending = !metadataOnly;  // one hysteresis evaluation per rebuild
   memset(&s.miniData, 0, sizeof(s.miniData));
-  s.miniData.bitmap = s.miniBitmap;
+  // The mini bitmap is chunked (non-contiguous), so there is no single base
+  // pointer. Prewarmed SD glyphs are resolved via SdCardFont::miniGlyphBitmap()
+  // in the renderer; leave bitmap null so any stray &bitmap[dataOffset] faults.
+  s.miniData.bitmap = nullptr;
   s.miniData.glyph = s.miniGlyphs;
   s.miniData.intervals = s.miniIntervals;
   s.miniData.intervalCount = s.miniIntervalCount;
@@ -1118,6 +1179,18 @@ void SdCardFont::clearCache() {
     resetStyleMiniData(styles_[i]);
     applyGlyphMissCallback(i);
   }
+}
+
+void SdCardFont::releaseAllCaches() {
+  clearOverflow();
+  for (uint8_t i = 0; i < MAX_STYLES; i++) {
+    if (!styles_[i].present) continue;
+    // freeStyleMiniData, not resetStyleMiniData: the retention heuristic is exactly what has to be
+    // overridden here (see the header).
+    freeStyleMiniData(styles_[i]);
+    applyGlyphMissCallback(i);
+  }
+  clearPersistentCache();
 }
 
 // --- Advance table ---
@@ -1362,7 +1435,7 @@ int SdCardFont::buildAdvanceTable(const char* utf8Text, uint8_t styleMask, const
   return buildAdvanceTableRange(&utf8Text, &utf8Text + 1, false, false, styleMask, extraText);
 }
 
-int SdCardFont::buildAdvanceTable(const std::vector<std::string>& words, bool includeHyphen, uint8_t styleMask,
+int SdCardFont::buildAdvanceTable(const std::deque<std::string>& words, bool includeHyphen, uint8_t styleMask,
                                   const char* extraText) {
   return buildAdvanceTableRange(words.begin(), words.end(), words.size() > 1, includeHyphen, styleMask, extraText);
 }
@@ -1495,6 +1568,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   self->overflow_[slot].codepoint = codepoint;
   self->overflow_[slot].styleIdx = styleIdx;
 
+  self->overflowLoads_++;
   LOG_DBG("SDCF", "Overflow: loaded U+%04X style %u on demand (slot %u/%u)", codepoint, styleIdx, slot,
           OVERFLOW_CAPACITY);
 
@@ -1515,6 +1589,16 @@ const uint8_t* SdCardFont::getOverflowBitmap(const EpdGlyph* glyph) const {
     }
   }
   return nullptr;
+}
+
+const uint8_t* SdCardFont::miniGlyphBitmap(const void* ctx, uint32_t dataOffset) const {
+  const auto* octx = static_cast<const OverflowContext*>(ctx);
+  const PerStyle& s = styles_[octx->styleIdx];
+  const uint32_t chunkIdx = dataOffset >> MINI_BM_CHUNK_SHIFT;
+  if (chunkIdx >= s.miniBitmapChunkCount) return nullptr;
+  const uint8_t* chunk = s.miniBitmapChunks[chunkIdx];
+  if (!chunk) return nullptr;
+  return chunk + (dataOffset & (MINI_BM_CHUNK_SIZE - 1));
 }
 
 SdCardFont* SdCardFont::fromMissCtx(void* ctx) { return static_cast<OverflowContext*>(ctx)->self; }

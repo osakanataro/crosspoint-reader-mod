@@ -21,4 +21,10 @@ struct ReaderRenderSpec {
   bool embeddedStyle = true;
   uint8_t imageRendering = 0;
   bool focusReadingEnabled = false;
+  // Vertical writing (tategaki / vertical-rl). Settings supply verticalCharSpacing;
+  // isVertical is resolved per-book by the reader (writingMode setting + the EPUB's
+  // page-progression-direction/language) and written into the spec before layout,
+  // so switching a book between vertical and horizontal invalidates its section cache.
+  bool isVertical = false;
+  uint8_t verticalCharSpacing = 0;
 };

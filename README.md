@@ -39,6 +39,70 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
   - SDカード内のフォントを読んで描画することが問題だったらしく、HOME画面などの描画ルーチンに手を加えた
 
 
+## 2026/08/14までの実装内容まとめ by claude code
+
+作業を「日本語表示に固有の問題か、そうでないか」で分けて整理する。
+
+### 1. 縦書き表示（レイアウト・描画）
+
+すべて日本語（CJK）固有。本家に縦書きが無いため、このforkの主目的。
+
+- 縦書きレイアウトエンジン、キャッシュキーへの書字方向反映、spine の `page-progression-direction` 検出
+- 文字の向きは **UAX #50 準拠**で分類（ラテン語連続・括弧・長音符の回転、直立CJKのセル内配置）
+- 行メトリクスではなく **em セル基準**で字を配置。句読点（、。）を縦組み用の位置へ
+- 縦中横（`!?` `!!`、1桁数字のセル中央寄せ）
+- ルビ（親文字の右・桁方向・端揃え、ルビ同士の衝突回避、欧文ルビの横倒し、桁からのはみ出し抑制）
+- 数値の桁またぎ非分断、単語間スペースの保持
+
+向きの判断は場当たり対応ではなく `VerticalOrientation.txt` との差分で洗い出している。「フォントに縦組み字形が無い」は「回転しない」の根拠にならない（ラテンも vert 字形は無いが回転する）。
+
+未対応: 漢字ルビの可読性、BIZ UD系での桁ピッチ不足、行分割時のルビ配分、`50%` の `%` が数値から分離、縦書きの字間設定。
+
+### 2. 縦書き時の操作
+
+RTL部分は日本語固有ではない。アラビア語・ヘブライ語の横書きRTL本でも同じ論理が要る。
+
+- 本の `page-progression-direction` が rtl なら、文字が流れる向きに合わせてページ送りを反転
+- 前面ボタンは**画面回転の反転と合成**する（縦書き＋上下反転で相殺されるのが正しい）
+- 側面ボタンは `sideButtonLayout` 設定を**上書き**する（合成すると、手動で反転済みのユーザーが元の挙動に戻ってしまう）
+- タッチのタップゾーンも左右入れ替え。ただしX3はタッチ非搭載のため**実機検証ができず**、コードレビューのみで担保している
+
+### 3. SDカード上のフォント読み込みに起因する問題
+
+機構自体は日本語固有ではない。内蔵フォントが Latin/Greek/Cyrillic しか持たないため、**CJKを含む文字列だけがSDフォント経路に回る**。結果として日本語ユーザーだけが踏む。2026/08/13の作業はほぼこれ。
+
+| 症状 | 修正前 | 修正後 |
+|---|---|---|
+| ファイル一覧の描画 | 34秒 → 58秒 → クラッシュ | 542ms |
+| 章選択の描画 | 78秒 | 478ms |
+| リーダーメニューの描画 | 29.8秒 | 743ms |
+
+原因は4種類あった。
+
+**(a) warm するフォントと描画フォントの不一致**
+FreeInkUI化でUIのフォントスロットが1サイズ上がった（FUIの「小」= UI_10）のに、事前読み込み側が旧サイズを読んでいた。事前読み込みは成功を報告し、メモリ確保も失敗しないので、**「ただ遅い」という一番見つけにくい壊れ方**をする。対処として、どのフォントで読むかを「何が描くか」から決まる形にした。
+
+**(b) キャッシュの記録が実態とずれる**
+失敗した事前読み込みを「済み」と記録して以後永久にスキップしていた。また同一フォント・同一スタイルへの2回目の読み込みが1回目を捨てていた。
+
+**(c) ヒープ不足**
+- 連続した空き領域が取れず失敗（空き23KBでも最大8.6KBしか取れない）→ 本家の未マージブランチ `feat-chunk-bitmaps` の4KB分割確保を取り込み
+- 1画面の要求が35.8KBに達しヒープ枯渇 → `abort()` でクラッシュ → CJKはカーニングしないので、カーニング／合字テーブルをUIから除外
+- 本を開いたまま章選択を開くと空き13KB → リスト画面に入るとき、読書用フォントを含む全SDフォントのキャッシュを解放するようにした
+
+**(d) フォントの収録漏れ**（日本語固有）
+○数字（U+2460〜）が `cjk` プリセットにも `japanese_jis0213.txt`（Unihan由来＝漢字のみ）にも無く、二重に漏れていた。囲み英数字・囲みCJK・単位合字などを追加して再生成。ローマ数字は元から収録されていて無関係だった。
+
+### 4. それ以外（日本語と無関係）
+
+日本語表示を追う過程で見つかった、誰でも踏む一般的な不具合。
+
+- **可変行高と固定ピッチ計算のずれ** — FreeInkUIは折り返す行だけ背を高くするが、収まる行数は一律の行高で数える。結果「選択できるのに画面に出ない行」が生まれる。長いラベルなら言語を問わず発生する
+- **リストのページ送り** — FreeInkUI既定の1行ずつのスクロールをページ単位に戻した。E-Inkは1行動かしても全画面リフレッシュなので、1行送りに利点が無い
+- **診断機構** — シリアルコンソールが使えない端末なので、計測値をSDカードに書き出す（1描画あたりのオンデマンドグリフ数、ヒープ推移、事前読み込みの失敗回数、リストの帯の実測値）。原因特定はすべてこの数値で行った
+
+なお入力応答性の修正（低クロック時のボタン取りこぼし）は自前で持っていたが、本家 #2525 が同じ理由で同じAPIを実装したため撤回した。
+
 ## 以下 CrossPoint Reader 公式の記述
 
 CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
@@ -75,7 +139,7 @@ CrossPoint is open-source e-reader firmware - community-built, fully hackable, f
   - OPDS browser with saved servers (up to 8), search, pagination, and direct download
   - OTA update checks and installs from GitHub releases
 
-- **Customization**: multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes, front/side button remapping, status bar controls, power-button behavior, refresh cadence, and more.
+- **Customization**: multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes including transparent overlays, front/side button remapping, status bar controls, power-button behavior, refresh cadence, and more.
 
 - **Localization**: 24 UI languages and counting. RTL support.
 
@@ -175,7 +239,7 @@ Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` 
 - [Web server endpoints](./docs/webserver-endpoints.md)
 - [Project scope](./SCOPE.md)
 - [Contributing docs](./docs/contributing/README.md)
-- [Touch and UI development](./docs/contributing/touch-and-ui.md) - FreeInkUI components for new screens, the touch bridge for existing ones, and build envs for the non-Xteink touch devices
+- [Touch and UI development](./docs/contributing/touch-and-ui.md) - how to build new screens on the FreeInkUI activity bases (UiListActivity and friends), plus build envs for the non-Xteink touch devices
 
 ---
 

@@ -4,35 +4,14 @@
 #include <Preferences.h>
 #include <SPI.h>
 #include <Wire.h>
+#include <XteinkDetect.h>
 #include <esp_sleep.h>
+#include <soc/usb_serial_jtag_struct.h>
 
 // Global HalGPIO instance
 HalGPIO gpio;
 
 namespace X3GPIO {
-
-struct X3ProbeResult {
-  bool bq27220 = false;
-  bool ds3231 = false;
-  bool qmi8658 = false;
-
-  uint8_t score() const {
-    return static_cast<uint8_t>(bq27220) + static_cast<uint8_t>(ds3231) + static_cast<uint8_t>(qmi8658);
-  }
-};
-
-bool readI2CReg8(uint8_t addr, uint8_t reg, uint8_t* outValue) {
-  Wire.beginTransmission(addr);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) {
-    return false;
-  }
-  if (Wire.requestFrom(addr, static_cast<uint8_t>(1), static_cast<uint8_t>(true)) < 1) {
-    return false;
-  }
-  *outValue = Wire.read();
-  return true;
-}
 
 bool readI2CReg16LE(uint8_t addr, uint8_t reg, uint16_t* outValue) {
   Wire.beginTransmission(addr);
@@ -59,58 +38,6 @@ bool readBQ27220CurrentMA(int16_t* outCurrent) {
   }
   *outCurrent = static_cast<int16_t>(raw);
   return true;
-}
-
-bool probeBQ27220Signature() {
-  uint16_t soc = 0;
-  uint16_t voltageMv = 0;
-  if (!readI2CReg16LE(I2C_ADDR_BQ27220, BQ27220_SOC_REG, &soc)) {
-    return false;
-  }
-  if (soc > 100) {
-    return false;
-  }
-  if (!readI2CReg16LE(I2C_ADDR_BQ27220, BQ27220_VOLT_REG, &voltageMv)) {
-    return false;
-  }
-  return voltageMv >= 2500 && voltageMv <= 5000;
-}
-
-bool probeDS3231Signature() {
-  uint8_t sec = 0;
-  if (!readI2CReg8(I2C_ADDR_DS3231, DS3231_SEC_REG, &sec)) {
-    return false;
-  }
-  const uint8_t tensDigit = (sec >> 4) & 0x07;
-  const uint8_t onesDigit = sec & 0x0F;
-
-  return tensDigit <= 5 && onesDigit <= 9;
-}
-
-bool probeQMI8658Signature() {
-  uint8_t whoami = 0;
-  if (readI2CReg8(I2C_ADDR_QMI8658, QMI8658_WHO_AM_I_REG, &whoami) && whoami == QMI8658_WHO_AM_I_VALUE) {
-    return true;
-  }
-  if (readI2CReg8(I2C_ADDR_QMI8658_ALT, QMI8658_WHO_AM_I_REG, &whoami) && whoami == QMI8658_WHO_AM_I_VALUE) {
-    return true;
-  }
-  return false;
-}
-
-X3ProbeResult runX3ProbePass() {
-  X3ProbeResult result;
-  Wire.begin(X3_I2C_SDA, X3_I2C_SCL, X3_I2C_FREQ);
-  Wire.setTimeOut(6);
-
-  result.bq27220 = probeBQ27220Signature();
-  result.ds3231 = probeDS3231Signature();
-  result.qmi8658 = probeQMI8658Signature();
-
-  Wire.end();
-  pinMode(20, INPUT);
-  pinMode(0, INPUT);
-  return result;
 }
 
 }  // namespace X3GPIO
@@ -163,24 +90,19 @@ HalGPIO::DeviceType detectDeviceTypeWithFingerprint() {
     return nvsToDeviceType(cachedValue);
   }
 
-  // No cache yet: run active X3 fingerprint probe and persist result.
-  const X3GPIO::X3ProbeResult pass1 = X3GPIO::runX3ProbePass();
-  delay(2);
-  const X3GPIO::X3ProbeResult pass2 = X3GPIO::runX3ProbePass();
+  // No cache yet: use FreeInk's canonical two-pass X3 fingerprint and persist
+  // only confirmed results. Inconclusive probes deliberately remain uncached.
+  uint8_t score1 = 0;
+  uint8_t score2 = 0;
+  const freeink::XteinkVerdict verdict = freeink::detectXteinkVerdict(&score1, &score2);
+  LOG_INF("HW", "Xteink probe scores: pass1=%u pass2=%u verdict=%u", score1, score2, static_cast<unsigned>(verdict));
 
-  const uint8_t score1 = pass1.score();
-  const uint8_t score2 = pass2.score();
-  LOG_INF("HW", "X3 probe scores: pass1=%u(bq=%d rtc=%d imu=%d) pass2=%u(bq=%d rtc=%d imu=%d)", score1, pass1.bq27220,
-          pass1.ds3231, pass1.qmi8658, score2, pass2.bq27220, pass2.ds3231, pass2.qmi8658);
-  const bool x3Confirmed = (score1 >= 2) && (score2 >= 2);
-  const bool x4Confirmed = (score1 == 0) && (score2 == 0);
-
-  if (x3Confirmed) {
+  if (verdict == freeink::XteinkVerdict::X3Confirmed) {
     writeNvsDeviceValue(NVS_KEY_DEV_CACHED, NvsDeviceValue::X3);
     return HalGPIO::DeviceType::X3;
   }
 
-  if (x4Confirmed) {
+  if (verdict == freeink::XteinkVerdict::X4Confirmed) {
     writeNvsDeviceValue(NVS_KEY_DEV_CACHED, NvsDeviceValue::X4);
     return HalGPIO::DeviceType::X4;
   }
@@ -193,10 +115,19 @@ HalGPIO::DeviceType detectDeviceTypeWithFingerprint() {
 
 void HalGPIO::begin() {
 #if FREEINK_MCU_C3
-  SPI.begin(EPD_SCLK, SPI_MISO, EPD_MOSI, EPD_CS);
-
   _deviceType = detectDeviceTypeWithFingerprint();
   BoardConfig::selectDevice(deviceIsX3() ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
+
+  // Resolve the per-batch controller before SPI owns the display pins. FreeInk
+  // checks the OEM hw_calib/screenType value first, then falls back to its
+  // two-pass display-bus probe. X3's facade keys panel selection off the sibling
+  // board profile, so preserve a detected UC8279 through setDisplayX3().
+  freeink::applyXteinkDisplayController();
+  if (deviceIsX3() && BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8279) {
+    BoardConfig::selectDevice(BoardConfig::Board::XteinkX3Uc8279);
+  }
+
+  SPI.begin(EPD_SCLK, SPI_MISO, EPD_MOSI, EPD_CS);
 
   if (deviceIsX4()) {
     pinMode(BAT_GPIO0, INPUT);
@@ -210,9 +141,42 @@ void HalGPIO::begin() {
 
 void HalGPIO::update() {
   inputMgr.update();
-  const bool connected = isUsbConnected();
+  updateUsbState(millis());
+}
+
+void HalGPIO::updateUsbState(const unsigned long now) {
+  // SOF-based host-link sampling (see the member comment). A cheap register
+  // read, so it runs at its own short cadence on both devices and is never
+  // behind the I2C throttle below — a fresh enumeration must cancel light
+  // sleep within a poll or two, or the next slice kills the CDC link again.
+  if (sofLastSampleMs == 0 || now - sofLastSampleMs >= SOF_SAMPLE_MS) {
+    const auto sof = static_cast<uint16_t>(USB_SERIAL_JTAG.fram_num.sof_frame_index);
+    usbSofActive = (sof != lastSofFrameIndex);
+    lastSofFrameIndex = sof;
+    sofLastSampleMs = now;
+  }
+
+  // Throttle the X3's I2C-based USB detection; see USB_POLL_X3_MS. First call
+  // (usbLastPollMs == 0) always polls so boot state is correct. The combined
+  // verdict below is still recomputed every call so a SOF-detected attach is
+  // not held back by the throttle window.
+  if (usbLastPollMs == 0 || !deviceIsX3() || now - usbLastPollMs >= USB_POLL_X3_MS) {
+    usbLastPollMs = now;
+    usbElectricalConnected = isUsbElectricalConnected();
+  }
+  const bool connected = usbSofActive || usbElectricalConnected;
   usbStateChanged = (connected != lastUsbConnected);
   lastUsbConnected = connected;
+}
+
+void HalGPIO::pollUsbState() {
+  // Wait out the SOF sample floor so the comparison sees a real frame delta:
+  // two reads inside one USB frame compare equal and read as "no host".
+  const unsigned long elapsed = millis() - sofLastSampleMs;
+  if (sofLastSampleMs != 0 && elapsed < SOF_SAMPLE_MS) {
+    delay(SOF_SAMPLE_MS - elapsed);
+  }
+  updateUsbState(millis());
 }
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
@@ -227,6 +191,8 @@ bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleas
 
 bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
 
+bool HalGPIO::isDebouncePending() const { return inputMgr.isDebouncePending(); }
+
 unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
 
 unsigned long HalGPIO::getPowerButtonHeldTime() const { return inputMgr.getPowerButtonHeldTime(); }
@@ -237,11 +203,17 @@ bool HalGPIO::wasTouchTap(float& nx, float& ny) const { return inputMgr.wasTouch
 
 bool HalGPIO::wasTouchDown(float& nx, float& ny) const { return inputMgr.wasTouchPressedAt(nx, ny); }
 
+bool HalGPIO::wasTouchReleased() const { return inputMgr.wasTouchReleased(); }
+
 bool HalGPIO::isTouchTapCandidate(float& nx, float& ny, unsigned long& heldMs) const {
   return inputMgr.isTouchTapCandidate(nx, ny, heldMs);
 }
 
 bool HalGPIO::isTouchHeldAt(float& nx, float& ny) const { return inputMgr.isTouchHeldAt(nx, ny); }
+
+bool HalGPIO::wasTouchLongPress(float& nx, float& ny) const { return inputMgr.wasTouchLongPress(nx, ny); }
+
+void HalGPIO::suppressTouchContact() { inputMgr.suppressTouchContact(); }
 
 unsigned long HalGPIO::lastTouchHeldMs() const { return inputMgr.lastTouchHeldMs(); }
 
@@ -255,8 +227,14 @@ void HalGPIO::setSharedConfirmPowerShortPressEmitsPower(const bool enabled) {
   InputManager::setSharedConfirmPowerShortPressEmitsPower(enabled);
 }
 
+bool HalGPIO::hasEdgeSideButtons() const {
+  return BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX3 ||
+         BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4Pro;
+}
+
 bool HalGPIO::isXteinkDevice() const {
   return BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX3 ||
+         BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX3Uc8279 ||
          BoardConfig::ACTIVE.board == BoardConfig::Board::XteinkX4;
 }
 
@@ -302,9 +280,16 @@ bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
 }
 
 bool HalGPIO::isUsbConnected() const {
+  // Recent SOF activity means an enumerated host regardless of what the
+  // electrical check says (false at boot until update() has sampled twice).
+  return usbSofActive || isUsbElectricalConnected();
+}
+
+bool HalGPIO::isUsbElectricalConnected() const {
   if (deviceIsX3()) {
     // X3: infer USB/charging via BQ27220 Current() register (0x0C, signed mA).
-    // Positive current means charging.
+    // Positive current means charging. Misses a data-only cable and a full
+    // battery — the SOF check in update() covers those.
     for (uint8_t attempt = 0; attempt < 2; ++attempt) {
       int16_t currentMa = 0;
       if (X3GPIO::readBQ27220CurrentMA(&currentMa)) {

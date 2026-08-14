@@ -15,6 +15,7 @@ class FontCacheManager;
 class SdCardFont;
 
 #include <cstring>
+#include <deque>
 #include <map>
 #include <string>
 #include <vector>
@@ -56,6 +57,7 @@ class GfxRenderer {
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
 
   // Mutable because drawText() is const but needs to delegate scan-mode
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
@@ -73,6 +75,9 @@ class GfxRenderer {
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+  // Extra spacing between cells in vertical (tategaki) layout, as a percent of the
+  // cell advance. Set from the reader spec before a vertical section is laid out.
+  int _verticalCharSpacing = 0;
 
   // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
   // size-matched SD-card font id that carries CJK glyphs. When a string drawn
@@ -107,11 +112,6 @@ class GfxRenderer {
       : display(halDisplay), renderMode(BW), orientation(Portrait), fadingFix(false) {}
   ~GfxRenderer() { freeBwBufferChunks(); }
 
-  static constexpr int VIEWABLE_MARGIN_TOP = 9;
-  static constexpr int VIEWABLE_MARGIN_RIGHT = 3;
-  static constexpr int VIEWABLE_MARGIN_BOTTOM = 3;
-  static constexpr int VIEWABLE_MARGIN_LEFT = 3;
-
   // Setup
   void begin();  // must be called right after display.begin()
   void insertFont(int fontId, EpdFontFamily font);
@@ -121,14 +121,83 @@ class GfxRenderer {
   void removeFont(int fontId) {
     fontMap.erase(fontId);
     sdCardFonts_.erase(fontId);
+    sdCardFontScales_.erase(fontId);
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   bool isFontCacheScanning() const;
+
+  // Load the glyphs `text` needs before any drawing starts.
+  //
+  // Resolves the fallback first, which is the whole point of routing this through the renderer
+  // instead of calling FontCacheManager::prewarmCache() directly: a CJK string nominally drawn with
+  // a built-in UI font is rendered by the SD fallback registered for that font (setFallbackFont /
+  // resolveTextFontId), and prewarming the primary id would warm a font that has no such glyphs,
+  // leaving every CJK glyph to the on-demand path.
+  //
+  // That path is SdCardFont's 8-entry overflow ring: a seek and a read per glyph, in draw order,
+  // which is scattered order in the file. Prewarming instead sorts by glyph index and reads in a
+  // single forward pass. On a screen carrying more distinct CJK glyphs than the ring holds -- any
+  // Japanese menu -- the difference is seconds per repaint.
+  //
+  // styleMask is a bitmask of (1 << EpdFontFamily::Style), matching
+  // FontCacheManager::prewarmCache().
+  //
+  // Returns false when the text is still on the on-demand path afterwards, so a caller that skips
+  // repeat work for text it believes it already warmed can tell that belief from a fact.
+  //
+  // withKernLig=false drops the kerning and ligature tables from what gets loaded. Text that
+  // reaches an SD fallback font is CJK-bearing by construction (resolveTextFontId only routes it
+  // there for glyphs the primary cannot render), and CJK does not kern, so a UI caller pays for
+  // tables nothing consults -- most of the heap one prewarm asked for, on a device where that ask
+  // is what aborts an allocation elsewhere.
+  bool prewarmText(int fontId, const char* text, uint8_t styleMask = 0x01, bool withKernLig = true) const;
+
+  // Bumped whenever any registered SD-card font drops its prewarmed glyph data. Below
+  // SdCardFont's retention floor -- and free heap sits under it while a book is open -- a
+  // successful prewarm is released again as soon as the scope that built it ends, so this is what
+  // separates "warmed once" from "still warm".
+  uint32_t glyphCacheGeneration() const;
+
+  // Glyphs the registered SD-card fonts have read one at a time since boot, because the prewarm did
+  // not cover them. Measured per render, this separates "the prewarm is not landing" from "the
+  // drawing itself is slow" without needing the log ring to still hold the evidence.
+  uint32_t glyphOnDemandLoads() const;
+
+  // Drop the glyph caches held by the registered UI fallback fonts.
+  //
+  // What prewarmText loads stays resident until something drops it, and on this device that is not
+  // free: the glyph bitmaps for a screenful of CJK are tens of KB that the next allocation does not
+  // get. A section build needs one contiguous block for ZIP inflate, so a screen that warmed itself
+  // and then left the caches behind can starve the reader outright.
+  //
+  // Only the fallback fonts, never the reader's own: those are warmed per page by the reader's
+  // PrewarmScope and clearing them here would make it re-read the page it is about to draw.
+  void releaseFallbackGlyphCaches() const;
+
+  // The same, for every registered SD-card font rather than the UI fallbacks alone -- including the
+  // reading-size font, which no other path frees.
+  //
+  // For a screen that opens over the reader: the reader stays alive underneath with its glyph
+  // arenas, kern tables and advance tables resident, and none of that is drawn while the screen is
+  // up. Measured on an X3, a chapter list opened over an open book had 13 KB free and 9 KB as its
+  // largest run against a prewarm that wanted 26 KB, so the warm failed and the render read 5640
+  // glyphs one at a time -- 78 s. The reader rebuilds what it needs on its next render (~400 ms).
+  void releaseAllSdGlyphCaches() const;
+
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
-  void clearSdCardFonts() { sdCardFonts_.clear(); }
+  void clearSdCardFonts() {
+    sdCardFonts_.clear();
+    sdCardFontScales_.clear();
+  }
+  void registerSdCardFontScale(int fontId, uint16_t scale) { sdCardFontScales_[fontId] = scale; }
+  void clearSdCardFontScales() { sdCardFontScales_.clear(); }
+  uint16_t getSdCardFontScale(int fontId) const {
+    auto it = sdCardFontScales_.find(fontId);
+    return (it != sdCardFontScales_.end()) ? it->second : 256;
+  }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
   // Register/clear size-matched CJK UI fallbacks (see fallbackFontMap_).
@@ -139,7 +208,7 @@ class GfxRenderer {
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).
   void ensureSdCardFontReady(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F) const;
-  void ensureSdCardFontReady(int fontId, const std::vector<std::string>& words, bool includeHyphen,
+  void ensureSdCardFontReady(int fontId, const std::deque<std::string>& words, bool includeHyphen,
                              uint8_t styleMask = 0x0F) const;
 
   // Orientation control (affects logical width/height and coordinate transforms)
@@ -217,6 +286,9 @@ class GfxRenderer {
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
                   float cropY = 0) const;
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;
+  // Counter-invert content images in the logical framebuffer so output-level
+  // dark mode leaves their original polarity unchanged.
+  void preserveImagePolarity(int x, int y, int width, int height) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
 
   // Snapshot / restore a screen-coordinate framebuffer region (byte-aligned in
@@ -246,8 +318,12 @@ class GfxRenderer {
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
+  /// Negative, matching the font data. ascender - descender is the line box height.
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
   int getLineHeight(int fontId, float compression) const;
+  void setVerticalCharSpacing(int spacingPercent) { _verticalCharSpacing = spacingPercent; }
+  int getVerticalCharSpacing() const { return _verticalCharSpacing; }
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   /// Word-wrap \p text into at most \p maxLines lines, each no wider than
@@ -259,6 +335,12 @@ class GfxRenderer {
   // Helper for drawing rotated text (90 degrees clockwise, for side buttons)
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+
+  // Latin runs inside vertical Japanese text: glyphs turn clockwise and the run
+  // advances downward from (x, y), which is the top-left of the column cell.
+  // `cellWidth` is the full-width character cell; the rotated line box is centred on it.
+  void drawTextSideways(int fontId, int x, int y, const char* text, int cellWidth, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

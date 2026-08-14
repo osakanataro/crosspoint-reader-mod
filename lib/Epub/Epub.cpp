@@ -127,6 +127,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   }
 
   bookMetadata.textReferenceHref = opfParser.textReferenceHref;
+  bookMetadata.pageProgressionRtl = opfParser.pageProgressionRtl;
 
   if (!opfParser.tocNcxPath.empty()) {
     tocNcxItem = opfParser.tocNcxPath;
@@ -555,6 +556,13 @@ const std::string& Epub::getLanguage() const {
   return bookMetadataCache->coreMetadata.language;
 }
 
+bool Epub::isPageProgressionRtl() const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
+    return false;
+  }
+  return bookMetadataCache->coreMetadata.pageProgressionRtl;
+}
+
 std::string Epub::getCoverBmpPath(bool cropped) const {
   const auto coverFileName = std::string("cover") + (cropped ? "_crop" : "");
   return cachePath + "/" + coverFileName + ".bmp";
@@ -802,7 +810,12 @@ int Epub::getSpineItemsCount() const {
   return bookMetadataCache->getSpineCount();
 }
 
-size_t Epub::getCumulativeSpineItemSize(const int spineIndex) const { return getSpineItem(spineIndex).cumulativeSize; }
+size_t Epub::getCumulativeSpineItemSize(const int spineIndex) const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
+    return 0;
+  }
+  return bookMetadataCache->getCumulativeSize(spineIndex);
+}
 
 BookMetadataCache::SpineEntry Epub::getSpineItem(const int spineIndex) const {
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {

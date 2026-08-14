@@ -9,6 +9,7 @@
 #include <Utf8.h>
 #include <Xtc.h>
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/UiGlyphPrewarm.h"
 
 int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Recents, File transfer, Settings
@@ -230,21 +232,23 @@ void HomeActivity::loop() {
     return;
   }
 
-  int tx = 0;
-  int ty = 0;
-  if (!recentBooks.empty() && mappedInput.wasScreenTouchDown(tx, ty) && tx >= 0 && tx < renderer.getScreenWidth() &&
-      ty >= metrics.homeTopPadding && ty < metrics.homeTopPadding + metrics.homeCoverTileHeight) {
-    if (selectorIndex != 0) {
-      selectorIndex = 0;
-      requestUpdate();
+  const int coverColumnCount = std::max(1, metrics.homeRecentBooksCount);
+  const int recentCount = std::min(static_cast<int>(recentBooks.size()), coverColumnCount);
+  const int coverColumnWidth = (renderer.getScreenWidth() - 2 * metrics.contentSidePadding) / coverColumnCount;
+  int touchedBook = -1;
+  const auto coverTouch = mappedInput.colTouch(touchedBook, metrics.contentSidePadding, coverColumnWidth, recentCount,
+                                               metrics.homeTopPadding,
+                                               metrics.homeTopPadding + metrics.homeCoverTileHeight, coverColumnWidth);
+  if (coverTouch != MappedInputManager::RowTouch::None) {
+    if (coverTouch == MappedInputManager::RowTouch::Down) {
+      if (selectorIndex != touchedBook) {
+        selectorIndex = touchedBook;
+        requestUpdate();
+      }
+    } else {
+      selectorIndex = touchedBook;
+      activateSelection();
     }
-    return;
-  }
-
-  if (!recentBooks.empty() &&
-      mappedInput.wasTapInRect(0, metrics.homeTopPadding, renderer.getScreenWidth(), metrics.homeCoverTileHeight)) {
-    selectorIndex = 0;
-    activateSelection();
     return;
   }
 
@@ -254,8 +258,11 @@ void HomeActivity::loop() {
   const int renderedMenuCount =
       menuCount - (metrics.homeContinueReadingInMenu ? 0 : static_cast<int>(recentBooks.size()));
   int menuRow = -1;
-  const auto menuTouch = mappedInput.rowTouch(menuRow, menuTop, metrics.menuRowHeight + metrics.menuSpacing,
-                                              renderedMenuCount, 0, INT32_MAX, metrics.menuRowHeight);
+  // Row height from the theme, not the metrics table: RoundedRaff draws
+  // font-derived rows and the touch grid must match the visuals exactly.
+  const int menuRowHeight = GUI.getMenuRowHeight(renderer);
+  const auto menuTouch = mappedInput.rowTouch(menuRow, menuTop, menuRowHeight + metrics.menuSpacing, renderedMenuCount,
+                                              0, INT32_MAX, menuRowHeight);
   if (menuTouch != MappedInputManager::RowTouch::None) {
     const int touchedIndex =
         metrics.homeContinueReadingInMenu ? menuRow : menuRow + static_cast<int>(recentBooks.size());
@@ -276,28 +283,33 @@ void HomeActivity::loop() {
   }
 }
 
+void HomeActivity::prewarmUiGlyphs(const std::vector<const char*>& menuItems,
+                                   const MappedInputManager::Labels& labels) const {
+  UiGlyphPrewarm warm;
+  for (const char* item : menuItems) {
+    warm.add(UiGlyphPrewarm::Role::ThemeBody, item);
+  }
+  for (const char* label : {labels.btn1, labels.btn2, labels.btn3, labels.btn4}) {
+    warm.add(UiGlyphPrewarm::Role::ThemeBody, label);
+  }
+  // Every recent book, not just the selected one: the header, the cover tile and the menu's
+  // "continue reading" row each show a different book depending on theme and selection. Titles go
+  // to the header size because that is where the header and the cover tile draw them; the menu row
+  // that also shows one is the exception, and paying a slow path for that single row is cheaper
+  // than loading every title into both sizes.
+  for (const auto& book : recentBooks) {
+    warm.add(UiGlyphPrewarm::Role::Header, book.title);
+    // The author draws at the themes' fixed body size, not their small one: both BaseTheme and
+    // LyraTheme put the cover tile's author line in UI_10.
+    warm.add(UiGlyphPrewarm::Role::ThemeBody, book.author);
+  }
+  warm.apply(renderer);
+}
+
 void HomeActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-
-  renderer.clearScreen();
-  bool bufferRestored = coverBufferStored && restoreCoverBuffer();
-
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding},
-                 metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str() : nullptr);
-
-  // Record the tile rect so storeCoverBuffer (called from the theme) knows
-  // which sub-region of the framebuffer to snapshot. ~16 KB in Portrait
-  // instead of the 48 KB full framebuffer the previous bind captured.
-  coverRectX = 0;
-  coverRectY = metrics.homeTopPadding;
-  coverRectW = pageWidth;
-  coverRectH = metrics.homeCoverTileHeight;
-
-  GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
-                          recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
-                          std::bind(&HomeActivity::storeCoverBuffer, this));
 
   // Build menu items dynamically
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
@@ -315,6 +327,32 @@ void HomeActivity::render(RenderLock&&) {
     menuIcons.insert(menuIcons.begin(), Book);
   }
 
+  const auto labels = mappedInput.mapLabels(recentBooks.empty() ? "" : tr(STR_RESUME), tr(STR_SELECT), tr(STR_DIR_UP),
+                                            tr(STR_DIR_DOWN));
+
+  prewarmUiGlyphs(menuItems, labels);
+
+  renderer.clearScreen();
+  bool bufferRestored = coverBufferStored && restoreCoverBuffer();
+
+  // Band spans topPadding..homeTopPadding: the cover tile starts at the fixed
+  // homeTopPadding, so the height must shrink by topPadding or the band (and a
+  // centered title, e.g. RoundedRaff's book title) sinks into the tile.
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.homeTopPadding - metrics.topPadding},
+                 metrics.homeContinueReadingInMenu && !recentBooks.empty() ? recentBooks[0].title.c_str() : nullptr);
+
+  // Record the tile rect so storeCoverBuffer (called from the theme) knows
+  // which sub-region of the framebuffer to snapshot. ~16 KB in Portrait
+  // instead of the 48 KB full framebuffer the previous bind captured.
+  coverRectX = 0;
+  coverRectY = metrics.homeTopPadding;
+  coverRectW = pageWidth;
+  coverRectH = metrics.homeCoverTileHeight;
+
+  GUI.drawRecentBookCover(renderer, Rect{0, metrics.homeTopPadding, pageWidth, metrics.homeCoverTileHeight},
+                          recentBooks, selectorIndex, coverRendered, coverBufferStored, bufferRestored,
+                          std::bind(&HomeActivity::storeCoverBuffer, this));
+
   GUI.drawButtonMenu(
       renderer,
       Rect{0, metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset, pageWidth,
@@ -325,8 +363,6 @@ void HomeActivity::render(RenderLock&&) {
       [&menuItems](int index) { return std::string(menuItems[index]); },
       [&menuIcons](int index) { return menuIcons[index]; });
 
-  const auto labels = mappedInput.mapLabels(recentBooks.empty() ? "" : tr(STR_RESUME), tr(STR_SELECT), tr(STR_DIR_UP),
-                                            tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
