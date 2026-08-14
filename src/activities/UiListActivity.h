@@ -101,6 +101,22 @@ class UiListActivity : public Activity, protected UiAppHost {
   // Move the selection to index and pull the viewport to it.
   void moveSelectionTo(int index);
 
+  // Page the viewport rather than scrolling it a row at a time, for the row the
+  // selection sits on. Call from the screen build, after the viewport sync has
+  // measured visibleRows.
+  //
+  // FreeInkUI pulls the viewport the minimal amount to keep the selection in
+  // view, so past the last visible row every button press shifts the window by
+  // one and the whole screenful of text changes. Each of those is a fresh glyph
+  // prewarm: measured on an X3, a file list costs 518 ms standing still and
+  // 850-890 ms per step scrolling that way. Paging pays that once per screenful.
+  // It is also what these lists did before the FreeInkUI conversion, and an
+  // e-ink panel repaints in full either way, so moving a single row buys nothing.
+  //
+  // Touch boards keep the smooth behaviour: a swipe there is a scroll, not a
+  // page turn, and they are not the ones reading glyphs off a card.
+  void snapViewportToPage(int rowIndex);
+
   // --- shared state ----------------------------------------------------------
   // Selection + viewport (selected/top/visibleRows/followOnBuild). Access via
   // activeNav() in shared code; `nav` is the single-list default storage.

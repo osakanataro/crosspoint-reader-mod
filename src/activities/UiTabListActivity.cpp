@@ -50,6 +50,10 @@ void UiTabListActivity::moveRingTo(const int ringIndex) {
   n.selected = ringIndex;
   if (ringIndex == 0) {
     n.top = 0;
+  } else if (!mappedInput.hasTouch()) {
+    // Same reason as UiListActivity::moveSelectionTo: the prewarm reads the
+    // viewport before the build decides it.
+    snapViewportToPage(ringIndex - 1);
   } else {
     // Pull the viewport to the row (ring - 1); ListNav::follow reads
     // n.selected as a row index, so compute directly here.
@@ -94,6 +98,9 @@ void UiTabListActivity::syncTabListViewport(UiScreen& screen, fui::ListProps& pr
                            : 0;
   }
   n.scrollBy(0, count);  // clamp to range
+  // Ring position 0 is the tab bar, which is not a row: leave the window where
+  // it is until the selection is back down in the list.
+  if (n.selected > 0) snapViewportToPage(n.selected - 1);
   props.topIndex = static_cast<uint16_t>(n.top);
   props.selectedIndex = static_cast<int16_t>(n.selected - 1);  // -1 = tab band focused
 }

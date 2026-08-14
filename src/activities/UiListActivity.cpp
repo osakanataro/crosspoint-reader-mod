@@ -131,6 +131,11 @@ void UiListActivity::moveSelectionTo(const int index) {
   auto& n = activeNav();
   n.selected = index;
   n.follow(listCount());
+  // Page here, not only in the build: the frame's glyph prewarm reads the
+  // viewport before buildScreen runs, so a window decided later would be warmed
+  // as the old page and drawn as the new one -- the whole screenful on the
+  // on-demand path, on exactly the frame that turns the page.
+  snapViewportToPage(index);
   requestUpdate();
 }
 
@@ -164,6 +169,30 @@ void UiListActivity::navigateButtons() {
       [this, count, &n] { moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, count, n.visibleRows)); });
 }
 
+void UiListActivity::snapViewportToPage(const int rowIndex) {
+  if (mappedInput.hasTouch()) return;
+
+  auto& n = activeNav();
+  const int rows = n.visibleRows > 0 ? n.visibleRows : 1;
+  const int count = listCount();
+  if (count <= rows) {
+    n.top = 0;
+    return;
+  }
+  // Already on this page: leave the window alone, so moving the selection
+  // inside it draws the same text and the prewarm skips on its hash.
+  if (rowIndex >= n.top && rowIndex < n.top + rows) return;
+
+  int top = (rowIndex / rows) * rows;
+  // The last page is short: clamp it the way Screen::list clamps its own top,
+  // or the viewport the navigation believes in stops matching what was drawn --
+  // the mismatch this file spent a day chasing in another form.
+  const int maxTop = count - rows;
+  if (top > maxTop) top = maxTop;
+  if (top < 0) top = 0;
+  n.top = top;
+}
+
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle) {
   int16_t rowHeight = screen.theme().rowHeight;
   if (!mappedInput.hasTouch()) {
@@ -178,6 +207,8 @@ void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, c
   }
   const fui::Rect band = screen.body();
   activeNav().syncToProps(band, rowHeight, screen.theme().listRowGap, listCount(), props);
+  snapViewportToPage(activeNav().selected);
+  props.topIndex = static_cast<uint16_t>(activeNav().top);
   // No-op unless built with INPUT_DIAG. The same arithmetic decides what the list draws and what
   // the selection treats as on screen, so a band taller than the panel shows up as rows that can
   // be selected but never seen.
