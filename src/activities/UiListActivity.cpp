@@ -130,8 +130,13 @@ bool UiListActivity::routeListTouch() {
 void UiListActivity::moveSelectionTo(const int index) {
   auto& n = activeNav();
   n.selected = index;
-  n.follow(listCount());
-  // Page here, not only in the build: the frame's glyph prewarm reads the
+  // No ListNav::follow() first: it pulls the viewport the minimal amount to put
+  // the selection back in view, and snapViewportToPage() then sees a selection
+  // that is already on screen and leaves the window alone -- so the paging never
+  // fired and every press still scrolled by a row. Snapping does both halves,
+  // holding the window while the selection moves inside it.
+  //
+  // Here rather than only in the build: the frame's glyph prewarm reads the
   // viewport before buildScreen runs, so a window decided later would be warmed
   // as the old page and drawn as the new one -- the whole screenful on the
   // on-demand path, on exactly the frame that turns the page.
