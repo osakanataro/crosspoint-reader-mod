@@ -216,11 +216,15 @@ void UiGlyphPrewarm::apply(const GfxRenderer& renderer) const {
   // Read after the warms: building one arena can be what pushes the heap under the retention floor
   // that drops another, and that release has to invalidate this record, not be recorded into it.
   appliedGeneration = renderer.glyphCacheGeneration();
+  // Everything this frame draws is loaded, so the per-string batching in drawText/getTextWidth
+  // must stand down: rebuilding the arena around one string would drop the rest.
+  renderer.setFrameGlyphWarm(true);
   InputDiag::noteUiPrewarmEnd();
 }
 
 void UiGlyphPrewarm::release(const GfxRenderer& renderer) {
   renderer.releaseFallbackGlyphCaches();
+  renderer.setFrameGlyphWarm(false);
   // The glyphs are gone, so the next apply() must run whatever it is handed.
   appliedCount = 0;
   appliedGeneration = renderer.glyphCacheGeneration();

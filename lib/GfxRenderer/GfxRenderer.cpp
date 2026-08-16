@@ -295,8 +295,15 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
   return fontId;
 }
 
+void GfxRenderer::setFrameGlyphWarm(const bool active) const { frameGlyphWarmActive_ = active; }
+
 void GfxRenderer::ensureSdGlyphsResident(const int fontId, const char* text, const EpdFontFamily::Style style,
                                          const bool metadataOnly) const {
+  // The frame already holds every string it draws; warming one of them here would rebuild the
+  // arena around it and drop the rest.
+  if (frameGlyphWarmActive_) {
+    return;
+  }
   const auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt == sdCardFonts_.end()) {
     return;

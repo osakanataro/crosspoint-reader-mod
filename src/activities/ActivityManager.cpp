@@ -102,6 +102,9 @@ void ActivityManager::renderTaskLoop() {
       // resolving the output polarity here, per render, means menus, popups,
       // and every other activity revert to normal automatically.
       display.setInverted(SETTINGS.screenInverted != 0 && currentActivity->appliesNightMode());
+      // Activities that warm their own frame set this again from UiGlyphPrewarm::apply(); the ones
+      // that do not get the per-string batching instead.
+      renderer.setFrameGlyphWarm(false);
       currentActivity->render(std::move(lock));
 #ifdef INPUT_DIAG
       const unsigned long renderDurationMs = millis() - renderStart;

@@ -87,6 +87,10 @@ class GfxRenderer {
   // app-level SD font setup when an SD family is loaded. See resolveTextFontId().
   std::map<int, int> fallbackFontMap_;
 
+  // Set for the duration of a frame whose activity loaded its own glyphs. Mutable because the
+  // draw calls that read it are const, as is the prewarm that sets it.
+  mutable bool frameGlyphWarmActive_ = false;
+
   // If `text` contains a CJK codepoint that `fontId` cannot render and `fontId`
   // has a registered fallback, returns the fallback id; otherwise returns
   // fontId unchanged. The whole string is routed as a unit so each draw/measure
@@ -101,7 +105,7 @@ class GfxRenderer {
   // open + seek + read per glyph, per redraw, through an 8-slot overflow ring
   // (#2725). One prewarm per string costs a single file open; re-measuring or
   // re-drawing resident glyphs is a RAM-only subset check. No-op for built-in
-  // fonts.
+  // fonts, and for a frame that warmed its own glyphs (see setFrameGlyphWarm).
   void ensureSdGlyphsResident(int fontId, const char* text, EpdFontFamily::Style style, bool metadataOnly) const;
 
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
@@ -181,6 +185,18 @@ class GfxRenderer {
   // which is otherwise a slowdown with no number attached to it.
   uint32_t glyphMiniRebuilds() const;
   uint32_t glyphMiniRebuildMs() const;
+
+  // Declares that this frame has already loaded the glyphs it is about to draw, so the per-string
+  // batching in drawText/getTextWidth stands down for the rest of it.
+  //
+  // The two cover the same gap by opposite means and must not both run. A frame warm loads every
+  // string at once and leaves the arena covering all of them; a per-string warm rebuilds the arena
+  // around one string, dropping the others, so the next string is never covered and rebuilds in
+  // turn. Measured on a file browser page of Japanese names: 38 rebuilds per render, 1.5 s of the
+  // 2.0 s that render took, against 0.47 s for the same screen with the frame warm alone.
+  //
+  // Cleared before every render, so a screen that warms nothing still gets the batching.
+  void setFrameGlyphWarm(bool active) const;
 
   // Drop the glyph caches held by the registered UI fallback fonts.
   //
