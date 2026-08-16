@@ -33,6 +33,8 @@
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
+#include "util/ClockFace.h"
+#include "util/ClockMode.h"
 #include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
 
@@ -187,6 +189,45 @@ static bool loadSleepFrameBuffer() {
   return true;
 }
 
+// Sleep from clock mode. Deliberately not enterDeepSleep(): that one saves
+// APP_STATE, runs the outgoing activity's onExit and paints a sleep screen, none
+// of which exists on a timer wake -- there is no SD card mounted and no activity
+// stack to unwind. The face already on the panel is the sleep screen.
+[[noreturn]] void enterClockSleep() {
+  halTiltSensor.deepSleep();
+  display.deepSleep();
+  powerManager.startDeepSleep(gpio, ClockMode::UPDATE_INTERVAL_SECONDS);
+  while (true) {
+  }  // startDeepSleep does not return
+}
+
+// Draw the clock face for the current time and sleep until the next update.
+// Shared by the timer wake and by the menu entry that starts clock mode.
+[[noreturn]] void showClockAndSleep() {
+  Rtc::DateTime now;
+  if (halClock.getLocalDateTime(now, ClockMode::utcOffsetQuarterHoursBiased())) {
+    ClockFace::render(renderer, now);
+  } else {
+    // No usable time: leave whatever is on the glass rather than painting a
+    // wrong one, and try again next wake. An RTC that never comes back leaves
+    // the power button as the way out, same as always.
+    LOG_ERR("MAIN", "Clock mode: RTC unavailable, skipping redraw");
+  }
+  enterClockSleep();
+}
+
+namespace ClockMode {
+void enterClockMode(const uint8_t utcOffsetQuarterHoursBiased) {
+  HalPowerManager::Lock powerLock;  // normal CPU frequency while preparing to sleep
+  // Last write to the card before the mode takes over: every wake from here is
+  // a timer wake that never mounts it.
+  APP_STATE.showBootScreen = false;
+  APP_STATE.saveToFile();
+  activate(utcOffsetQuarterHoursBiased);
+  showClockAndSleep();
+}
+}  // namespace ClockMode
+
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
@@ -311,6 +352,26 @@ void setup() {
       [](int8_t busyPin, uint8_t busyLevel) { return powerManager.onEinkBusyWaitSlice(busyPin, busyLevel); });
 
   LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
+
+  // Clock mode, before the SD card is touched. A timer wake redraws the face and
+  // sleeps again: no card, no settings, no fonts, no activity stack -- the whole
+  // point of the mode is that a wake costs the panel refresh and nothing else.
+  // The offset it renders in rode along in RTC memory for the same reason.
+  //
+  // Any other wake reason is the user asking for the device back, so clock mode
+  // ends here and boot continues normally. That makes the power button the way
+  // out, and a flat battery too: RTC_NOINIT does not survive losing power.
+  if (ClockMode::isActive()) {
+    if (gpio.getWakeupReason() == HalGPIO::WakeupReason::TimerUpdate) {
+      // seamless: the panel is holding last minute's face, so skip the bring-up
+      // resync and let ClockFace's own full refresh be the only one.
+      display.begin(/*seamless=*/true);
+      renderer.begin();
+      showClockAndSleep();
+    }
+    LOG_DBG("MAIN", "Clock mode released (wake was not the update timer)");
+    ClockMode::clear();
+  }
 
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter

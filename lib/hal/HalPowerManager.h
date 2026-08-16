@@ -72,7 +72,17 @@ class HalPowerManager {
 
   // Setup wake up GPIO and enter deep sleep
   // Should be called inside main loop() to handle the currentLockMode
-  void startDeepSleep(HalGPIO& gpio) const;
+  // timerWakeSeconds > 0 also arms a deep-sleep timer, so the device comes back
+  // on its own without a button. Clock mode uses it; everything else passes 0
+  // and wakes only on the power button.
+  //
+  // Whether the timer can fire at all on the Xteink C3 boards is a hardware
+  // question this code cannot answer: the sleep path drives GPIO13 low, which
+  // BoardConfig documents as the SD-rail switch and HalPowerManager as the
+  // battery MOSFET. If it is the latter the chip loses power and no timer
+  // survives. getWakeupReason() treating ESP_RST_DEEPSLEEP as a normal wake
+  // says the RTC domain does survive, but that is inference, not measurement.
+  void startDeepSleep(HalGPIO& gpio, uint32_t timerWakeSeconds = 0) const;
 
   // Light-sleep the CPU for LIGHT_SLEEP_SLICE_MS (timer wake; buttons are polled on
   // wake at the same cadence as the delay() this replaces). Returns false WITHOUT

@@ -27,6 +27,17 @@ class HalClock {
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;
 
+  // Current date and time with the UTC offset applied, seconds included.
+  //
+  // Separate from getTime() because that one caches only hour and minute, and
+  // because a date has to roll the calendar: an offset can move the day, and
+  // with it the month and year. Reads the RTC on every call -- the caller is
+  // the clock face, which runs about once a minute.
+  //
+  // utcOffsetQuarterHoursBiased: as formatTime(), 48 = UTC+0.
+  // Returns false if the RTC is absent or reports its time unreliable.
+  bool getLocalDateTime(Rtc::DateTime& out, uint8_t utcOffsetQuarterHoursBiased = 48) const;
+
   // Format time into a caller-provided buffer.
   // 24h mode produces "HH:MM" (needs >=6 bytes); 12h mode produces "H:MM AM"/"HH:MM PM" (needs >=9 bytes).
   // utcOffsetQuarterHoursBiased: biased quarter-hour offset (48 = UTC+0, 0 = UTC-12, 104 = UTC+14).
