@@ -66,6 +66,14 @@ uint32_t renderCount = 0;
 constexpr uint8_t RENDER_MAX_NAME_LEN = 16;
 char renderMaxName[RENDER_MAX_NAME_LEN] = {};
 
+// Mini-arena rebuilds, last render and worst render. The on-demand counter stays at zero when a
+// caller warms one string at a time, because a rebuild reads into the arena rather than the
+// overflow ring; these are what show it.
+uint32_t miniRebuildsLast = 0;
+uint32_t miniRebuildsMax = 0;
+uint32_t miniRebuildMsTotal = 0;
+char miniRebuildsMaxName[RENDER_MAX_NAME_LEN] = {};
+
 // Ring of the most recent renders, so the report shows the shape over time rather than one maximum
 // with no context. Names are truncated rather than pointed at: the activity that produced a render
 // is deleted on navigation, so keeping the pointer would dangle by the time flush() reads it.
@@ -74,6 +82,10 @@ constexpr uint8_t RENDER_NAME_LEN = 12;
 struct RenderEntry {
   char name[RENDER_NAME_LEN];
   uint32_t ms;
+  // Mini-arena rebuilds during this render. Sits beside the duration because that is the only
+  // pairing that separates a render that is slow from a render that rebuilt the glyph arena once
+  // per string it drew -- the two look identical in every other figure here.
+  uint16_t miniRebuilds;
   // Free heap and the largest run available at the end of this render, in KB. Two numbers because
   // they answer different questions: free falling and never recovering is something not being given
   // back, while free holding steady as the largest run shrinks is fragmentation. The prewarm
@@ -179,7 +191,8 @@ void InputDiag::noteUiPrewarmEnd() {
   uiPrewarmHeapAtBegin = 0;
 }
 
-void InputDiag::noteRender(const char* activityName, const unsigned long durationMs, const uint32_t onDemandGlyphs) {
+void InputDiag::noteRender(const char* activityName, const unsigned long durationMs, const uint32_t onDemandGlyphs,
+                           const uint32_t miniRebuilds, const uint32_t miniRebuildMs) {
   renderLastMs = static_cast<uint32_t>(durationMs);
   if (renderLastMs > renderMaxMs) {
     renderMaxMs = renderLastMs;
@@ -193,9 +206,17 @@ void InputDiag::noteRender(const char* activityName, const unsigned long duratio
     snprintf(onDemandGlyphsMaxName, sizeof(onDemandGlyphsMaxName), "%s", activityName ? activityName : "?");
   }
 
+  miniRebuildsLast = miniRebuilds;
+  miniRebuildMsTotal += miniRebuildMs;
+  if (miniRebuilds > miniRebuildsMax) {
+    miniRebuildsMax = miniRebuilds;
+    snprintf(miniRebuildsMaxName, sizeof(miniRebuildsMaxName), "%s", activityName ? activityName : "?");
+  }
+
   RenderEntry& entry = renderLog[renderLogNext];
   snprintf(entry.name, sizeof(entry.name), "%s", activityName ? activityName : "?");
   entry.ms = renderLastMs;
+  entry.miniRebuilds = static_cast<uint16_t>(miniRebuilds > 0xFFFF ? 0xFFFF : miniRebuilds);
   const uint32_t heapNow = ESP.getFreeHeap();
   entry.heapFreeKb = static_cast<uint16_t>(heapNow / 1024);
   entry.heapMaxAllocKb = static_cast<uint16_t>(ESP.getMaxAllocHeap() / 1024);
@@ -277,45 +298,46 @@ void InputDiag::flush(const bool inputActive) {
   }
   lastFlushAt = now;
 
-  int len =
-      snprintf(reportBuf, sizeof(reportBuf),
-               "uptime_ms=%lu\n"
-               "cpu_mhz_now=%u\n"
-               "cpu_mhz_min=%u\n"
-               "poll_gap_max_fullspeed_ms=%u\n"
-               "poll_gap_max_lowpower_ms=%u\n"
-               "samples_lowpower=%u\n"
-               "debounce_episodes=%u\n"
-               "committed_edges=%u\n"
-               "render_last_ms=%u\n"
-               "render_max_ms=%u (%s)\n"
-               "render_count=%u\n"
-               "heap_free=%u\n"
-               "heap_min_free=%u\n"
-               "heap_max_alloc=%u\n"
-               "page_prewarm_ms=%u (max %u)\n"
-               "page_draw_ms=%u (max %u)\n"
-               "page_display_ms=%u (max %u)\n"
-               "page_blocks_ms=%u\n"
-               "page_statusbar_ms=%u\n"
-               "vert_body_ms=%u cells=%u\n"
-               "vert_ruby_measure_ms=%u\n"
-               "vert_ruby_draw_ms=%u groups=%u\n"
-               "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
-               "build_total_max_ms=%u spine=%d chunks=%d\n"
-               "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
-               "glyph_ondemand_last=%u max=%u (%s)\n"
-               "ui_prewarm_heap_max=%d\n"
-               "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
-               now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower,
-               debounceEpisodes, committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount,
-               ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs,
-               pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs, pageRenderDisplayMs,
-               pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells, vertRubyMeasureMs,
-               vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex, buildChunkMaxPageBefore,
-               buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex, buildTotalMaxChunkCount,
-               uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName,
-               uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
+  int len = snprintf(
+      reportBuf, sizeof(reportBuf),
+      "uptime_ms=%lu\n"
+      "cpu_mhz_now=%u\n"
+      "cpu_mhz_min=%u\n"
+      "poll_gap_max_fullspeed_ms=%u\n"
+      "poll_gap_max_lowpower_ms=%u\n"
+      "samples_lowpower=%u\n"
+      "debounce_episodes=%u\n"
+      "committed_edges=%u\n"
+      "render_last_ms=%u\n"
+      "render_max_ms=%u (%s)\n"
+      "render_count=%u\n"
+      "heap_free=%u\n"
+      "heap_min_free=%u\n"
+      "heap_max_alloc=%u\n"
+      "page_prewarm_ms=%u (max %u)\n"
+      "page_draw_ms=%u (max %u)\n"
+      "page_display_ms=%u (max %u)\n"
+      "page_blocks_ms=%u\n"
+      "page_statusbar_ms=%u\n"
+      "vert_body_ms=%u cells=%u\n"
+      "vert_ruby_measure_ms=%u\n"
+      "vert_ruby_draw_ms=%u groups=%u\n"
+      "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
+      "build_total_max_ms=%u spine=%d chunks=%d\n"
+      "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
+      "glyph_ondemand_last=%u max=%u (%s)\n"
+      "glyph_rebuild_last=%u max=%u (%s) total_ms=%u\n"
+      "ui_prewarm_heap_max=%d\n"
+      "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
+      now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower, debounceEpisodes,
+      committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount, ESP.getFreeHeap(), ESP.getMinFreeHeap(),
+      ESP.getMaxAllocHeap(), pageRenderPrewarmMs, pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs,
+      pageRenderDisplayMs, pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells,
+      vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
+      buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
+      buildTotalMaxChunkCount, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax,
+      onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal,
+      uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
@@ -325,8 +347,8 @@ void InputDiag::flush(const bool inputActive) {
   for (uint8_t i = 0; i < RENDER_LOG_SIZE && static_cast<size_t>(len) < sizeof(reportBuf); i++) {
     const RenderEntry& entry = renderLog[(renderLogNext + i) % RENDER_LOG_SIZE];
     if (entry.name[0] == '\0') continue;  // ring not full yet
-    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u@%u/%u%+d ", entry.name, entry.ms, entry.heapFreeKb,
-                    entry.heapMaxAllocKb, entry.heapDeltaKb);
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u@%u/%u%+d r%u ", entry.name, entry.ms,
+                    entry.heapFreeKb, entry.heapMaxAllocKb, entry.heapDeltaKb, entry.miniRebuilds);
   }
   if (static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
@@ -334,7 +356,7 @@ void InputDiag::flush(const bool inputActive) {
 
   len += snprintf(reportBuf + len, sizeof(reportBuf) - len,
                   "\n\n"
-                  "# render_log entries are name:ms@freeKB/maxAllocKB+consumedKB, oldest first.\n"
+                  "# render_log entries are name:ms@freeKB/maxAllocKB+consumedKB rRebuilds, oldest first.\n"
                   "# poll_gap_* is the interval between button samples. A press shorter than\n"
                   "# the gap in force at the time cannot be committed at all.\n"
                   "# One clean press = 2 episodes (down, up) and 2 edges. episodes well above\n"

@@ -893,6 +893,16 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     }
   }
 
+  // Past the resident-subset check, so everything below is a rebuild. Counted and timed on the
+  // way out because no other figure records one: the reads go straight into the arena rather
+  // than the overflow ring, and the buffers are reused rather than dropped.
+  struct RebuildTimer {
+    SdCardFont& self;
+    unsigned long startMs;
+    ~RebuildTimer() { self.miniRebuildMs_ += static_cast<uint32_t>(millis() - startMs); }
+  } rebuildTimer{*this, millis()};
+  miniRebuilds_++;
+
   // Map codepoints to global glyph indices for this style
   struct CpGlyphMapping {
     uint32_t codepoint;

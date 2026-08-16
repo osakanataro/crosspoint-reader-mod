@@ -65,6 +65,15 @@ class SdCardFont {
   // released again the moment the scope that built it ends.
   uint32_t miniGeneration() const { return miniGeneration_; }
 
+  // Times prewarmStyle() found the resident mini data insufficient and rebuilt it, and the
+  // milliseconds those rebuilds took. A rebuild reads glyphs straight into the arena, so it
+  // does not touch overflowLoads(), and it reuses the existing buffers where they fit, so it
+  // does not touch miniGeneration() or the heap figures either. Without this, a caller warming
+  // one string at a time -- each rebuild discarding the last string's glyphs -- costs a card
+  // read per string per repaint and shows up in no number but the duration.
+  uint32_t miniRebuilds() const { return miniRebuilds_; }
+  uint32_t miniRebuildMs() const { return miniRebuildMs_; }
+
   // Build a compact advance-only table for layout measurement.
   // Extracts ALL unique codepoints from words (no MAX_PAGE_GLYPHS cap),
   // batch-reads advanceX from SD, stores in a sorted per-style table.
@@ -327,6 +336,8 @@ class SdCardFont {
   uint32_t contentHash_ = 0;
   uint32_t miniGeneration_ = 0;
   uint32_t overflowLoads_ = 0;
+  uint32_t miniRebuilds_ = 0;
+  uint32_t miniRebuildMs_ = 0;
   bool loaded_ = false;
 
   // Per-style helpers

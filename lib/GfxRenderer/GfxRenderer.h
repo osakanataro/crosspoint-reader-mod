@@ -175,6 +175,13 @@ class GfxRenderer {
   // drawing itself is slow" without needing the log ring to still hold the evidence.
   uint32_t glyphOnDemandLoads() const;
 
+  // Mini-arena rebuilds across the registered SD-card fonts, and the milliseconds they took.
+  // The companion to glyphOnDemandLoads(): a warm that covers the text leaves both at zero, while
+  // a caller warming one string at a time leaves on-demand at zero and drives these instead,
+  // which is otherwise a slowdown with no number attached to it.
+  uint32_t glyphMiniRebuilds() const;
+  uint32_t glyphMiniRebuildMs() const;
+
   // Drop the glyph caches held by the registered UI fallback fonts.
   //
   // What prewarmText loads stays resident until something drops it, and on this device that is not

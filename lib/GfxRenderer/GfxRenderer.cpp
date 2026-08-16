@@ -214,6 +214,24 @@ uint32_t GfxRenderer::glyphOnDemandLoads() const {
   return loads;
 }
 
+uint32_t GfxRenderer::glyphMiniRebuilds() const {
+  uint32_t rebuilds = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) rebuilds += font->miniRebuilds();
+  }
+  return rebuilds;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuildMs() const {
+  uint32_t ms = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) ms += font->miniRebuildMs();
+  }
+  return ms;
+}
+
 uint32_t GfxRenderer::glyphCacheGeneration() const {
   uint32_t generation = 0;
   for (const auto& [fontId, font] : sdCardFonts_) {

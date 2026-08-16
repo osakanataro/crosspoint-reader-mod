@@ -37,7 +37,12 @@ class InputDiag {
 
   // onDemandGlyphs: glyphs this render had to read one at a time because the prewarm did not
   // cover them. A prewarm naming the wrong font reports success and shows up only here.
-  static void noteRender(const char* activityName, unsigned long durationMs, uint32_t onDemandGlyphs);
+  // miniRebuilds/miniRebuildMs: times this render found the resident glyph arena insufficient and
+  // rebuilt it, and how long that took. Zero on-demand glyphs with a rebuild count climbing per
+  // render is a caller warming one string at a time, which no other figure here distinguishes from
+  // drawing that is simply slow.
+  static void noteRender(const char* activityName, unsigned long durationMs, uint32_t onDemandGlyphs,
+                         uint32_t miniRebuilds, uint32_t miniRebuildMs);
 
   // The band the last list screen handed FreeInkUI, the row pitch it drew at, and the row count
   // that fits by that arithmetic. A row laid out below the glass is still selectable, so the
@@ -103,7 +108,7 @@ class InputDiag {
  public:
   static void sample(unsigned long, bool, bool) {}
   static void noteRenderStart() {}
-  static void noteRender(const char*, unsigned long, uint32_t) {}
+  static void noteRender(const char*, unsigned long, uint32_t, uint32_t, uint32_t) {}
   static void noteListBand(int, int, int, int, int) {}
   static void noteUiPrewarmBegin() {}
   static void noteUiPrewarmEnd() {}
