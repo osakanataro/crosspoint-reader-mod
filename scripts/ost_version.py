@@ -20,6 +20,7 @@ cannot be confused on the card.
 
 import datetime
 import os
+import shlex
 import shutil
 import sys
 
@@ -61,25 +62,48 @@ def next_version(project_dir):
     return f'{today}{seq:02d}'
 
 
+def _flag_sets_input_diag(text):
+    return text == '-DINPUT_DIAG' or text.startswith('-DINPUT_DIAG=')
+
+
 def has_input_diag(env):
     """True when this build carries INPUT_DIAG.
 
-    Checked in both places it can appear. A pre: script runs before PlatformIO has
-    finished folding build_flags into CPPDEFINES, so a -D from platformio.local.ini
-    is still only in the raw flag list at this point -- reading CPPDEFINES alone
-    reported a diagnostic build as a plain one, which is exactly the mix-up on the
-    SD card this naming exists to prevent.
+    Every route the flag can arrive by is checked, because a diagnostic image
+    named as a plain one is the mix-up this suffix exists to prevent, and the
+    cost of it lands on the device: an SD write and a repro cycle against
+    firmware that is not what it says it is.
+
+    The routes differ in when they become visible. A pre: script runs before
+    PlatformIO has folded build_flags into CPPDEFINES, so a -D from
+    platformio.ini or platformio.local.ini is still only in the raw flag list;
+    PLATFORMIO_BUILD_FLAGS reaches the compiler without passing through either
+    at that point, and is only readable from the environment. Called again from
+    the post action, CPPDEFINES has everything -- main() ORs the two, so a route
+    that misses one is still caught by the other.
     """
     for define in env.get('CPPDEFINES', []):
         name = define[0] if isinstance(define, (list, tuple)) else define
         if str(name) == 'INPUT_DIAG':
             return True
 
-    flags = env.get('BUILD_FLAGS', []) or []
-    for flag in flags:
-        text = str(flag)
-        if text == '-DINPUT_DIAG' or text.startswith('-DINPUT_DIAG='):
+    for flag in env.get('BUILD_FLAGS', []) or []:
+        if _flag_sets_input_diag(str(flag)):
             return True
+
+    for var in ('PLATFORMIO_BUILD_FLAGS', 'PLATFORMIO_BUILD_SRC_FLAGS'):
+        raw = os.environ.get(var)
+        if not raw:
+            continue
+        try:
+            flags = shlex.split(raw)
+        except ValueError:
+            # Unbalanced quotes: fall back to whitespace splitting rather than
+            # reporting a diagnostic build as plain.
+            flags = raw.split()
+        if any(_flag_sets_input_diag(f) for f in flags):
+            return True
+
     return False
 
 
@@ -97,16 +121,17 @@ def copy_to_dist(project_dir, version, suffix, source):
 def main(env):
     project_dir = env.subst('$PROJECT_DIR')
     version = next_version(project_dir)
-    suffix = '-diag' if has_input_diag(env) else ''
+    diag_at_pre = has_input_diag(env)
 
     env.Append(CPPDEFINES=[('OST_VERSION', f'\\"{version}\\"')])
 
-    env.AddPostAction(
-        '$BUILD_DIR/${PROGNAME}.bin',
-        lambda target, source, env: copy_to_dist(
-            project_dir, version, suffix, str(target[0])
-        ),
-    )
+    def post_action(target, source, env):
+        # Re-check against the fully folded environment and keep whichever pass
+        # saw the flag: the name has to be wrong in the safe direction.
+        suffix = '-diag' if (diag_at_pre or has_input_diag(env)) else ''
+        copy_to_dist(project_dir, version, suffix, str(target[0]))
+
+    env.AddPostAction('$BUILD_DIR/${PROGNAME}.bin', post_action)
 
 
 # PlatformIO/SCons entry point — Import and env are SCons builtins injected at runtime.
