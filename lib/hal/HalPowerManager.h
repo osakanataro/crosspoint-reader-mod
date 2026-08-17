@@ -108,6 +108,12 @@ class HalPowerManager {
   // Get battery percentage (range 0-100)
   uint16_t getBatteryPercentage() const;
 
+  // Pack voltage in millivolts, straight from the gauge with no caching or
+  // smoothing. Percentage moves in whole points and can sit still for a long
+  // time; millivolts is what makes a drain measurable over an hour rather than
+  // a day. 0 when the board has no gauge.
+  uint16_t getBatteryMillivolts() const;
+
   // RAII helper class to manage power saving locks
   // Usage: create an instance of Lock in a scope to disable power saving, for example when running a task that needs
   // full performance. When the Lock instance is destroyed (goes out of scope), power saving will be re-enabled.
