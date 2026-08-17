@@ -539,15 +539,23 @@ void loop() {
   }
 
   // Check for any user activity (button press or release) or active background work
-  static unsigned long lastActivityTime = millis();
+  // Two clocks, because "do not sleep the device" and "the user is still doing
+  // things" are different claims. An activity that holds off auto-sleep can be
+  // idle for hours -- the clock is -- and it should still downclock and
+  // light-sleep between frames like any other idle screen.
+  static unsigned long lastActivityTime = millis();  // gates the auto-sleep timeout
+  static unsigned long lastInputTime = millis();     // gates downclocking and light sleep
   const bool userActivity =
       gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity();
+  if (userActivity) {
+    lastInputTime = millis();
+  }
   if (userActivity || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();  // Reset inactivity timer
   }
-  // Separate from the timer above: an activity can need to stay awake without
-  // needing the clock speed. needsFullSpeed() defaults to preventAutoSleep(), so
-  // everything that held the CPU up before still does.
+  // Separate again: an activity can need to stay awake without needing the clock
+  // speed. needsFullSpeed() defaults to preventAutoSleep(), so everything that
+  // held the CPU up before still does.
   if (userActivity || activityManager.needsFullSpeed()) {
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency
   }
@@ -651,7 +659,7 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    const unsigned long idleMs = millis() - lastActivityTime;
+    const unsigned long idleMs = millis() - lastInputTime;
     if (idleMs >= HalPowerManager::IDLE_LIGHT_SLEEP_MS) {
       // Idle: light-sleep between input polls instead of busy-delaying (same poll cadence).
       // Race-to-sleep: run the brief wake windows at normal clock, not LOW_POWER_FREQ.
