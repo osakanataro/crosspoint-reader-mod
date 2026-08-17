@@ -20,7 +20,6 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/ClockMode.h"
 #include "util/UiGlyphPrewarm.h"
 
 int HomeActivity::getMenuItemCount() const {
@@ -392,4 +391,4 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
 
-void HomeActivity::onClockModeStart() { ClockMode::enterClockMode(SETTINGS.clockUtcOffsetQ); }
+void HomeActivity::onClockModeStart() { activityManager.goToClock(); }

@@ -88,6 +88,7 @@ class ActivityManager {
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
   void goToSettings();
+  void goToClock();
   void goToFileBrowser(std::string path = {});
   void goToRecentBooks();
   void goToBrowser();
@@ -106,6 +107,7 @@ class ActivityManager {
   void popActivity();
 
   bool preventAutoSleep() const;
+  bool needsFullSpeed() const;
   bool isReaderActivity() const;
   bool handleForcedRefresh();
   bool skipLoopDelay() const;

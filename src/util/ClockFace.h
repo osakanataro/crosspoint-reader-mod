@@ -18,13 +18,8 @@ namespace ClockFace {
 // bits), so they are laid out in the panel's native orientation and the caller
 // does not get to choose.
 //
-// `now` is null when the RTC could not be read; the date and time are then left
-// off and only the wake count is drawn. Painting anyway is deliberate: a face
-// that never changes cannot say whether the update timer fired, and the count
-// is the only thing that separates "never woke" from "woke and had no time to
-// show".
-//
-// wakeCount is drawn small in the corner. See ClockMode::wakeCount().
-void render(const GfxRenderer& renderer, const Rtc::DateTime* now, uint32_t wakeCount);
+// `now` is null when the RTC could not be read; the face is then blank rather
+// than showing a time that is not the time.
+void render(const GfxRenderer& renderer, const Rtc::DateTime* now);
 
 }  // namespace ClockFace

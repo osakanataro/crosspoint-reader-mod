@@ -43,6 +43,12 @@ class Activity {
 
   virtual bool skipLoopDelay() { return false; }
   virtual bool preventAutoSleep() { return false; }
+  // Whether the main loop should hold the CPU at full speed for this activity.
+  // Defaults to preventAutoSleep() because that is what holding off auto-sleep
+  // used to imply: an activity kept awake for network or transfer work needs the
+  // clock too. One that is awake only to own the panel -- the clock -- overrides
+  // this to false and idles at the low-power frequency between repaints.
+  virtual bool needsFullSpeed() { return preventAutoSleep(); }
   virtual bool isReaderActivity() const { return false; }
   // True for the reading surfaces night mode inverts (EPUB/TXT/XTC). Resolved
   // per render by ActivityManager, so menus, overlays, and every other screen

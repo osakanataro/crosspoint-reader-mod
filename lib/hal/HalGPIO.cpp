@@ -311,11 +311,6 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
 
   const bool usbConnected = isUsbConnected();
 
-  // Checked before the button cases: clock mode arms both sources, and only the
-  // cause separates a scheduled redraw from the user pressing power to get out.
-  if (resetReason == ESP_RST_DEEPSLEEP && wakeupCause == ESP_SLEEP_WAKEUP_TIMER) {
-    return WakeupReason::TimerUpdate;
-  }
   if (resetReason == ESP_RST_DEEPSLEEP &&
       (wakeupCause == ESP_SLEEP_WAKEUP_GPIO || wakeupCause == ESP_SLEEP_WAKEUP_EXT1)) {
     return WakeupReason::PowerButton;

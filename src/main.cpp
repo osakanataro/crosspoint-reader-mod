@@ -33,8 +33,6 @@
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
-#include "util/ClockFace.h"
-#include "util/ClockMode.h"
 #include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
 
@@ -189,44 +187,6 @@ static bool loadSleepFrameBuffer() {
   return true;
 }
 
-// Sleep from clock mode. Deliberately not enterDeepSleep(): that one saves
-// APP_STATE, runs the outgoing activity's onExit and paints a sleep screen, none
-// of which exists on a timer wake -- there is no SD card mounted and no activity
-// stack to unwind. The face already on the panel is the sleep screen.
-[[noreturn]] void enterClockSleep() {
-  halTiltSensor.deepSleep();
-  display.deepSleep();
-  powerManager.startDeepSleep(gpio, ClockMode::UPDATE_INTERVAL_SECONDS);
-  while (true) {
-  }  // startDeepSleep does not return
-}
-
-// Draw the clock face for the current time and sleep until the next update.
-// Shared by the timer wake and by the menu entry that starts clock mode.
-[[noreturn]] void showClockAndSleep() {
-  Rtc::DateTime now;
-  const bool haveTime = halClock.getLocalDateTime(now, ClockMode::utcOffsetQuarterHoursBiased());
-  if (!haveTime) {
-    LOG_ERR("MAIN", "Clock mode: RTC unavailable");
-  }
-  // Painted either way, so the wake count on the face keeps moving: a clock that
-  // stops has to be able to say whether the timer stopped or the RTC did.
-  ClockFace::render(renderer, haveTime ? &now : nullptr, ClockMode::wakeCount());
-  enterClockSleep();
-}
-
-namespace ClockMode {
-void enterClockMode(const uint8_t utcOffsetQuarterHoursBiased) {
-  HalPowerManager::Lock powerLock;  // normal CPU frequency while preparing to sleep
-  // Last write to the card before the mode takes over: every wake from here is
-  // a timer wake that never mounts it.
-  APP_STATE.showBootScreen = false;
-  APP_STATE.saveToFile();
-  activate(utcOffsetQuarterHoursBiased);
-  showClockAndSleep();
-}
-}  // namespace ClockMode
-
 // Enter deep sleep mode
 void enterDeepSleep(bool fromTimeout = false) {
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
@@ -351,27 +311,6 @@ void setup() {
       [](int8_t busyPin, uint8_t busyLevel) { return powerManager.onEinkBusyWaitSlice(busyPin, busyLevel); });
 
   LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
-
-  // Clock mode, before the SD card is touched. A timer wake redraws the face and
-  // sleeps again: no card, no settings, no fonts, no activity stack -- the whole
-  // point of the mode is that a wake costs the panel refresh and nothing else.
-  // The offset it renders in rode along in RTC memory for the same reason.
-  //
-  // Any other wake reason is the user asking for the device back, so clock mode
-  // ends here and boot continues normally. That makes the power button the way
-  // out, and a flat battery too: RTC_NOINIT does not survive losing power.
-  if (ClockMode::isActive()) {
-    if (gpio.getWakeupReason() == HalGPIO::WakeupReason::TimerUpdate) {
-      ClockMode::noteWake();
-      // seamless: the panel is holding last minute's face, so skip the bring-up
-      // resync and let ClockFace's own full refresh be the only one.
-      display.begin(/*seamless=*/true);
-      renderer.begin();
-      showClockAndSleep();
-    }
-    LOG_DBG("MAIN", "Clock mode released (wake was not the update timer)");
-    ClockMode::clear();
-  }
 
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter
@@ -601,10 +540,16 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
-      activityManager.preventAutoSleep()) {
-    lastActivityTime = millis();         // Reset inactivity timer
-    powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
+  const bool userActivity =
+      gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity();
+  if (userActivity || activityManager.preventAutoSleep()) {
+    lastActivityTime = millis();  // Reset inactivity timer
+  }
+  // Separate from the timer above: an activity can need to stay awake without
+  // needing the clock speed. needsFullSpeed() defaults to preventAutoSleep(), so
+  // everything that held the CPU up before still does.
+  if (userActivity || activityManager.needsFullSpeed()) {
+    powerManager.setPowerSaving(false);  // Restore normal CPU frequency
   }
 
   // Let wake continue as soon as its hold has been verified. The release can

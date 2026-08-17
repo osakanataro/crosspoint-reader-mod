@@ -23,6 +23,7 @@
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
+#include "util/ClockActivity.h"
 #include "util/FullScreenMessageActivity.h"
 #include "util/InputDiag.h"
 
@@ -285,6 +286,9 @@ void ActivityManager::goToFileTransfer() {
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
+// Pushed, not replaced: Back leaves the clock and lands back on Home.
+void ActivityManager::goToClock() { pushActivity(std::make_unique<ClockActivity>(renderer, mappedInput)); }
+
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
 }
@@ -359,6 +363,8 @@ void ActivityManager::popActivity() {
 }
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
+
+bool ActivityManager::needsFullSpeed() const { return currentActivity && currentActivity->needsFullSpeed(); }
 
 bool ActivityManager::isReaderActivity() const {
   return std::any_of(stackActivities.begin(), stackActivities.end(),
