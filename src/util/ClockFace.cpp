@@ -73,7 +73,7 @@ uint8_t buildTime(const Rtc::DateTime& now, uint8_t* out) {
 
 namespace ClockFace {
 
-void render(const GfxRenderer& renderer, const Rtc::DateTime& now) {
+void render(const GfxRenderer& renderer, const Rtc::DateTime* now, const uint32_t wakeCount) {
   // Native panel orientation: rotateCoordinates is the identity here, so the
   // bitmaps land exactly as generated. Any turn the device needs is baked into
   // them by scripts/build_clock_digits.py --rotate.
@@ -81,20 +81,40 @@ void render(const GfxRenderer& renderer, const Rtc::DateTime& now) {
 
   renderer.clearScreen();
 
-  uint8_t date[12];
-  uint8_t time[8];
-  const uint8_t dateCount = buildDate(now, date);
-  const uint8_t timeCount = buildTime(now, time);
-
   const int screenW = renderer.getScreenWidth();
   const int screenH = renderer.getScreenHeight();
 
-  const int blockH = SMALL.height + LINE_GAP + LARGE.height;
-  const int topY = (screenH - blockH) / 2;
+  if (now != nullptr) {
+    uint8_t date[12];
+    uint8_t time[8];
+    const uint8_t dateCount = buildDate(*now, date);
+    const uint8_t timeCount = buildTime(*now, time);
 
-  drawLine(renderer, SMALL, date, dateCount, (screenW - lineWidth(SMALL, dateCount)) / 2, topY);
-  drawLine(renderer, LARGE, time, timeCount, (screenW - lineWidth(LARGE, timeCount)) / 2,
-           topY + SMALL.height + LINE_GAP);
+    const int blockH = SMALL.height + LINE_GAP + LARGE.height;
+    const int topY = (screenH - blockH) / 2;
+
+    drawLine(renderer, SMALL, date, dateCount, (screenW - lineWidth(SMALL, dateCount)) / 2, topY);
+    drawLine(renderer, LARGE, time, timeCount, (screenW - lineWidth(LARGE, timeCount)) / 2,
+             topY + SMALL.height + LINE_GAP);
+  }
+
+  // Wake count, bottom right. Capped at four digits: it only has to show
+  // movement, and a wrap costs nothing.
+  uint8_t wake[4];
+  uint8_t wakeDigits = 0;
+  uint32_t value = wakeCount % 10000;
+  do {
+    wake[wakeDigits++] = static_cast<uint8_t>(value % 10);
+    value /= 10;
+  } while (value != 0 && wakeDigits < 4);
+  for (uint8_t i = 0; i < wakeDigits / 2; i++) {
+    const uint8_t t = wake[i];
+    wake[i] = wake[wakeDigits - 1 - i];
+    wake[wakeDigits - 1 - i] = t;
+  }
+  constexpr int MARGIN = 12;
+  drawLine(renderer, SMALL, wake, wakeDigits, screenW - MARGIN - lineWidth(SMALL, wakeDigits),
+           screenH - MARGIN - SMALL.height);
 
   // Full refresh, not the FAST default: this frame stays on the glass for a
   // minute at a time, and a partial update would let the previous digits ghost

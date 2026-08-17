@@ -11,6 +11,7 @@ constexpr uint32_t CLOCK_MODE_MAGIC = 0xC10CC0DE;
 
 RTC_NOINIT_ATTR uint32_t clockModeMagic;
 RTC_NOINIT_ATTR uint32_t clockModeOffsetQ;
+RTC_NOINIT_ATTR uint32_t clockModeWakes;
 
 }  // namespace
 
@@ -20,7 +21,14 @@ bool isActive() { return clockModeMagic == CLOCK_MODE_MAGIC; }
 
 void activate(const uint8_t utcOffsetQuarterHoursBiased) {
   clockModeOffsetQ = utcOffsetQuarterHoursBiased;
+  clockModeWakes = 0;
   clockModeMagic = CLOCK_MODE_MAGIC;
+}
+
+uint32_t wakeCount() { return isActive() ? clockModeWakes : 0; }
+
+void noteWake() {
+  if (isActive()) clockModeWakes++;
 }
 
 void clear() { clockModeMagic = 0; }

@@ -205,14 +205,13 @@ static bool loadSleepFrameBuffer() {
 // Shared by the timer wake and by the menu entry that starts clock mode.
 [[noreturn]] void showClockAndSleep() {
   Rtc::DateTime now;
-  if (halClock.getLocalDateTime(now, ClockMode::utcOffsetQuarterHoursBiased())) {
-    ClockFace::render(renderer, now);
-  } else {
-    // No usable time: leave whatever is on the glass rather than painting a
-    // wrong one, and try again next wake. An RTC that never comes back leaves
-    // the power button as the way out, same as always.
-    LOG_ERR("MAIN", "Clock mode: RTC unavailable, skipping redraw");
+  const bool haveTime = halClock.getLocalDateTime(now, ClockMode::utcOffsetQuarterHoursBiased());
+  if (!haveTime) {
+    LOG_ERR("MAIN", "Clock mode: RTC unavailable");
   }
+  // Painted either way, so the wake count on the face keeps moving: a clock that
+  // stops has to be able to say whether the timer stopped or the RTC did.
+  ClockFace::render(renderer, haveTime ? &now : nullptr, ClockMode::wakeCount());
   enterClockSleep();
 }
 
@@ -363,6 +362,7 @@ void setup() {
   // out, and a flat battery too: RTC_NOINIT does not survive losing power.
   if (ClockMode::isActive()) {
     if (gpio.getWakeupReason() == HalGPIO::WakeupReason::TimerUpdate) {
+      ClockMode::noteWake();
       // seamless: the panel is holding last minute's face, so skip the bring-up
       // resync and let ClockFace's own full refresh be the only one.
       display.begin(/*seamless=*/true);

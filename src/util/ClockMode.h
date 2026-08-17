@@ -31,6 +31,13 @@ void clear();
 // The offset activate() was given. 48 when clock mode is not active.
 uint8_t utcOffsetQuarterHoursBiased();
 
+// Timer wakes since clock mode was armed. Drawn on the face, because a frozen
+// clock has two causes that look identical from the outside: a timer that never
+// fired, and a timer that fired onto an RTC read that failed. This separates
+// them -- it climbs in the second case and not in the first.
+uint32_t wakeCount();
+void noteWake();
+
 // Arms clock mode, paints the first face and sleeps into it. Implemented in
 // main.cpp, which owns the renderer and the sleep path; declared here so a menu
 // can reach it the way SilentRestart.h exposes silentRestart().
