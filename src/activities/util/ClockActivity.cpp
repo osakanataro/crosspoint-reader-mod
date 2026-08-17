@@ -29,8 +29,11 @@ void ClockActivity::onExit() {
 }
 
 void ClockActivity::loop() {
-  mappedInput.update();
-
+  // No mappedInput.update() here. The main loop polls once per iteration just
+  // before calling this, and a second poll re-samples the pins and clears the
+  // edge it set -- the release would be gone before wasReleased() is asked.
+  // Only the activities that block inside their own inner loop poll for
+  // themselves.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
     return;
