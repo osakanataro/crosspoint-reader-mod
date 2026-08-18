@@ -20,6 +20,9 @@ namespace ClockFace {
 //
 // `now` is null when the RTC could not be read; the face is then blank rather
 // than showing a time that is not the time.
-void render(const GfxRenderer& renderer, const Rtc::DateTime* now);
+//
+// `mode` is the caller's, because the right waveform depends on how often this
+// runs rather than on what it draws. See ClockActivity for the policy.
+void render(const GfxRenderer& renderer, const Rtc::DateTime* now, HalDisplay::RefreshMode mode);
 
 }  // namespace ClockFace

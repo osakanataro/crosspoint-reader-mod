@@ -42,6 +42,18 @@ class ClockActivity final : public Activity {
   // time there is no minute to follow, and the screen should still refresh.
   unsigned long lastDrawMs = 0;
 
+  // Waveform policy. Minute updates change one or two digits, so they go out on
+  // the gentle FAST LUT; every half hour one update uses the single-pass HALF
+  // waveform (0xD7) to clear what FAST leaves behind.
+  //
+  // Not FULL: that selects the multi-flash GC waveform (0xF7), which the OEM
+  // firmware never runs in normal operation -- see the note on
+  // SleepActivity::renderDefaultSleepScreen. Driving it 1440 times a day is
+  // more particle cycling than a panel should be asked for, and it is also the
+  // slowest, which is why the face used to land 2.7 s after the minute turned.
+  bool cleanPending = true;      // first paint after entering: the panel holds another screen
+  uint8_t paintsSinceClean = 0;  // fallback counter for when there is no readable clock
+
   // Battery log endpoints. Captured on entry, written out with the closing
   // reading so one session lands in the file as a pair.
   Rtc::DateTime startTime{};

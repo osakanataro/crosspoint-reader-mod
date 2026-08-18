@@ -26,6 +26,9 @@ constexpr unsigned long MINUTE_POLL_MS = 500;
 // Repaint period used only when there is no readable clock to follow.
 constexpr unsigned long BLIND_REDRAW_MS = 60000;
 
+// Minutes between the clean passes that clear what the fast updates leave.
+constexpr uint8_t CLEAN_REFRESH_MINUTES = 30;
+
 }  // namespace
 
 void ClockActivity::onEnter() {
@@ -98,7 +101,20 @@ void ClockActivity::render(RenderLock&&) {
   } else {
     LOG_ERR("CLK", "Clock mode: RTC unavailable");
   }
-  ClockFace::render(renderer, haveTime ? &now : nullptr);
+
+  // Anchored to the wall clock rather than to a count, so the clean pass lands
+  // on the hour and the half hour however long the screen has been up. The
+  // counter only covers the case where there is no clock to anchor to.
+  bool clean = cleanPending;
+  if (!clean) {
+    clean = haveTime ? (now.minute % CLEAN_REFRESH_MINUTES == 0) : (++paintsSinceClean >= CLEAN_REFRESH_MINUTES);
+  }
+  if (clean) {
+    cleanPending = false;
+    paintsSinceClean = 0;
+  }
+
+  ClockFace::render(renderer, haveTime ? &now : nullptr, clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }
 
 void ClockActivity::writeBatteryLog(const bool finished) const {
@@ -141,8 +157,12 @@ void ClockActivity::writeBatteryLog(const bool finished) const {
     if (elapsedMs >= 60000UL) {
       const long perHourPercentTenths = static_cast<long>(dPercent) * 10L * 3600000L / static_cast<long>(elapsedMs);
       const long perHourMv = static_cast<long>(dMillivolts) * 3600000L / static_cast<long>(elapsedMs);
-      len += snprintf(buf + len, sizeof(buf) - len, "rate  %ld.%ld %%/h  %ld mV/h\n", perHourPercentTenths / 10,
-                      labs(perHourPercentTenths % 10), perHourMv);
+      // Sign printed separately. Splitting a negative tenths value into integer
+      // and fraction loses it whenever the integer part truncates to zero, which
+      // is every rate slower than 1 %/h -- i.e. every rate worth measuring.
+      len += snprintf(buf + len, sizeof(buf) - len, "rate  %s%ld.%ld %%/h  %ld mV/h\n",
+                      perHourPercentTenths < 0 ? "-" : "", labs(perHourPercentTenths) / 10,
+                      labs(perHourPercentTenths) % 10, perHourMv);
     }
   } else {
     len += snprintf(buf + len, sizeof(buf) - len, "end   (still running)\n");

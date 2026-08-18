@@ -73,7 +73,7 @@ uint8_t buildTime(const Rtc::DateTime& now, uint8_t* out) {
 
 namespace ClockFace {
 
-void render(const GfxRenderer& renderer, const Rtc::DateTime* now) {
+void render(const GfxRenderer& renderer, const Rtc::DateTime* now, const HalDisplay::RefreshMode mode) {
   // Native panel orientation: rotateCoordinates is the identity here, so the
   // bitmaps land exactly as generated. Any turn the device needs is baked into
   // them by scripts/build_clock_digits.py --rotate.
@@ -98,10 +98,7 @@ void render(const GfxRenderer& renderer, const Rtc::DateTime* now) {
              topY + SMALL.height + LINE_GAP);
   }
 
-  // Full refresh, not the FAST default: this frame stays on the glass for a
-  // minute at a time, and a partial update would let the previous digits ghost
-  // through for the whole of it.
-  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+  renderer.displayBuffer(mode);
 }
 
 }  // namespace ClockFace
