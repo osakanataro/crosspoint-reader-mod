@@ -1759,7 +1759,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   const size_t blockWordCount = self->currentTextBlock->size();
   const size_t softFlushThreshold =
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
-  if (blockWordCount > softFlushThreshold) {
+  if (blockWordCount > softFlushThreshold && !self->inRuby) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
     if (self->isVertical) {
       const int verticalInset =

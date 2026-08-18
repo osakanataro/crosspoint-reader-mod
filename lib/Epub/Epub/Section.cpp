@@ -54,7 +54,9 @@ namespace {
 //      column of nothing but sideways Latin no longer re-derives its cell from the
 //      line height at draw time (which misplaced its body run and pushed its ruby
 //      into the neighbouring column).
-constexpr uint8_t SECTION_FILE_VERSION = 43;
+// v44: Ruby groups remain intact when a large text block is soft-flushed
+//      (upstream #3102, their v40 bump re-numbered onto this tree's sequence).
+constexpr uint8_t SECTION_FILE_VERSION = 44;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
