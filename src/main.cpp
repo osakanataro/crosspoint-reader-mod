@@ -594,12 +594,26 @@ void loop() {
     }
   }
 
-  // Check for any user activity (button press or release) or active background work
-  static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
-      activityManager.preventAutoSleep()) {
-    lastActivityTime = millis();         // Reset inactivity timer
-    powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
+  // Check for any user activity (button press or release) or active background work.
+  // Two clocks, because "do not sleep the device" and "the user is still doing
+  // things" are different claims. An activity that holds off auto-sleep can be
+  // idle for hours -- the clock is -- and it should still downclock between
+  // repaints like any other idle screen.
+  static unsigned long lastActivityTime = millis();  // gates the auto-sleep timeout
+  static unsigned long lastInputTime = millis();     // gates downclocking
+  const bool userActivity =
+      gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity();
+  if (userActivity) {
+    lastInputTime = millis();
+  }
+  if (userActivity || activityManager.preventAutoSleep()) {
+    lastActivityTime = millis();  // Reset inactivity timer
+  }
+  // Separate again: an activity can need to stay awake without needing the clock
+  // speed. needsFullSpeed() defaults to preventAutoSleep(), so everything that
+  // held the CPU up before still does.
+  if (userActivity || activityManager.needsFullSpeed()) {
+    powerManager.setPowerSaving(false);  // Restore normal CPU frequency
   }
 
   // Let wake continue as soon as its hold has been verified. The release can
@@ -727,7 +741,9 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
+    // Keyed on input, not the auto-sleep timer: an activity that holds off
+    // auto-sleep (the clock) still downclocks once the user stops pressing.
+    if (millis() - lastInputTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
       delay(50);
