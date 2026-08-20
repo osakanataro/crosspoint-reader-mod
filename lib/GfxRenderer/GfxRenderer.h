@@ -123,6 +123,18 @@ class GfxRenderer {
   // Setup
   void begin();  // must be called right after display.begin()
   void insertFont(int fontId, EpdFontFamily font);
+
+  // Glyphs the registered SD-card fonts read one at a time because a prewarm did not cover them.
+  // Measured per render (by INPUT_DIAG), this separates "the prewarm is not landing" from "the
+  // drawing itself is slow" without needing the log ring to still hold the evidence.
+  uint32_t glyphOnDemandLoads() const;
+
+  // Mini-arena rebuilds across the registered SD-card fonts, and the milliseconds they took.
+  // The companion to glyphOnDemandLoads(): a warm that covers the text leaves both at zero, while
+  // a caller warming one string at a time leaves on-demand at zero and drives these instead,
+  // which is otherwise a slowdown with no number attached to it.
+  uint32_t glyphMiniRebuilds() const;
+  uint32_t glyphMiniRebuildMs() const;
   // Clears both the flash-font map and any SD-font registration for fontId.
   // Coupled to avoid dangling SdCardFont* in sdCardFonts_ when callers free
   // the underlying SdCardFont and forget the SD-side unregister.

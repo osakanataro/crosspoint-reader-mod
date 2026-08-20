@@ -180,6 +180,33 @@ void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   }
 }
 
+uint32_t GfxRenderer::glyphOnDemandLoads() const {
+  uint32_t loads = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) loads += font->overflowLoads();
+  }
+  return loads;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuilds() const {
+  uint32_t rebuilds = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) rebuilds += font->miniRebuilds();
+  }
+  return rebuilds;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuildMs() const {
+  uint32_t ms = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) ms += font->miniRebuildMs();
+  }
+  return ms;
+}
+
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   if (fallbackFontMap_.empty() || text == nullptr || *text == '\0') {
     return fontId;

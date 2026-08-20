@@ -17,6 +17,7 @@
 #include <limits>
 
 #include "../../util/BookmarkFile.h"
+#include "../../util/InputDiag.h"
 #include "BookmarkEntry.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -338,12 +339,18 @@ void EpubReaderActivity::loop() {
       buildTickHeapGate()) {
     RenderLock lock;
     if (section->isBuilding() && buildTickHeapGate()) {
+      const auto tickStartMs = millis();
+      const uint16_t pageCountBeforeTick = section->pageCount;
       if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
         LOG_ERR("ERS", "Background section build failed");
+        InputDiag::captureLogs("section-build-failed");
         section.reset();
         requestUpdate();
       } else if (section->isBuildComplete() && applyDeferredReposition()) {
         requestUpdate();
+      }
+      if (section) {
+        InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeTick, section->pageCount, millis() - tickStartMs);
       }
     }
   }
@@ -996,6 +1003,9 @@ bool EpubReaderActivity::skipLoopDelay() {
 void EpubReaderActivity::renderBook() {
   if (!epub) return;
 
+  buildAccumMsThisRender = 0;
+  buildChunkCountThisRender = 0;
+
   const auto showPendingSyncSaveError = [this]() {
     if (!pendingSyncSaveError) return;
     pendingSyncSaveError = false;
@@ -1003,6 +1013,9 @@ void EpubReaderActivity::renderBook() {
   };
 
   const auto showBuildError = [this]() {
+    // Snapshot the log ring before anything else: on a device with no serial console this is the
+    // only record of which check inside the section build actually failed. No-op without INPUT_DIAG.
+    InputDiag::captureLogs("section-build-failed");
     renderer.clearScreen();
     GUI.drawPopup(renderer, tr(STR_INDEX_FAILED));
     automaticPageTurnActive = false;
@@ -1127,7 +1140,14 @@ void EpubReaderActivity::renderBook() {
             if (buildPopupPending && millis() - buildStartMs >= BUILD_POPUP_DEADLINE_MS) {
               showBuildPopup(renderer, pagesUntilFullRefresh);
             }
-            if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+            const uint16_t pageCountBeforeChunk = section->pageCount;
+            const unsigned long chunkStartMs = millis();
+            const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+            const unsigned long chunkMs = millis() - chunkStartMs;
+            InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+            buildAccumMsThisRender += chunkMs;
+            buildChunkCountThisRender++;
+            if (!chunkOk) {
               LOG_ERR("ERS", "Failed during incremental section build");
               section.reset();
               buildPopupPending = false;
@@ -1190,7 +1210,14 @@ void EpubReaderActivity::renderBook() {
       return;
     }
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
-      if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+      const uint16_t pageCountBeforeChunk = section->pageCount;
+      const unsigned long chunkStartMs = millis();
+      const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+      const unsigned long chunkMs = millis() - chunkStartMs;
+      InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+      buildAccumMsThisRender += chunkMs;
+      buildChunkCountThisRender++;
+      if (!chunkOk) {
         LOG_ERR("ERS", "Failed during incremental section build");
         section.reset();
         showBuildError();
@@ -1200,13 +1227,24 @@ void EpubReaderActivity::renderBook() {
   }
   if (section->isBuilding()) {
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
-      if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+      const uint16_t pageCountBeforeChunk = section->pageCount;
+      const unsigned long chunkStartMs = millis();
+      const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+      const unsigned long chunkMs = millis() - chunkStartMs;
+      InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+      buildAccumMsThisRender += chunkMs;
+      buildChunkCountThisRender++;
+      if (!chunkOk) {
         LOG_ERR("ERS", "Failed during incremental section build");
         section.reset();
         showBuildError();
         return;
       }
     }
+  }
+
+  if (buildChunkCountThisRender > 0) {
+    InputDiag::noteBuildTotal(currentSpineIndex, buildAccumMsThisRender, buildChunkCountThisRender);
   }
 
   if (!section->isBuilding() && section->pageCount > 0 &&
@@ -1426,6 +1464,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
   }
   const auto tDisplay = millis();
+
+  // Shared across every exit path below; the grayscale passes have their own LOG_DBG splits.
+  // No-op unless built with INPUT_DIAG.
+  InputDiag::notePageRender(tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender);
 
   if (tiledGrayscale) {
     constexpr int STRIP_ROWS = 80;

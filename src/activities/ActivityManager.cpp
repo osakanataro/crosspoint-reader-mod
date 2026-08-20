@@ -24,6 +24,7 @@
 #include "util/BmpViewerActivity.h"
 #include "util/FrontlightPanelActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/InputDiag.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -56,11 +57,41 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+#ifdef INPUT_DIAG
+      // Snapshot the name onto the stack before rendering. render() receives the lock by value and
+      // may release it partway, after which the main task can pop and destroy this activity -- so
+      // reading the name after render() returns is not safe. Guarded rather than routed through the
+      // no-op InputDiag stub because the snapshot itself would otherwise cost every build a copy.
+      char renderedName[16];
+      snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
+      const unsigned long renderStart = millis();
+      const uint32_t onDemandStart = renderer.glyphOnDemandLoads();
+      const uint32_t rebuildStart = renderer.glyphMiniRebuilds();
+      const uint32_t rebuildMsStart = renderer.glyphMiniRebuildMs();
+      InputDiag::noteRenderStart();
+#endif
       // Night mode inverts only the reading surfaces (appliesNightMode):
       // resolving the output polarity here, per render, means menus, popups,
       // and every other activity revert to normal automatically.
       display.setInverted(SETTINGS.screenInverted != 0 && currentActivity->appliesNightMode());
       currentActivity->render(std::move(lock));
+#ifdef INPUT_DIAG
+      const unsigned long renderDurationMs = millis() - renderStart;
+      InputDiag::noteRender(renderedName, renderDurationMs, renderer.glyphOnDemandLoads() - onDemandStart,
+                            renderer.glyphMiniRebuilds() - rebuildStart,
+                            renderer.glyphMiniRebuildMs() - rebuildMsStart);
+      // A render this slow isn't drawing -- it's stuck somewhere upstream (SD I/O, glyph
+      // cache, allocation). The 16-line log ring is system-wide and short, so whatever ran
+      // during the stall is likely still in it right now; a routine render would evict it
+      // within a few more renders. captureLogs() keeps only the first capture, so repeat
+      // stalls this session don't overwrite the one that still has the culprit.
+      constexpr unsigned long SLOW_RENDER_CAPTURE_MS = 5000;
+      if (renderDurationMs >= SLOW_RENDER_CAPTURE_MS) {
+        char reason[48];
+        snprintf(reason, sizeof(reason), "slow-render %s %lums", renderedName, renderDurationMs);
+        InputDiag::captureLogs(reason);
+      }
+#endif
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;

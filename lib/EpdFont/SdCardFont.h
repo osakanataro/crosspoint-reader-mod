@@ -134,6 +134,20 @@ class SdCardFont {
   void resetStats();
   const Stats& getStats() const { return stats_; }
 
+  // Glyphs read one at a time through the overflow ring since boot, i.e. glyphs the prewarm did not
+  // cover. A screen whose prewarm names the wrong font still reports success, and the only outward
+  // sign is that this climbs by a screenful on every repaint.
+  uint32_t overflowLoads() const { return overflowLoads_; }
+
+  // Times prewarmStyle() found the resident mini data insufficient and rebuilt it, and the
+  // milliseconds those rebuilds took. A rebuild reads glyphs straight into the arena, so it
+  // does not touch overflowLoads(), and it reuses the existing buffers where they fit, so it
+  // does not touch the heap figures either. With the union merge a screen should converge: a
+  // rebuild count that keeps climbing after the first pass means the union is being abandoned,
+  // which is the heap gate in prewarmStyle talking.
+  uint32_t miniRebuilds() const { return miniRebuilds_; }
+  uint32_t miniRebuildMs() const { return miniRebuildMs_; }
+
   // Content hash of the file header + style TOC entries (computed during load).
   // Used to generate deterministic font IDs for section cache invalidation.
   uint32_t contentHash() const { return contentHash_; }
@@ -300,6 +314,9 @@ class SdCardFont {
 
   Stats stats_;
   uint32_t contentHash_ = 0;
+  uint32_t overflowLoads_ = 0;
+  uint32_t miniRebuilds_ = 0;
+  uint32_t miniRebuildMs_ = 0;
   bool loaded_ = false;
 
   // Per-style helpers

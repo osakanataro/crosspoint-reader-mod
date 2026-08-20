@@ -43,6 +43,12 @@ class EpubReaderActivity final : public ReaderActivity {
   bool currentPageBookmarked = false;
   int idlePrewarmSpine = -1;
   int idlePrewarmPage = -1;
+  // Per-render section-build accounting for INPUT_DIAG. A single chunk can look cheap
+  // (BUILD_PAGES_PER_CHUNK pages, sub-second) while the loop around it still iterates dozens
+  // of times to reach a distant target -- noteBuildChunk's per-chunk max misses that; this
+  // catches the render-level total instead. Reset at the top of renderBook().
+  unsigned long buildAccumMsThisRender = 0;
+  int buildChunkCountThisRender = 0;
   unsigned long lastRenderCompleteMs = 0;
   bool bookmarkRemoved = false;
   std::vector<BookmarkEntry> cachedBookmarks;

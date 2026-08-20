@@ -38,6 +38,7 @@
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
+#include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
 
 GfxRenderer renderer(display);
@@ -562,6 +563,12 @@ void loop() {
   gpio.update();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
+  // Immediately after gpio.update(): the gap between consecutive samples is what decides whether a
+  // press can be seen at all. No-op unless built with INPUT_DIAG.
+  const bool diagInputEdge = gpio.wasAnyPressed() || gpio.wasAnyReleased();
+  const bool diagInputPending = gpio.isDebouncePending();
+  InputDiag::sample(loopStartTime, diagInputEdge, diagInputPending);
+
   renderer.setFadingFix(SETTINGS.fadingFix);
 
   if (Serial && millis() - lastMemPrint >= 10000) {
@@ -708,6 +715,10 @@ void loop() {
       LOG_DBG("LOOP", "New max loop duration: %lu ms (activity: %lu ms)", maxLoopDuration, activityDuration);
     }
   }
+
+  // Last, so the SD write it may perform is outside the loop duration measured above. No-op unless
+  // built with INPUT_DIAG.
+  InputDiag::flush(diagInputEdge || diagInputPending);
 
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response

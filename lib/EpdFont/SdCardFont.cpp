@@ -946,6 +946,16 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     }
   }
 
+  // Past the resident-subset check, so everything below is a rebuild. Counted and timed on the
+  // way out because no other figure records one: the reads go straight into the arena rather
+  // than the overflow ring, and the buffers are reused rather than dropped.
+  struct RebuildTimer {
+    SdCardFont& self;
+    unsigned long startMs;
+    ~RebuildTimer() { self.miniRebuildMs_ += static_cast<uint32_t>(millis() - startMs); }
+  } rebuildTimer{*this, millis()};
+  miniRebuilds_++;
+
   // Merge the resident mini's codepoints into the request so the rebuild below
   // accumulates instead of replacing. Screens draw several distinct fallback
   // strings per refresh (file browser rows, chapter lists, the reader status
@@ -1630,6 +1640,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   self->overflow_[slot].codepoint = codepoint;
   self->overflow_[slot].styleIdx = styleIdx;
 
+  self->overflowLoads_++;
   LOG_DBG("SDCF", "Overflow: loaded U+%04X style %u on demand (slot %u/%u)", codepoint, styleIdx, slot,
           OVERFLOW_CAPACITY);
 
