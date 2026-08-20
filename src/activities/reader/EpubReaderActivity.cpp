@@ -160,6 +160,8 @@ EpubReaderActivity::~EpubReaderActivity() {
 }
 
 bool EpubReaderActivity::loadBook() {
+  InputDiag::noteOpenBegin();
+  InputDiag::noteOpenStage(0, "enter");
   auto loadedEpub = makeUniqueNoThrow<Epub>(bookPath, "/.crosspoint");
   if (!loadedEpub) {
     LOG_ERR("ERS", "Failed to allocate EPUB object");
@@ -183,6 +185,7 @@ bool EpubReaderActivity::loadBook() {
     return false;
   }
   epub = std::move(loadedEpub);
+  InputDiag::noteOpenStage(1, "epub");
 
   ImageBlock::clearSessionRenderFailures();
   ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* src, const char* dest) {
@@ -1021,6 +1024,19 @@ void EpubReaderActivity::renderBook() {
     automaticPageTurnActive = false;
   };
 
+  // Low-heap guard before a build starts. Only before it starts: releasing the SD font caches
+  // BETWEEN chunks was tried and is actively harmful — the arenas are near-empty (nothing gained)
+  // while the advance table is what the build's layout is reading, so the release forced every
+  // subsequent chunk back to the SD and one on-device session died reason-less mid-extension.
+  constexpr uint32_t BUILD_MIN_FREE_HEAP = 24 * 1024;
+  const auto freeFontCachesIfTight = [this](const char* where) {
+    if (ESP.getFreeHeap() >= BUILD_MIN_FREE_HEAP) return;
+    LOG_ERR("ERS", "Low heap before %s (%u free), releasing SD font caches", where, ESP.getFreeHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseSdFontCaches();
+    }
+  };
+
   if (currentSpineIndex < 0) currentSpineIndex = 0;
   if (currentSpineIndex > epub->getSpineItemsCount()) currentSpineIndex = epub->getSpineItemsCount();
 
@@ -1052,6 +1068,8 @@ void EpubReaderActivity::renderBook() {
   buildViewportHeight = viewportHeight;
 
   const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  // getReaderFontId() inside readerRenderSpec resolves (and lazily loads) the SD reader font.
+  InputDiag::noteOpenStage(2, "font");
 
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
@@ -1121,6 +1139,7 @@ void EpubReaderActivity::renderBook() {
           }
           buildPopupPending = !showPopup;
           const unsigned long buildStartMs = millis();
+          freeFontCachesIfTight("section build start");
           bool started;
           {
             GfxRenderer::FrameBufferLoan loan(renderer);
@@ -1246,6 +1265,8 @@ void EpubReaderActivity::renderBook() {
   if (buildChunkCountThisRender > 0) {
     InputDiag::noteBuildTotal(currentSpineIndex, buildAccumMsThisRender, buildChunkCountThisRender);
   }
+  // Section loaded (or built far enough for the requested page).
+  InputDiag::noteOpenStage(3, "sect");
 
   if (!section->isBuilding() && section->pageCount > 0 &&
       section->currentPage >= static_cast<int>(section->pageCount)) {
@@ -1278,6 +1299,37 @@ void EpubReaderActivity::renderBook() {
 
   updateBookmarkFlag();
 
+  // Low-heap guard for the page path. loadPage/renderContents allocate through plain new
+  // (std::string word storage, ruby copies, shared_ptr control blocks); with -fno-exceptions a
+  // failure is abort(), and several on-device crashes each died in a different one of those
+  // allocations with the heap run down to a few KB.
+  //
+  // Two recovery levers, cheapest first. The SD font caches are often nearly empty on this path,
+  // so the big lever is the in-progress section build: its BuildContext (live parser, CSS rules,
+  // page LUT) holds tens of KB for as long as a large chapter keeps building in the background.
+  // suspendBuild() persists the built pages as a partial and frees all of it; the lazy-resume
+  // logic in loop() restarts the extension when the reading position nears the watermark. The
+  // threshold sits below the ~15KB steady-state so routine pages never churn either lever.
+  // A live build is the crash-prone state: its BuildContext plus a page transition's string
+  // allocations overlap in the ~15KB the fixed reader footprint leaves free. Suspend it
+  // preemptively at 20KB rather than waiting for the floor -- pages render fine at 16KB when no
+  // build is running, so the higher threshold only ever fires while one is.
+  constexpr uint32_t PAGE_PATH_BUILD_SUSPEND_HEAP = 20 * 1024;
+  if (section->isBuilding() && section->currentPage < static_cast<int>(section->pageCount) &&
+      ESP.getFreeHeap() < PAGE_PATH_BUILD_SUSPEND_HEAP) {
+    LOG_ERR("ERS", "Low heap with live build (%u free), suspending it before the page load", ESP.getFreeHeap());
+    section->suspendBuild();
+  }
+  constexpr uint32_t PAGE_PATH_MIN_FREE_HEAP = 12 * 1024;
+  if (ESP.getFreeHeap() < PAGE_PATH_MIN_FREE_HEAP) {
+    LOG_ERR("ERS", "Low heap before page load (%u free), releasing SD font caches", ESP.getFreeHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseSdFontCaches();
+    }
+  }
+
+  InputDiag::noteOpenStage(4, "built");
+
   {
     auto p = section->loadPage(section->currentPage);
     if (!p) {
@@ -1309,6 +1361,7 @@ void EpubReaderActivity::renderBook() {
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     lastRenderCompleteMs = millis();
+    InputDiag::noteOpenStage(5, "page1");
   }
 
   if (currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
@@ -1415,6 +1468,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // its own SD pass after the scope ends.
   renderStatusBar();
   scope.endScanAndPrewarm();
+  // No-op unless built with INPUT_DIAG: what the scan collected and whether any prewarm bailed at
+  // entry, so a fast prewarm that left the draw cold can be attributed without the log ring.
+  InputDiag::noteScanOutcome(fcm->lastScanBytes(), fcm->lastScanFonts(), renderer.glyphPrewarmEntryFails());
   const auto tPrewarm = millis();
 
   const bool pageHasImages = page->hasImages();
