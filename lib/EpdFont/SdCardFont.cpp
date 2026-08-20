@@ -825,7 +825,10 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
       }
     }
   }
-  if (cpBudget == 0) return -1;
+  if (cpBudget == 0) {
+    prewarmEntryFails_++;
+    return -1;
+  }
 
   // Step 1: Extract unique codepoints from the UTF-8 texts (shared across all styles).
   // Dedup uses O(n^2) linear scan — worst case is MAX_PAGE_GLYPHS (512) unique codepoints
@@ -836,6 +839,7 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
   std::unique_ptr<uint32_t[]> codepoints(new (std::nothrow) uint32_t[MAX_PAGE_GLYPHS]);
   if (!codepoints) {
     LOG_ERR("SDCF", "Failed to allocate codepoint buffer (%u bytes)", MAX_PAGE_GLYPHS * 4);
+    prewarmEntryFails_++;
     return -1;
   }
   uint32_t cpCount = 0;
@@ -917,6 +921,9 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
   // Sort codepoints for ordered interval building
   std::sort(codepoints.get(), codepoints.get() + cpCount);
 
+  LOG_DBG("SDCF", "prewarm: cps=%u mask=0x%02X metaOnly=%d budget=%u", cpCount, styleMask, metadataOnly ? 1 : 0,
+          cpBudget);
+
   // Prewarm each requested style
   int totalMissed = 0;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
@@ -966,6 +973,8 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
           applyKernLigaturePointers(s, s.miniData);
         }
       }
+      LOG_DBG("SDCF", "prewarm subset-hit: style=%u cps=%u missed=%d active=%s", styleIdx, cpCount, missedInMini,
+              s.epdFont.data == &s.miniData ? "mini" : "stub");
       return missedInMini;
     }
   }

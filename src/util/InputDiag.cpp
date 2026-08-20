@@ -106,6 +106,26 @@ uint8_t renderLogNext = 0;
 char reportBuf[1280];
 
 // Last and worst page-render phase split.
+// What the last page scope's scan handed to the prewarm, and how often prewarm()
+// bailed at its entry (scratch alloc / zero budget). Together with the rebuild
+// counters these pin WHERE the per-page warm dies: zero scan bytes = the hook
+// never fired; bytes>0 with entry-fails climbing = prewarm can't even start;
+// bytes>0, no fails, no rebuilds = subset-hit against data the draw can't see.
+uint32_t scanLastBytes = 0;
+uint8_t scanLastFonts = 0;
+uint32_t scanZeroCount = 0;
+uint32_t prewarmEntryFailsTotal = 0;
+
+// Book-open heap checkpoints (see noteOpenStage in the header). KB resolution is
+// enough to attribute an ~85KB footprint; labels are truncated to keep the line short.
+constexpr uint8_t OPEN_STAGE_COUNT = 6;
+struct OpenStage {
+  char label[8] = "";
+  uint16_t freeKb = 0;
+  uint16_t maxAllocKb = 0;
+};
+OpenStage openStages[OPEN_STAGE_COUNT];
+
 uint32_t pageRenderPrewarmMs = 0;
 uint32_t pageRenderDrawMs = 0;
 uint32_t pageRenderDisplayMs = 0;
@@ -226,6 +246,46 @@ void InputDiag::noteRender(const char* activityName, const unsigned long duratio
   renderLogNext = static_cast<uint8_t>((renderLogNext + 1) % RENDER_LOG_SIZE);
 }
 
+void InputDiag::noteOpenBegin() {
+  for (auto& s : openStages) {
+    s.label[0] = '\0';
+    s.freeKb = 0;
+    s.maxAllocKb = 0;
+  }
+  Storage.remove("/open-heap.txt");
+}
+
+void InputDiag::noteOpenStage(const uint8_t slot, const char* label) {
+  if (slot >= OPEN_STAGE_COUNT) return;
+  auto& s = openStages[slot];
+  if (s.label[0] != '\0') return;  // write-once until the next noteOpenBegin()
+  snprintf(s.label, sizeof(s.label), "%s", label ? label : "?");
+  s.freeKb = static_cast<uint16_t>(ESP.getFreeHeap() / 1024);
+  s.maxAllocKb = static_cast<uint16_t>(ESP.getMaxAllocHeap() / 1024);
+
+  // Also rewrite a dedicated file immediately: the periodic flush() skips while a RenderLock is
+  // held, which is the whole of a blocking section build -- exactly where the open sequence dies.
+  // A crash then loses every stage. Rewriting all recorded stages per checkpoint survives it
+  // (HalStorage has no append mode; the file is a few lines, so the rewrite is negligible).
+  HalFile f;
+  if (Storage.openFileForWrite("DIAG", "/open-heap.txt", f)) {
+    char line[48];
+    for (const auto& stage : openStages) {
+      if (stage.label[0] == '\0') continue;
+      const int n =
+          snprintf(line, sizeof(line), "%s: free=%uKB maxAlloc=%uKB\n", stage.label, stage.freeKb, stage.maxAllocKb);
+      if (n > 0) f.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(n));
+    }
+  }
+}
+
+void InputDiag::noteScanOutcome(const uint32_t scanBytes, const uint8_t scanFonts, const uint32_t prewarmEntryFails) {
+  scanLastBytes = scanBytes;
+  scanLastFonts = scanFonts;
+  if (scanBytes == 0) scanZeroCount++;
+  prewarmEntryFailsTotal = prewarmEntryFails;
+}
+
 void InputDiag::notePageRender(const unsigned long prewarmMs, const unsigned long drawMs,
                                const unsigned long displayMs) {
   pageRenderPrewarmMs = static_cast<uint32_t>(prewarmMs);
@@ -327,6 +387,7 @@ void InputDiag::flush(const bool inputActive) {
       "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
       "glyph_ondemand_last=%u max=%u (%s)\n"
       "glyph_rebuild_last=%u max=%u (%s) total_ms=%u\n"
+      "page_scan_last=%ub/%uf zero=%u prewarm_entry_fails=%u\n"
       "ui_prewarm_heap_max=%d\n"
       "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
       now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower, debounceEpisodes,
@@ -336,10 +397,22 @@ void InputDiag::flush(const bool inputActive) {
       vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
       buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
       buildTotalMaxChunkCount, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax,
-      onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal,
-      uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
+      onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes,
+      scanLastFonts, scanZeroCount, prewarmEntryFailsTotal, uiPrewarmHeapMax, listBandY, listBandHeight,
+      listRowHeightPx, listVisibleRowCount, listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
+  }
+
+  // Heap checkpoints across the last book open, in stage order (KB free/KB largest block).
+  len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "open_heap=");
+  for (uint8_t i = 0; i < OPEN_STAGE_COUNT && static_cast<size_t>(len) < sizeof(reportBuf); i++) {
+    if (openStages[i].label[0] == '\0') continue;
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u/%u ", openStages[i].label, openStages[i].freeKb,
+                    openStages[i].maxAllocKb);
+  }
+  if (static_cast<size_t>(len) < sizeof(reportBuf)) {
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "\n");
   }
 
   // Oldest first, so the list reads in the order the renders happened.

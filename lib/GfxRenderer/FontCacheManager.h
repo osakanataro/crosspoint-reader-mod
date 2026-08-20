@@ -32,6 +32,14 @@ class FontCacheManager {
   // The FontDecompressor pointer, needed by GfxRenderer::getGlyphBitmap()
   FontDecompressor* getDecompressor() const { return fontDecompressor_; }
 
+  // What the last completed scan pass handed to prewarmCache: total recorded
+  // bytes and how many distinct font ids were batched. Zero bytes after a page
+  // scope means the scan hook never fired -- the draw path bypassed drawText's
+  // recording, which no other figure distinguishes from a prewarm that ran and
+  // failed. Read by the INPUT_DIAG page hook.
+  uint32_t lastScanBytes() const { return lastScanBytes_; }
+  uint8_t lastScanFonts() const { return lastScanFonts_; }
+
   // RAII scope for two-pass prewarm pattern
   class PrewarmScope {
    public:
@@ -71,4 +79,6 @@ class FontCacheManager {
   };
   ScanEntry scanEntries_[MAX_SCAN_FONTS];
   void resetScanEntries();
+  uint32_t lastScanBytes_ = 0;
+  uint8_t lastScanFonts_ = 0;
 };

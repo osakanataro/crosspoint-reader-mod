@@ -113,10 +113,19 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manage
 }
 
 void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
+  const bool wasScanning = manager_->scanMode_ == ScanMode::Scanning;
   manager_->scanMode_ = ScanMode::None;
 
+  if (wasScanning) {
+    manager_->lastScanBytes_ = 0;
+    manager_->lastScanFonts_ = 0;
+  }
   for (auto& e : manager_->scanEntries_) {
     if (e.fontId < 0 || e.text.empty()) continue;
+    if (wasScanning) {
+      manager_->lastScanBytes_ += static_cast<uint32_t>(e.text.size());
+      manager_->lastScanFonts_++;
+    }
     manager_->prewarmCache(e.fontId, e.text.c_str(), e.styleMask != 0 ? e.styleMask : 1);
   }
   manager_->resetScanEntries();

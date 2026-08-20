@@ -154,6 +154,12 @@ class SdCardFont {
   uint32_t miniRebuilds() const { return miniRebuilds_; }
   uint32_t miniRebuildMs() const { return miniRebuildMs_; }
 
+  // Times prewarm() gave up before reaching any style: the codepoint scratch
+  // buffer failed to allocate, or the heap budget capped the batch at zero.
+  // Distinguishes "the prewarm machinery never ran" from a subset-hit that ran
+  // in microseconds -- externally identical (fast, no rebuild, no SD reads).
+  uint32_t prewarmEntryFails() const { return prewarmEntryFails_; }
+
   // Content hash of the file header + style TOC entries (computed during load).
   // Used to generate deterministic font IDs for section cache invalidation.
   uint32_t contentHash() const { return contentHash_; }
@@ -338,6 +344,7 @@ class SdCardFont {
   uint32_t overflowLoads_ = 0;
   uint32_t miniRebuilds_ = 0;
   uint32_t miniRebuildMs_ = 0;
+  uint32_t prewarmEntryFails_ = 0;
   bool loaded_ = false;
 
   // Per-style helpers

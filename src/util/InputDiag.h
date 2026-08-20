@@ -56,6 +56,19 @@ class InputDiag {
   static void noteUiPrewarmBegin();
   static void noteUiPrewarmEnd();
 
+  // Heap checkpoints across one book-open sequence, to break the fixed ~85KB reader footprint
+  // into its stages (epub metadata, reader font load, section load/build, first page). Slots are
+  // write-once until the next noteOpenBegin(), so renderBook re-runs don't overwrite the first
+  // open's figures. Reported as open_heap= in the diag file.
+  static void noteOpenBegin();
+  static void noteOpenStage(uint8_t slot, const char* label);
+
+  // What the page scope's scan pass handed to the prewarm (bytes recorded, distinct fonts) and the
+  // running count of prewarm() entry bails (scratch alloc failure / zero heap budget). Splits the
+  // "prewarm reported done in 10ms yet the draw faulted a screenful" symptom into its three
+  // possible causes; see the field comments in InputDiag.cpp.
+  static void noteScanOutcome(uint32_t scanBytes, uint8_t scanFonts, uint32_t prewarmEntryFails);
+
   // One page render's phase breakdown, in milliseconds. renderContents already measures these for
   // LOG_DBG; on a device with no serial console that measurement had nowhere to go, which is why the
   // three seconds a page turn costs stayed unattributed through two wrong guesses.
@@ -112,6 +125,9 @@ class InputDiag {
   static void noteListBand(int, int, int, int, int) {}
   static void noteUiPrewarmBegin() {}
   static void noteUiPrewarmEnd() {}
+  static void noteOpenBegin() {}
+  static void noteOpenStage(uint8_t, const char*) {}
+  static void noteScanOutcome(uint32_t, uint8_t, uint32_t) {}
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
   static void notePageDrawParts(unsigned long, unsigned long) {}
   static void noteVerticalRender(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long) {}

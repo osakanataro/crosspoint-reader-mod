@@ -135,6 +135,10 @@ class GfxRenderer {
   // which is otherwise a slowdown with no number attached to it.
   uint32_t glyphMiniRebuilds() const;
   uint32_t glyphMiniRebuildMs() const;
+
+  // Times an SD-font prewarm bailed before touching any style (scratch alloc
+  // failure or zero heap budget). See SdCardFont::prewarmEntryFails().
+  uint32_t glyphPrewarmEntryFails() const;
   // Clears both the flash-font map and any SD-font registration for fontId.
   // Coupled to avoid dangling SdCardFont* in sdCardFonts_ when callers free
   // the underlying SdCardFont and forget the SD-side unregister.

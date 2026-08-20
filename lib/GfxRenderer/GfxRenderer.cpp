@@ -210,6 +210,15 @@ uint32_t GfxRenderer::glyphMiniRebuildMs() const {
   return ms;
 }
 
+uint32_t GfxRenderer::glyphPrewarmEntryFails() const {
+  uint32_t fails = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) fails += font->prewarmEntryFails();
+  }
+  return fails;
+}
+
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   if (fallbackFontMap_.empty() || text == nullptr || *text == '\0') {
     return fontId;
