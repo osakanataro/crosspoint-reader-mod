@@ -42,10 +42,31 @@ inline uint16_t readU16(const uint8_t* p) { return p[0] | (p[1] << 8); }
 inline int16_t readI16(const uint8_t* p) { return static_cast<int16_t>(p[0] | (p[1] << 8)); }
 inline uint32_t readU32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] << 24); }
 
+// Doubles the codepoint buffer in place, preserving already-collected entries.
+// Growing in modest steps instead of allocating the worst case up front means
+// most chapters (far fewer than maxCapacity distinct codepoints) only ever
+// need a small block — one a fragmented heap is much more likely to satisfy
+// than a single large one. Returns false if already at maxCapacity or the
+// allocation fails; either way the caller falls back to capping at what's
+// already collected, same as hitting maxCount used to.
+bool growCodepointBuffer(uint32_t*& codepoints, uint32_t& capacity, const uint32_t maxCapacity) {
+  if (capacity >= maxCapacity) return false;
+  const uint32_t newCapacity = std::min(capacity * 2, maxCapacity);
+  uint32_t* grown = new (std::nothrow) uint32_t[newCapacity];
+  if (!grown) return false;
+  memcpy(grown, codepoints, capacity * sizeof(uint32_t));
+  delete[] codepoints;
+  codepoints = grown;
+  capacity = newCapacity;
+  return true;
+}
+
 // Walks a null-terminated UTF-8 string and appends each unique codepoint to
-// codepoints[0..cpCount-1] via O(n²) dedup.  Returns true if the buffer
-// reached maxCount (cap hit), false if all codepoints fit.
-bool collectUniqueCodepoints(const char* text, uint32_t* codepoints, uint32_t& cpCount, uint32_t maxCount) {
+// codepoints[0..cpCount-1] via O(n²) dedup, growing the buffer (up to
+// maxCapacity) as needed. Returns true if maxCapacity was reached or a growth
+// allocation failed (cap hit), false if all codepoints fit.
+bool collectUniqueCodepoints(const char* text, uint32_t*& codepoints, uint32_t& cpCount, uint32_t& capacity,
+                             const uint32_t maxCapacity) {
   const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
   while (*p) {
     uint32_t cp = utf8NextCodepoint(&p);
@@ -58,7 +79,7 @@ bool collectUniqueCodepoints(const char* text, uint32_t* codepoints, uint32_t& c
       }
     }
     if (!found) {
-      if (cpCount >= maxCount) return true;
+      if (cpCount >= capacity && !growCodepointBuffer(codepoints, capacity, maxCapacity)) return true;
       codepoints[cpCount++] = cp;
     }
   }
@@ -1472,24 +1493,33 @@ int SdCardFont::buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, 
 
   // +2 reserved slots for space and hyphen injected after the main scan.
   static constexpr uint32_t MAX_UNIQUE_CODEPOINTS = 4096;
-  uint32_t* codepoints = new (std::nothrow) uint32_t[MAX_UNIQUE_CODEPOINTS + 2];
+  static constexpr uint32_t MAX_CODEPOINT_CAPACITY = MAX_UNIQUE_CODEPOINTS + 2;
+  // Most chapters use far fewer than MAX_UNIQUE_CODEPOINTS distinct codepoints, so start small
+  // and let growCodepointBuffer double it as needed. A worst-case 16 KB allocation up front was
+  // exactly the kind of request a fragmented heap can't satisfy, forcing a silent fallback to
+  // per-glyph on-demand SD loads (~10 ms each) for the whole chapter.
+  static constexpr uint32_t INITIAL_CODEPOINT_CAPACITY = 256;
+  uint32_t cpCapacity = INITIAL_CODEPOINT_CAPACITY;
+  uint32_t* codepoints = new (std::nothrow) uint32_t[cpCapacity];
   if (!codepoints) {
-    LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)", MAX_UNIQUE_CODEPOINTS * 4);
+    LOG_ERR("SDCF", "buildAdvanceTable: failed to allocate codepoint buffer (%u bytes)", cpCapacity * 4);
     return -1;
   }
   uint32_t cpCount = 0;
   bool hitCap = false;
 
   for (auto it = begin; it != end && !hitCap; ++it) {
-    hitCap = collectUniqueCodepoints(asCStr(*it), codepoints, cpCount, MAX_UNIQUE_CODEPOINTS);
+    hitCap = collectUniqueCodepoints(asCStr(*it), codepoints, cpCount, cpCapacity, MAX_UNIQUE_CODEPOINTS);
   }
   if (extraText && !hitCap) {
-    hitCap = collectUniqueCodepoints(extraText, codepoints, cpCount, MAX_UNIQUE_CODEPOINTS);
+    hitCap = collectUniqueCodepoints(extraText, codepoints, cpCount, cpCapacity, MAX_UNIQUE_CODEPOINTS);
   }
 
-  if (includeSpace && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == ' '; }))
+  if (includeSpace && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == ' '; }) &&
+      (cpCount < cpCapacity || growCodepointBuffer(codepoints, cpCapacity, MAX_CODEPOINT_CAPACITY)))
     codepoints[cpCount++] = ' ';
-  if (includeHyphen && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == '-'; }))
+  if (includeHyphen && std::none_of(codepoints, codepoints + cpCount, [](uint32_t c) { return c == '-'; }) &&
+      (cpCount < cpCapacity || growCodepointBuffer(codepoints, cpCapacity, MAX_CODEPOINT_CAPACITY)))
     codepoints[cpCount++] = '-';
 
   if (hitCap) {
