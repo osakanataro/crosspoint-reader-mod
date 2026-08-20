@@ -10,6 +10,8 @@
 #include <cstring>
 #include <string_view>
 
+#include "CssSelectorUsage.h"
+
 namespace {
 
 // Stack-allocated string buffer to avoid heap reallocations during parsing
@@ -44,6 +46,13 @@ constexpr size_t MAX_RULES = 1500;
 // Minimum free heap required to apply CSS during rendering
 // If below this threshold, we skip CSS to avoid display artifacts.
 constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
+
+// Minimum free heap required to keep registering rules while parsing CSS or
+// loading the rules cache. The project builds with -fno-exceptions, so a
+// failed allocation in rulesBySelector_ aborts and reboots the device.
+// Below this threshold we stop early and keep whatever rules were collected
+// so far — degraded styling beats a crash.
+constexpr size_t MIN_FREE_HEAP_DURING_CSS_PARSE = 32 * 1024;
 
 // Maximum length for a single selector string
 // Prevents parsing of extremely long or malformed selectors
@@ -436,6 +445,13 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
     return;
   }
 
+  // Refuse new registrations when heap is nearly exhausted; inserting into
+  // rulesBySelector_ would abort() on allocation failure (-fno-exceptions).
+  if (ESP.getFreeHeap() < MIN_FREE_HEAP_DURING_CSS_PARSE) {
+    LOG_DBG("CSS", "Low heap (%u bytes), dropping CSS rule registration", ESP.getFreeHeap());
+    return;
+  }
+
   // Check if we've reached the rule limit before processing
   if (rulesBySelector_.size() >= MAX_RULES) {
     LOG_DBG("CSS", "Reached max rules limit (%zu), stopping CSS parsing", MAX_RULES);
@@ -588,6 +604,16 @@ bool CssParser::loadFromStream(HalFile& source) {
 
   char buffer[READ_BUFFER_SIZE];
   while (source.available()) {
+    // Periodic heap check to avoid abort() from a failed allocation while
+    // registering rules. Rules collected so far are kept in RAM, but return
+    // false so the caller knows the parse is incomplete and must not persist
+    // a truncated rule set to the cache.
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_DURING_CSS_PARSE) {
+      LOG_ERR("CSS", "Low heap during CSS parse (%u bytes), stopping early with %zu rules", ESP.getFreeHeap(),
+              rulesBySelector_.size());
+      return false;
+    }
+
     int bytesRead = source.read(buffer, sizeof(buffer));
     if (bytesRead <= 0) break;
 
@@ -772,7 +798,30 @@ bool CssParser::saveToCache() const {
   return true;
 }
 
-bool CssParser::loadFromCache() {
+bool CssParser::validateCache() const {
+  if (cachePath.empty()) {
+    return false;
+  }
+
+  HalFile file;
+  if (!Storage.openFileForRead("CSS", cachePath + rulesCache, file)) {
+    return false;
+  }
+
+  uint8_t version = 0;
+  if (file.read(&version, 1) != 1 || version != CssParser::CSS_CACHE_VERSION) {
+    LOG_DBG("CSS", "Cache version mismatch (got %u, expected %u), removing stale cache for rebuild", version,
+            CssParser::CSS_CACHE_VERSION);
+    // Explicitly close() file before calling Storage.remove()
+    file.close();
+    Storage.remove((cachePath + rulesCache).c_str());
+    return false;
+  }
+
+  return true;
+}
+
+bool CssParser::loadFromCache(const CssSelectorUsage* usage) {
   if (cachePath.empty()) {
     return false;
   }
@@ -822,6 +871,16 @@ bool CssParser::loadFromCache() {
 
   // Read each rule
   for (uint16_t i = 0; i < ruleCount; ++i) {
+    // Stop early when heap is nearly exhausted; inserting into
+    // rulesBySelector_ would abort() on allocation failure (-fno-exceptions).
+    // Rules loaded so far are kept — degraded styling beats a reboot, and
+    // nothing is persisted from this path.
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP_DURING_CSS_PARSE) {
+      LOG_ERR("CSS", "Low heap while loading CSS cache (%u bytes), stopping early with %zu rules", ESP.getFreeHeap(),
+              rulesBySelector_.size());
+      return true;
+    }
+
     // Read selector string
     uint16_t selectorLen = 0;
     if (!hasRemainingBytes(sizeof(selectorLen))) {
@@ -948,9 +1007,16 @@ bool CssParser::loadFromCache() {
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
 
+    // Skip rules that can never match the scanned document; the style
+    // payload has already been consumed from the stream at this point.
+    if (usage != nullptr && !usage->matches(selector)) {
+      continue;
+    }
+
     rulesBySelector_[selector] = style;
   }
 
-  LOG_DBG("CSS", "Loaded %u rules from cache", ruleCount);
+  LOG_DBG("CSS", "Loaded %zu of %u cached rules%s", rulesBySelector_.size(), ruleCount,
+          usage != nullptr ? " (usage-filtered)" : "");
   return true;
 }

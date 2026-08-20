@@ -283,7 +283,10 @@ void Epub::parseCssFiles() const {
   seenKeys.reserve(cssFiles.size());
   size_t skippedDuplicates = 0;
 
-  // No cache yet - parse CSS files
+  // No cache yet - parse CSS files.
+  // Heap-related truncation is transient: if it happens, skip saving the
+  // cache so a later session with more free heap rebuilds it completely.
+  bool cssComplete = true;
   for (size_t cssIndex = 0; cssIndex < cssFiles.size(); cssIndex++) {
     const auto& cssPath = cssFiles[cssIndex];
     const uint64_t dedupKey = dedupKeys[cssIndex];
@@ -301,6 +304,7 @@ void Epub::parseCssFiles() const {
     if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
       LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
               MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+      cssComplete = false;
       continue;
     }
 
@@ -337,14 +341,20 @@ void Epub::parseCssFiles() const {
       Storage.remove(tmpCssPath.c_str());
       continue;
     }
-    cssParser->loadFromStream(tempCssFile);
+    if (!cssParser->loadFromStream(tempCssFile)) {
+      cssComplete = false;
+    }
     // Explicitly close() file before calling Storage.remove()
     tempCssFile.close();
     Storage.remove(tmpCssPath.c_str());
   }
 
-  // Save to cache for next time
-  if (!cssParser->saveToCache()) {
+  // Save to cache for next time. A rule set truncated by low heap must not be
+  // persisted: hasCache() would then skip rebuilds forever, making the
+  // styling loss permanent.
+  if (!cssComplete) {
+    LOG_ERR("EBP", "CSS parsing incomplete (low heap), not saving cache so it can be rebuilt later");
+  } else if (!cssParser->saveToCache()) {
     LOG_ERR("EBP", "Failed to save CSS rules to cache");
   }
 
@@ -365,8 +375,10 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   // Try to load existing cache first
   if (bookMetadataCache->load()) {
     if (!skipLoadingCss) {
-      // Rebuild CSS cache when missing or when cache version changed (loadFromCache removes stale file)
-      if (!cssParser->hasCache() || !cssParser->loadFromCache()) {
+      // Rebuild CSS cache when missing or when cache version changed (validateCache removes stale file).
+      // validateCache() only checks the header; rules are loaded into RAM per
+      // section during section building, not held for the whole session.
+      if (!cssParser->validateCache()) {
         LOG_DBG("EBP", "CSS rules cache missing or stale, attempting to parse CSS files");
         cssParser->deleteCache();
 

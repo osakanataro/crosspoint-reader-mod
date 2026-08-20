@@ -6,6 +6,7 @@
 #include <Serialization.h>
 
 #include "Epub/css/CssParser.h"
+#include "Epub/css/CssSelectorUsage.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
@@ -370,8 +371,19 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 
   if (spec.embeddedStyle) {
     ctx->cssParser = epub->getCssParser();
-    if (ctx->cssParser && !ctx->cssParser->loadFromCache()) {
-      LOG_ERR("SCT", "Failed to load CSS from cache");
+    if (ctx->cssParser) {
+      // Load only the cached rules this chapter can actually reference.
+      // Generic publisher stylesheets (the EBPAJ/Kadokawa templates most
+      // Japanese EPUBs carry) register 1000+ rules of which a chapter uses a
+      // handful; loading them all costs tens of KB of heap right when section
+      // building needs it most (measured: a 144KB/1865-rule template ran a
+      // 99KB-free build to exhaustion). If the scan fails, fall back to
+      // loading everything.
+      CssSelectorUsage usage;
+      const bool scanned = usage.scanHtmlFile(ctx->parsePath);
+      if (!ctx->cssParser->loadFromCache(scanned ? &usage : nullptr)) {
+        LOG_ERR("SCT", "Failed to load CSS from cache");
+      }
     }
   }
 
