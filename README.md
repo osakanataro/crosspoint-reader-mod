@@ -1,3 +1,42 @@
+# CrossPoint Reader OST 改造版
+
+XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader を改造しています。
+命名は面倒くさくなったのでOSakanaTaro版ってことでOST版です。
+
+### 2026/08/20時点の開発方針
+- XTEINK X3で動けばいい
+  - aliexpressで買ったUSB接続ができないバージョンを使用
+- Claude Codeで開発する
+  - コンパイルなどはUbuntu 24.04仮想マシン上で実施
+- 本家をベースにする
+  - X3の最近のバージョンは液晶パネルが違う件への対応などが本家には入っているため
+  - 初期は1.5.0ベースで開始。本家にXteink x4 pro対応が入ったあたりで乖離が始まった
+  - 2026/08/20から1.6.0rcをベースにして再構成開始
+- 日本語訳は付けない
+- フォントはSDカード上に配置する
+  - 容量食うのでSDカード上に置く
+- ページめくりボタンは左が進むで、右が戻る
+  - 縦書きフォーマット(RTL)のEPUBを開いた時だけその動作をする
+- テスト用EPUBファイルにて動作を確認
+  - 一部、特殊なフォントを必要とする文字以外について表示できることが期待される
+- ルビ表示について対応中
+  - 横書きであればルビに対応してるなら縦書きでも対応しておくかな、って
+- 電書連 EPUB 3 制作ガイド ver.1.1.4に準拠したEPUB表示についての対策は悩み中
+  - CSSが巨大すぎてメモリクラッシュを起こす件についての対応をやる必要があるのかという問題
+  - [Setings]-[Reader]-[Text Settings]にある[Style]にて「Embedded Style」を「OFF」にするとCSSを使わないため回避できる
+  - こんな小さな端末で著者がやりたいという複雑な表現をやって期待通りの表示になるのか？
+- 開発に際して下記URLをClaude codeに読み込ませている
+  - 本家 https://github.com/crosspoint-reader/crosspoint-reader
+  - JP版 https://github.com/zrn-ns/crosspoint-jp
+  - CJK版 https://github.com/aBER0724/crosspoint-reader-cjk
+  - Yomuka版 https://github.com/ponto1216-ai/crosspoint-jp
+  - 抹茶版 https://github.com/eszter007/matcha-reader
+
+
+## 2026/08/20までの実装内容まとめ by claude code
+
+
+# 以下 crosspoint reader公式 のコピー
 # CrossPoint Reader
 
 [![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
