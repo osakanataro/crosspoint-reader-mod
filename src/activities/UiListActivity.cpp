@@ -1,5 +1,6 @@
 #include "UiListActivity.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 
@@ -18,6 +19,14 @@ UiListActivity::UiListActivity(const char* name, GfxRenderer& renderer, MappedIn
 
 void UiListActivity::onEnter() {
   Activity::onEnter();
+  // Hand back every SD-card glyph cache before the first build, the reading font's included: a list
+  // opened over the reader has to warm a screenful of CJK out of whatever the book left behind, and
+  // what it left behind is not drawn while this screen is up. This is also what gives a chapter
+  // jump its headroom -- the section build that follows runs against the freed arenas instead of
+  // exhausting the last KBs into an abort inside a std::string.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseSdFontCaches();
+  }
   activeNav().reset();
   resetUi();
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);
