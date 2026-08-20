@@ -48,23 +48,48 @@ struct PageTurnResult {
   bool fromTilt;
 };
 
-inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
+// `rtlPageProgression` is the book's spine page-progression-direction. In such a book the
+// pages advance the way the text runs -- right to left -- so the controls that carry a
+// left-right sense have to follow, or every turn is backwards from what the page shows.
+// A vertical Japanese book is the common case; a horizontal Arabic or Hebrew one behaves
+// the same way.
+//
+// The two axis-carrying inputs are treated differently on purpose:
+//
+//   Front Left/Right compose with the orientation flip. Both are transforms of the same
+//   axis -- one because the panel is rotated, one because the text runs the other way --
+//   so applying both is correct: in an inverted vertical book they cancel out.
+//
+//   The side buttons override sideButtonLayout instead of composing. That setting is how
+//   the reader states which side-button end means "forward" for ordinary books, and letting
+//   it compose would mean a reader who had already flipped it by hand to cope with vertical
+//   text now gets the old, wrong behaviour back. SIDE_BUTTONS_DISABLED still wins, since
+//   that is not a direction but an off switch.
+inline PageTurnResult detectPageTurn(const MappedInputManager& input, const bool rtlPageProgression = false) {
+  using Button = MappedInputManager::Button;
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool swapFront = input.isNavDirectionSwapped();
-  const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
-  const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
-  const bool prev =
-      tiltPrev ||
-      (usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) || input.wasPressed(prevButton))
-                : (input.wasReleased(MappedInputManager::Button::PageBack) || input.wasReleased(prevButton)));
-  const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                         input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = tiltNext || (usePress ? (input.wasPressed(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasPressed(nextButton))
-                                          : (input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasReleased(nextButton)));
+
+  const bool swapFront = input.isNavDirectionSwapped() != rtlPageProgression;
+  const auto prevButton = swapFront ? Button::Right : Button::Left;
+  const auto nextButton = swapFront ? Button::Left : Button::Right;
+
+  // Physical Up/Down when overriding, so sideButtonLayout's direction is bypassed;
+  // PageBack/PageForward otherwise, which is where that setting is applied.
+  const bool sideOverride =
+      rtlPageProgression && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  const auto sidePrevButton = sideOverride ? Button::Down : Button::PageBack;
+  const auto sideNextButton = sideOverride ? Button::Up : Button::PageForward;
+
+  const auto triggered = [&](const Button button) {
+    return usePress ? input.wasPressed(button) : input.wasReleased(button);
+  };
+
+  const bool prev = tiltPrev || triggered(sidePrevButton) || triggered(prevButton);
+  const bool powerTurn =
+      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && input.wasReleased(Button::Power);
+  const bool next = tiltNext || powerTurn || triggered(sideNextButton) || triggered(nextButton);
   return {prev, next, tiltPrev || tiltNext};
 }
 
@@ -74,7 +99,10 @@ struct TouchPageTurn {
   unsigned long heldMs;
 };
 
-inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInputManager& input) {
+// The tap zones and swipes carry a left-right sense too, so they follow the
+// page-progression direction along with the front buttons (see detectPageTurn).
+inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInputManager& input,
+                                         const bool rtlPageProgression = false) {
   TouchPageTurn result{false, false, 0};
   if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
     return result;
@@ -82,12 +110,13 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
 
   if (SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_SWIPE) {
     // Horizontal swipes turn pages; taps remain free for the centered reader-menu
-    // zone. A slow swipe never becomes a long-press chapter skip.
+    // zone. A slow swipe never becomes a long-press chapter skip. In an RTL book
+    // the next page is pulled in from the left, so the two directions trade places.
     const auto dir = input.wasSwipe();
     if (dir == MappedInputManager::SwipeDir::Left) {
-      result.next = true;
+      (rtlPageProgression ? result.prev : result.next) = true;
     } else if (dir == MappedInputManager::SwipeDir::Right) {
-      result.prev = true;
+      (rtlPageProgression ? result.next : result.prev) = true;
     }
     return result;
   }
@@ -101,9 +130,12 @@ inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInpu
   const int16_t width = static_cast<int16_t>(renderer.getScreenWidth());
   const int16_t height = static_cast<int16_t>(renderer.getScreenHeight());
   // Outer thirds only: the center column contains the reader-menu tap target
-  // (isTouchMenuTap below), so it must not double as a page turn.
+  // (isTouchMenuTap below), so it must not double as a page turn. The two ends
+  // trade places in an RTL book, so the forward end stays on the side the text
+  // advances towards.
   const int16_t zoneWidth = width / 3;
-  const bool inverted = SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_INVERTED_TAP;
+  const bool inverted =
+      (SETTINGS.touchReaderControls == CrossPointSettings::TOUCH_READER_INVERTED_TAP) != rtlPageProgression;
   const freeink::ui::TapZone zones[] = {
       {freeink::ui::Rect{0, 0, zoneWidth, height}, inverted ? READER_TOUCH_NEXT : READER_TOUCH_PREV},
       {freeink::ui::Rect{static_cast<int16_t>(width - zoneWidth), 0, zoneWidth, height},

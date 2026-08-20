@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EpdFontFamily.h>
+#include <VerticalTextUtils.h>
 
 #include <deque>
 #include <functional>
@@ -36,6 +37,9 @@ class ParsedText {
   // 0 = none. An annotation rather than a token split, so the hyphenator and line breaker still
   // see whole words; TextBlock stores emphasis the same way, so extractLine passes it through.
   std::vector<uint8_t> wordFocusBoundary;
+  // Per-word vertical orientation (tategaki). Populated only in vertical mode, in lockstep
+  // with words[]; empty in horizontal mode. Consumed by layoutVerticalColumns.
+  std::vector<VerticalTextUtils::VerticalBehavior> wordVerticalBehaviors;
   // Zero-based visible Unicode-codepoint offsets in the spine body, stored as
   // uint16_t deltas from a shared base to keep this layout-only metadata small.
   // Pathological spans wider than uint16_t use sparse rebases; rendered
@@ -52,6 +56,10 @@ class ParsedText {
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
+  // True when this block is laid out as vertical (tategaki) columns. Kept here so addWord can
+  // maintain the wordVerticalBehaviors invariant even on shared markup paths that don't know
+  // about vertical mode.
+  bool verticalMode;
   bool isNaturalAlign;
   bool hasRtlWord;
   std::vector<std::string> reorderedWordsScratch;
@@ -88,17 +96,28 @@ class ParsedText {
 
  public:
   explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
-                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle())
+                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
+                      const bool verticalMode = false)
       : blockStyle(blockStyle),
         extraParagraphSpacing(extraParagraphSpacing),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
+        verticalMode(verticalMode),
         isNaturalAlign(false),
         hasRtlWord(false) {}
   ~ParsedText() = default;
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
                uint32_t visibleTextOffset = 0);
+  // Vertical (tategaki) token: one already-tokenized unit (typically a single codepoint)
+  // plus its orientation class. Bypasses the horizontal focus/bidi machinery — vertical
+  // layout stacks tokens down a column and composes columns right-to-left. Does not track
+  // a visible-text offset (see the wordVisibleOffsetDeltas comment above).
+  void addVerticalToken(std::string token, EpdFontFamily::Style fontStyle, VerticalTextUtils::VerticalBehavior vb);
+  // Reserve the per-token parallel arrays for `additionalTokens` more pushes. Callers that
+  // append a burst of tokens (a CJK-split word, a buffer of vertical cells) should call this
+  // first so the arrays grow once instead of doubling repeatedly mid-burst.
+  void ensureTokenCapacity(size_t additionalTokens);
   void setRubyForWordAt(size_t index, const std::string& ruby);
   void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
   EpdFontFamily::Style getWordStyleAt(size_t index) const {
@@ -113,4 +132,12 @@ class ParsedText {
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                              bool includeLastLine = true);
+  // Vertical (tategaki) analogue of layoutAndExtractLines: stacks tokens down columns of
+  // height columnHeight, applying kinsoku at column boundaries, and emits one TextBlock per
+  // column (words positioned by ypos; the page composes columns right-to-left). Consumes
+  // emitted words like the horizontal path; includeLastColumn=false preserves a trailing
+  // partial column across mid-block flushes.
+  void layoutVerticalColumns(const GfxRenderer& renderer, int fontId, uint16_t columnHeight,
+                             const std::function<void(std::shared_ptr<TextBlock>)>& processColumn,
+                             bool includeLastColumn = true);
 };

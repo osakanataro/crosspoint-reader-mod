@@ -43,6 +43,17 @@
 #include "util/ScreenshotUtil.h"
 
 namespace {
+// Tategaki (vertical writing) auto-detection: no explicit writing-mode setting exists yet,
+// so a book lays out vertically only when its spine declares page-progression-direction="rtl"
+// AND its language is CJK (Japanese/Chinese) — the shape of a typical vertical EPUB.
+bool bookIsVertical(const Epub* epub) {
+  if (epub == nullptr || !epub->isPageProgressionRtl()) {
+    return false;
+  }
+  const std::string& lang = epub->getLanguage();
+  return lang.rfind("ja", 0) == 0 || lang.rfind("jp", 0) == 0 || lang.rfind("zh", 0) == 0;
+}
+
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 constexpr size_t initialBookmarkCacheCapacity = 16;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
@@ -327,7 +338,8 @@ void EpubReaderActivity::loop() {
       !partialRebuildStartFailed &&
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
     RenderLock lock;
-    const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+    ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+    buildSpec.isVertical = bookIsVertical(epub.get());
     if (!section->startBuild(buildSpec)) {
       partialRebuildStartFailed = true;
       LOG_ERR("ERS", "Failed to start deferred partial extension build");
@@ -376,7 +388,12 @@ void EpubReaderActivity::loop() {
     pendingReadFolderMove = false;
   }
 
-  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  // Page-progression-direction, not bookIsVertical(): the controls have to follow the
+  // page order the spine declares, which is right-to-left for a horizontal Arabic book
+  // just as much as for a vertical Japanese one.
+  const bool rtlPages = epub != nullptr && epub->isPageProgressionRtl();
+
+  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput, rtlPages);
 
   if (automaticPageTurnActive) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
@@ -530,7 +547,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput, rtlPages);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
@@ -1067,7 +1084,8 @@ void EpubReaderActivity::renderBook() {
   buildViewportWidth = viewportWidth;
   buildViewportHeight = viewportHeight;
 
-  const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  renderSpec.isVertical = bookIsVertical(epub.get());
   // getReaderFontId() inside readerRenderSpec resolves (and lazily loads) the SD reader font.
   InputDiag::noteOpenStage(2, "font");
 
@@ -1502,9 +1520,24 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     renderer.clearScreen();
   }
 
+#ifdef INPUT_DIAG
+  // Discard what the scan pass accumulated: it runs the same loops with drawing suppressed, so
+  // leaving it in would report it alongside the pass that actually puts pixels down.
+  (void)TextBlock::takeVerticalRenderStats();
+#endif
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+#ifdef INPUT_DIAG
+  const auto tBlocks = millis();
+#endif
   renderStatusBar();
   const auto tBwRender = millis();
+#ifdef INPUT_DIAG
+  {
+    const auto vs = TextBlock::takeVerticalRenderStats();
+    InputDiag::noteVerticalRender(vs.bodyMs, vs.bodyCells, vs.rubyMeasureMs, vs.rubyDrawMs, vs.rubyGroups);
+    InputDiag::notePageDrawParts(tBlocks - tPrewarm, tBwRender - tBlocks);
+  }
+#endif
 
   if (pageHasImages) {
     // Image pages use one base refresh before the grayscale pass. FAST leaves

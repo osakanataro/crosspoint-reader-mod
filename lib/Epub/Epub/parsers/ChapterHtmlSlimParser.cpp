@@ -273,15 +273,123 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset);
+  if (isVertical) {
+    // Spend the pending whitespace run as a separator token.
+    //
+    // characterData drops HTML whitespace as a bare word boundary, which is right for horizontal
+    // layout: that path re-inserts the gap at layout time via getSpaceAdvance() between words that
+    // do not continue. Vertical layout has no such step — layoutVerticalColumns stacks each token by
+    // its own advance and nothing else — so with no token to carry it the space simply vanished and
+    // Latin phrases came out run together ("character length calculator" as one string).
+    //
+    // Emitting a token here rather than adding a rule to the vertical layout keeps the two writing
+    // modes agreeing on where a space belongs, instead of giving vertical its own notion of it.
+    //
+    // Guarded on a non-empty buffer so an empty flush (an inline tag boundary, say) neither spends
+    // the run nor emits a trailing separator, and on a non-empty block so a run that opens a
+    // paragraph is discarded the way CSS collapsing discards it.
+    if (partWordBufferIndex > 0) {
+      if (pendingVerticalWhitespace && currentTextBlock && !currentTextBlock->isEmpty()) {
+        currentTextBlock->addVerticalToken(" ", fontStyle, VerticalTextUtils::VerticalBehavior::Sideways);
+      }
+      pendingVerticalWhitespace = false;
+    }
+    // Vertical layout tokenizes per codepoint: each glyph is its own cell, classified
+    // (upright CJK / sideways Latin / tate-chu-yoko digits) so layoutVerticalColumns can
+    // stack and orient it. Latin runs and 1-2 digit numbers are grouped into one token.
+    // Per-token visible-offset tracking is not implemented for this path (see
+    // addColumnToPage for the page-granularity fallback used instead).
+    flushPartWordBufferVertical(fontStyle);
+  } else {
+    currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset);
+  }
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
 }
 
+// Tokenize the pending buffer into vertical cells. Emits one token per CJK/upright
+// codepoint; consecutive ASCII letters coalesce into a Sideways run and 1-2 digit
+// numbers into a TateChuYoko token (3+ digits fall back to Sideways). A number keeps
+// any separator standing between two of its digits, so 3.14 and 12:34 are one cell each
+// and cannot be broken across a column.
+void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Style fontStyle) {
+  // Vertical layout emits roughly one token per codepoint, so a full buffer becomes a burst of
+  // pushes. Reserve up front (worst case one token per byte) so the parallel arrays grow once.
+  currentTextBlock->ensureTokenCapacity(static_cast<size_t>(partWordBufferIndex));
+
+  const auto* p = reinterpret_cast<const unsigned char*>(partWordBuffer);
+  const auto* end = p + partWordBufferIndex;
+  while (p < end) {
+    const unsigned char* cpStart = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+
+    if (VerticalTextUtils::isUprightInVertical(cp) || VerticalTextUtils::getVerticalPunctuationOffset(cp) != nullptr) {
+      // Upright CJK/kana/punctuation: one cell each.
+      currentTextBlock->addVerticalToken(std::string(reinterpret_cast<const char*>(cpStart), p - cpStart), fontStyle,
+                                         VerticalTextUtils::VerticalBehavior::Upright);
+      continue;
+    }
+
+    // Coalesce a run of ASCII digits or letters into a single sideways/tate-chu-yoko token.
+    const bool isDigit = (cp >= '0' && cp <= '9');
+    const unsigned char* runStart = cpStart;
+    const unsigned char* runEnd = p;
+    int runChars = 1;
+    while (runEnd < end) {
+      const unsigned char* peek = runEnd;
+      const uint32_t next = utf8NextCodepoint(&peek);
+      const bool nextDigit = (next >= '0' && next <= '9');
+      const bool nextAscii = (next >= '!' && next <= '~');
+      if (isDigit) {
+        if (nextDigit) {
+          runEnd = peek;
+          runChars++;
+          continue;
+        }
+        // A separator standing between two digits is part of the number, not a break in
+        // it: 3.14, 12:34, 1,000, 3/4. Left out of the run, each of those became three
+        // cells with a column break free to fall between them, and 3.14 duly came back
+        // from the device split across two columns. The digit on the far side is what
+        // makes it safe -- the full stop ending a sentence has no digit after it, so it
+        // is not swallowed, and neither is the colon introducing a quotation.
+        if (next == '.' || next == ',' || next == ':' || next == '/') {
+          const unsigned char* after = peek;
+          if (after < end) {
+            const uint32_t following = utf8NextCodepoint(&after);
+            if (following >= '0' && following <= '9') {
+              runEnd = after;
+              runChars += 2;
+              continue;
+            }
+          }
+        }
+        break;
+      }
+      if (nextAscii && !nextDigit) {
+        runEnd = peek;
+        runChars++;
+        continue;
+      }
+      break;
+    }
+    p = runEnd;
+    std::string token(reinterpret_cast<const char*>(runStart), runEnd - runStart);
+    // 1-2 digits and an exclamation/question pair share one upright cell; every other
+    // ASCII run turns with the column.
+    const bool tateChuYoko =
+        (isDigit && runChars <= 2) || VerticalTextUtils::isTateChuYokoPunctuationPair(token.c_str());
+    const auto behavior =
+        tateChuYoko ? VerticalTextUtils::VerticalBehavior::TateChuYoko : VerticalTextUtils::VerticalBehavior::Sideways;
+    currentTextBlock->addVerticalToken(std::move(token), fontStyle, behavior);
+  }
+}
+
 // start a new text block if needed
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
-  nextWordContinues = false;  // New block = new paragraph, no continuation
+  nextWordContinues = false;          // New block = new paragraph, no continuation
+  pendingVerticalWhitespace = false;  // and no separator carried across the paragraph boundary
   if (currentTextBlock) {
     // already have a text block running and it is empty - just reuse it
     if (currentTextBlock->isEmpty()) {
@@ -322,7 +430,8 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
-  currentTextBlock.reset(new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle));
+  currentTextBlock.reset(
+      new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle, isVertical));
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
 }
@@ -1031,7 +1140,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
-        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
+        if (self->isVertical) {
+          self->currentTextBlock->addVerticalToken("\xe2\x80\xa2", EpdFontFamily::REGULAR,
+                                                   VerticalTextUtils::VerticalBehavior::Upright);
+        } else {
+          self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false,
+                                          self->visibleTextOffset);
+        }
         self->listItemBulletOnly = true;
       }
     }
@@ -1215,6 +1330,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       }
       // Whitespace is a real word boundary — reset continuation state
       self->nextWordContinues = false;
+      // Vertical layout needs the run kept as a separator (see flushPartWordBuffer). Only once the
+      // block has content: a run before the first word of a paragraph collapses away.
+      if (self->isVertical && self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+        self->pendingVerticalWhitespace = true;
+      }
       // Skip the whitespace char
       continue;
     }
@@ -1339,16 +1459,27 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
   if (blockWordCount > softFlushThreshold) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-    const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                        ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                        : self->viewportWidth;
-    self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
-          self->addLineToPage(textBlock, offset);
-        },
-        false);
+    if (self->isVertical) {
+      const int verticalInset =
+          self->currentTextBlock->getBlockStyle().topInset() + self->currentTextBlock->getBlockStyle().bottomInset();
+      const uint16_t effectiveHeight = (verticalInset < self->viewportHeight)
+                                           ? static_cast<uint16_t>(self->viewportHeight - verticalInset)
+                                           : self->viewportHeight;
+      self->currentTextBlock->layoutVerticalColumns(
+          self->renderer, self->fontId, effectiveHeight,
+          [self](const std::shared_ptr<TextBlock>& col) { self->addColumnToPage(col); }, false);
+    } else {
+      const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
+      const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
+                                          ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
+                                          : self->viewportWidth;
+      self->currentTextBlock->layoutAndExtractLines(
+          self->renderer, self->fontId, effectiveWidth,
+          [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
+            self->addLineToPage(textBlock, offset);
+          },
+          false);
+    }
   }
 }
 
@@ -1706,6 +1837,57 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
   currentPageNextY += lineHeight;
 }
 
+void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
+  // Column occupies one CJK cell of width plus a quarter-cell gap to the next column.
+  const int columnWidth = renderer.getLineHeight(fontId, lineCompression);
+  const int columnSpacing = columnWidth / 4;
+
+  if (!currentPage) {
+    currentPage.reset(new Page());
+    currentPageVisibleOffsetSet = false;
+  }
+
+  // Re-anchor the cursor to the right margin whenever the page changed. Pages are also
+  // started outside this function (TOC-anchor breaks, image blocks) and those paths only
+  // reset the horizontal cursor, so the cursor value alone cannot tell us whether it still
+  // belongs to the current page. Keying on the page index instead is immune to that, and to
+  // a fresh Page landing on the address of the one just handed off.
+  if (verticalCursorPageIndex != completedPageCount) {
+    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth);
+    verticalCursorPageIndex = completedPageCount;
+  }
+
+  // Columns advance right-to-left; a new page starts once the cursor passes the left edge.
+  if (currentPageNextX < 0) {
+    // Vertical layout does not thread a per-token visible-codepoint offset through
+    // addVerticalToken/layoutVerticalColumns, so fall back to the parser's running counter.
+    // Note this over-reports: layoutVerticalColumns runs from makePages once the paragraph is
+    // fully parsed, so visibleTextOffset already sits at the paragraph's *end* rather than at
+    // the first character of this page. Sync positions for vertical books therefore land a
+    // paragraph or so ahead of the true position. Per-token offsets would fix it.
+    setCurrentPageVisibleOffset(visibleTextOffset);
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+    completedPageCount++;
+    currentPage.reset(new Page());
+    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth);
+    currentPageVisibleOffsetSet = false;
+    verticalCursorPageIndex = completedPageCount;
+  }
+  setCurrentPageVisibleOffset(visibleTextOffset);
+
+  wordsExtractedInBlock += column->wordCount();
+  auto footnoteIt = pendingFootnotes.begin();
+  while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
+    currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
+    ++footnoteIt;
+  }
+  pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
+
+  const int16_t yOffset = column->getBlockStyle().topInset();
+  currentPage->elements.push_back(std::make_shared<PageLine>(column, currentPageNextX, yOffset));
+  currentPageNextX -= static_cast<int16_t>(columnWidth + columnSpacing);
+}
+
 void ChapterHtmlSlimParser::makePages() {
   if (!currentTextBlock) {
     LOG_ERR("EHP", "!! No text block to make pages for !!");
@@ -1722,6 +1904,28 @@ void ChapterHtmlSlimParser::makePages() {
 
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+
+  // Vertical (tategaki): lay the paragraph out as right-to-left columns. Block top/bottom
+  // margins are a horizontal-flow concept; vertical advances by column width and adds a
+  // half-cell inter-paragraph gap instead.
+  if (isVertical) {
+    const int verticalInset = blockStyle.topInset() + blockStyle.bottomInset();
+    const uint16_t effectiveHeight =
+        (verticalInset < viewportHeight) ? static_cast<uint16_t>(viewportHeight - verticalInset) : viewportHeight;
+    currentTextBlock->layoutVerticalColumns(renderer, fontId, effectiveHeight,
+                                            [this](const std::shared_ptr<TextBlock>& col) { addColumnToPage(col); });
+    if (!pendingFootnotes.empty() && currentPage) {
+      for (const auto& [idx, fn] : pendingFootnotes) {
+        currentPage->addFootnote(fn.number, fn.href);
+      }
+      pendingFootnotes.clear();
+    }
+    if (extraParagraphSpacing) {
+      currentPageNextX -= static_cast<int16_t>(lineHeight / 2);
+    }
+    return;
+  }
+
   if (blockStyle.marginTop > 0) {
     currentPageNextY += blockStyle.marginTop;
   }

@@ -21,10 +21,17 @@
 // unaligned multi-byte access):
 //   uint16_t textOff[wordCount]        byte offset of word i's text in text[]
 //   int16_t  xpos[wordCount]
+//   int16_t  ypos[wordCount]           present only when isVertical (tategaki)
 //   uint16_t focusSuffixX[wordCount]   present only when focusPresent
 //   uint8_t  styles[wordCount]
 //   uint8_t  focusBoundary[wordCount]  present only when focusPresent
 //   char     text[textBytes]           all words back to back, NUL-terminated
+//
+// Vertical (tategaki) blocks carry a per-word ypos array and lay each word out
+// down a column (xpos is the shared column offset, ypos the stacking position);
+// the page composes columns right-to-left. Vertical blocks never carry focus
+// splits (bionic reading is a horizontal-only feature), so ypos and focus arrays
+// are mutually exclusive in practice, though the layout permits either.
 //
 // Each word is stored NUL-terminated so render() can hand `text + textOff[i]`
 // straight to C APIs (drawText) with no std::string materialization.
@@ -42,6 +49,7 @@ class TextBlock final : public Block {
   uint16_t numWords = 0;
   uint16_t textBytes = 0;  // total size of the text region, including NULs
   bool focusPresent = false;
+  bool isVertical = false;  // tategaki: arena carries a per-word ypos array
   bool isValid = true;
   // The ONLY allocation: makeUniqueNoThrow, so OOM yields an invalid block
   // instead of abort() (bare new is not nothrow with -fno-exceptions).
@@ -50,6 +58,7 @@ class TextBlock final : public Block {
   // 16-bit bases sit at even offsets, so direct dereference is alignment-safe.
   const uint16_t* textOffArr = nullptr;
   const int16_t* xposArr = nullptr;
+  const int16_t* yposArr = nullptr;           // null when !isVertical
   const uint16_t* focusSuffixXArr = nullptr;  // null when !focusPresent
   const uint8_t* stylesArr = nullptr;
   const uint8_t* focusBoundaryArr = nullptr;  // null when !focusPresent
@@ -57,8 +66,9 @@ class TextBlock final : public Block {
   std::vector<std::string> rubyTexts;
 
   TextBlock() = default;  // deserialize() fills the fields directly
-  static size_t arenaSize(uint16_t wordCount, bool hasFocus, uint16_t textBytes);
+  static size_t arenaSize(uint16_t wordCount, bool hasFocus, bool hasVertical, uint16_t textBytes);
   void bindArenaPointers();
+  void renderVertical(const GfxRenderer& renderer, int fontId, int x, int y) const;
 
  public:
   // Flatten-on-construct: copies the layout-time vectors into the arena; the
@@ -68,6 +78,11 @@ class TextBlock final : public Block {
                      const std::vector<EpdFontFamily::Style>& wordStyles, const std::vector<uint8_t>& focusBoundary,
                      const std::vector<uint16_t>& focusSuffixX, const BlockStyle& blockStyle = BlockStyle(),
                      std::vector<std::string> rubyTexts = {});
+  // Vertical (tategaki) block: per-word Y stacking positions instead of a shared
+  // baseline. No focus-split support (bionic reading is horizontal-only).
+  explicit TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
+                     const std::vector<int16_t>& wordYpos, const std::vector<EpdFontFamily::Style>& wordStyles,
+                     const BlockStyle& blockStyle = BlockStyle(), std::vector<std::string> rubyTexts = {});
   ~TextBlock() override = default;
   TextBlock(const TextBlock&) = delete;
   TextBlock& operator=(const TextBlock&) = delete;
@@ -84,12 +99,30 @@ class TextBlock final : public Block {
     return end - textOffArr[i] - 1;  // exclude the NUL
   }
   int16_t wordXpos(const uint16_t i) const { return xposArr[i]; }
+  int16_t wordYpos(const uint16_t i) const { return isVertical ? yposArr[i] : 0; }
+  bool vertical() const { return isVertical; }
   EpdFontFamily::Style wordStyle(const uint16_t i) const { return static_cast<EpdFontFamily::Style>(stylesArr[i]); }
   uint8_t focusBoundary(const uint16_t i) const { return focusPresent ? focusBoundaryArr[i] : 0; }
   uint16_t focusSuffixX(const uint16_t i) const { return focusPresent ? focusSuffixXArr[i] : 0; }
   bool hasRuby() const;
   int getRubyShift(int ascender) const { return hasRuby() ? (ascender / 2) : 0; }
+  // Vertical only: whether it is worth measuring the column's extent for ruby clamping.
+  bool blockHasRubyExtent() const { return isVertical && numWords > 0 && hasRuby(); }
   const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
+
+#ifdef INPUT_DIAG
+  // Diagnostic only: where renderVertical spends its time, accumulated across the blocks of one
+  // page. Reading the stats zeroes them, so a caller brackets the pass it cares about: the scan
+  // pass runs these same loops and would otherwise be counted alongside the real draw.
+  struct VerticalRenderStats {
+    uint32_t bodyMs;         // stacking and drawing the body cells
+    uint32_t bodyCells;      // how many cells that was
+    uint32_t rubyMeasureMs;  // measuring each ruby run before any of it is placed
+    uint32_t rubyDrawMs;     // drawing the ruby, a glyph at a time
+    uint32_t rubyGroups;     // how many annotations that was
+  };
+  static VerticalRenderStats takeVerticalRenderStats();
+#endif
 
   void render(const GfxRenderer& renderer, int fontId, int x, int y) const;
   BlockType getType() override { return TEXT_BLOCK; }

@@ -75,6 +75,9 @@ class GfxRenderer {
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+  // Extra spacing between cells in vertical (tategaki) layout, as a percent of the
+  // cell advance. Set from the reader spec before a vertical section is laid out.
+  int _verticalCharSpacing = 0;
 
   // CJK UI font fallback map: primary (built-in, Latin-only) UI font id -> a
   // size-matched SD-card font id that carries CJK glyphs. When a string drawn
@@ -298,7 +301,11 @@ class GfxRenderer {
   int getKerning(int fontId, uint32_t leftCp, uint32_t rightCp, EpdFontFamily::Style style) const;
   int getTextAdvanceX(int fontId, const char* text, EpdFontFamily::Style style) const;
   int getFontAscenderSize(int fontId) const;
+  /// Negative, matching the font data. ascender - descender is the line box height.
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
+  void setVerticalCharSpacing(int spacingPercent) { _verticalCharSpacing = spacingPercent; }
+  int getVerticalCharSpacing() const { return _verticalCharSpacing; }
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
@@ -311,6 +318,11 @@ class GfxRenderer {
   // Helper for drawing rotated text (90 degrees clockwise, for side buttons)
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // Latin runs inside vertical Japanese text: glyphs turn clockwise and the run
+  // advances downward from (x, y), which is the top-left of the column cell.
+  // `cellWidth` is the full-width character cell; the rotated line box is centred on it.
+  void drawTextSideways(int fontId, int x, int y, const char* text, int cellWidth, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

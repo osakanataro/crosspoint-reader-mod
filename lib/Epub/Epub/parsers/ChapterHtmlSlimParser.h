@@ -38,6 +38,10 @@ class ChapterHtmlSlimParser {
   char partWordBuffer[MAX_WORD_SIZE + 1] = {};
   int partWordBufferIndex = 0;
   bool nextWordContinues = false;  // true when next flushed word attaches to previous (inline element boundary)
+  // Vertical layout only: an HTML whitespace run is waiting to be emitted as a separator token.
+  // Held rather than emitted on sight so leading and trailing runs stay collapsed away — it is
+  // spent only when another word actually follows within the same block. See flushPartWordBuffer.
+  bool pendingVerticalWhitespace = false;
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   // Ruby text state
   bool inRuby = false;
@@ -46,6 +50,10 @@ class ChapterHtmlSlimParser {
   std::string rubyTextBuffer;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;
+  int16_t currentPageNextX = 0;  // vertical (tategaki): X of the next column, advancing right-to-left
+  // Page index currentPageNextX was last anchored for; -1 = never. addColumnToPage compares it
+  // against completedPageCount to detect a page started elsewhere and re-anchor to the right margin.
+  int verticalCursorPageIndex = -1;
   int fontId;
   float lineCompression;
   bool extraParagraphSpacing;
@@ -54,6 +62,7 @@ class ChapterHtmlSlimParser {
   uint16_t viewportHeight;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
+  bool isVertical;  // tategaki: lay text out in right-to-left vertical columns
   const CssParser* cssParser;
   bool embeddedStyle;
   uint8_t imageRendering;
@@ -128,8 +137,12 @@ class ChapterHtmlSlimParser {
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPendingAnchor();
   void flushPartWordBuffer();
+  void flushPartWordBufferVertical(EpdFontFamily::Style fontStyle);
   void setCurrentPageVisibleOffset(uint32_t offset);
   void makePages();
+  // Vertical (tategaki) analogue of addLineToPage: places a laid-out column at the current
+  // right-to-left X cursor, starting a new page when the cursor runs off the left edge.
+  void addColumnToPage(std::shared_ptr<TextBlock> column);
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
@@ -146,7 +159,7 @@ class ChapterHtmlSlimParser {
       std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer, const int fontId,
       const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
       const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
-      const bool focusReadingEnabled,
+      const bool focusReadingEnabled, const bool isVertical,
       const std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)>& completePageFn,
       const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
       const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
@@ -163,6 +176,7 @@ class ChapterHtmlSlimParser {
         viewportHeight(viewportHeight),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
+        isVertical(isVertical),
         completePageFn(completePageFn),
         popupFn(popupFn),
         cssParser(cssParser),

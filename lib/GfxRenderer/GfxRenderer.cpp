@@ -404,7 +404,13 @@ static AlignedMemRect screenRectToAlignedMemRect(GfxRenderer::Orientation orient
   return out;
 }
 
-enum class TextRotation { None, Rotated90CW };
+// None          - horizontal text; screen deltas are (u, v) -> (u, v).
+// Rotated90CW   - whole-line rotation for landscape furniture: glyphs turn so
+//                 their tops face left and the run advances upward.
+// Sideways90CW  - Latin runs inside vertical Japanese text: glyphs turn so their
+//                 tops face right and the run advances downward, i.e. the reader
+//                 tilts their head right. Screen deltas are (u, v) -> (-v, u).
+enum class TextRotation { None, Rotated90CW, Sideways90CW };
 
 // Shared glyph rendering logic for normal and rotated text.
 // Coordinate mapping and cursor advance direction are selected at compile time via the template parameter.
@@ -415,6 +421,11 @@ enum class TextRotation { None, Rotated90CW };
 //
 // The advance width is also halved in drawText() so layout reserves exactly the right
 // horizontal space for the scaled glyph.
+//
+// Rotation is selected the same way as in renderCharImpl, and on the same mapping. It
+// applies to the destination pixels, which are already in half-scale coordinates, so the
+// glyph's own bearings are the only thing that has to be halved before being turned.
+template <TextRotation rotation = TextRotation::None>
 static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                              const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                              const bool pixelState, const EpdFontFamily::Style style) {
@@ -431,8 +442,23 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   const int dstH = (srcH + 1) / 2;
   // Scale the glyph bearing by the same factor so the scaled glyph sits at the correct
   // pixel offset from the (already-shifted) cursor position.
-  const int baseX = cursorX + glyph->left / 2;
-  const int baseY = cursorY - glyph->top / 2;
+  int baseX, baseY;
+  if constexpr (rotation == TextRotation::Sideways90CW) {
+    // cursorX is the rotated baseline, cursorY the run's cursor down the column.
+    baseX = cursorX + glyph->top / 2;   // screenX = baseX - dstY
+    baseY = cursorY + glyph->left / 2;  // screenY = baseY + dstX
+  } else {
+    baseX = cursorX + glyph->left / 2;
+    baseY = cursorY - glyph->top / 2;
+  }
+
+  const auto plot = [&](const int dstX, const int dstY) {
+    if constexpr (rotation == TextRotation::Sideways90CW) {
+      renderer.drawPixel(baseX - dstY, baseY + dstX, pixelState);
+    } else {
+      renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+    }
+  };
 
   if (fontData->is2Bit) {
     // 2-bit packed format: 4 pixels per byte, MSB first, 2 bits per pixel.
@@ -453,7 +479,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (maxRaw >= 2 || coverage >= 2) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          plot(dstX, dstY);
         }
       }
     }
@@ -475,7 +501,7 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
           }
         }
         if (hasInk) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+          plot(dstX, dstY);
         }
       }
     }
@@ -508,6 +534,12 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     if (!renderer.glyphIntersectsStrip(ob, ib - (width - 1), ob + height - 1, ib)) {
       return;
     }
+  } else if constexpr (rotation == TextRotation::Sideways90CW) {
+    const int ob = cursorX + top;
+    const int ib = cursorY + left;
+    if (!renderer.glyphIntersectsStrip(ob - (height - 1), ib, ob, ib + width - 1)) {
+      return;
+    }
   } else {
     const int gx0 = cursorX + left;
     const int gy0 = cursorY - top;
@@ -525,6 +557,10 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     if constexpr (rotation == TextRotation::Rotated90CW) {
       outerBase = cursorX + fontData->ascender - top;  // screenX = outerBase + glyphY
       innerBase = cursorY - left;                      // screenY = innerBase - glyphX
+    } else if constexpr (rotation == TextRotation::Sideways90CW) {
+      // cursorX is the rotated baseline (a vertical line), cursorY the run's cursor.
+      outerBase = cursorX + top;   // screenX = outerBase - glyphY
+      innerBase = cursorY + left;  // screenY = innerBase + glyphX
     } else {
       outerBase = cursorY - top;   // screenY = outerBase + glyphY
       innerBase = cursorX + left;  // screenX = innerBase + glyphX
@@ -533,12 +569,20 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     if (is2Bit) {
       int pixelPosition = 0;
       for (int glyphY = 0; glyphY < height; glyphY++) {
-        const int outerCoord = outerBase + glyphY;
+        int outerCoord;
+        if constexpr (rotation == TextRotation::Sideways90CW) {
+          outerCoord = outerBase - glyphY;
+        } else {
+          outerCoord = outerBase + glyphY;
+        }
         for (int glyphX = 0; glyphX < width; glyphX++, pixelPosition++) {
           int screenX, screenY;
           if constexpr (rotation == TextRotation::Rotated90CW) {
             screenX = outerCoord;
             screenY = innerBase - glyphX;
+          } else if constexpr (rotation == TextRotation::Sideways90CW) {
+            screenX = outerCoord;
+            screenY = innerBase + glyphX;
           } else {
             screenX = innerBase + glyphX;
             screenY = outerCoord;
@@ -568,12 +612,20 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     } else {
       int pixelPosition = 0;
       for (int glyphY = 0; glyphY < height; glyphY++) {
-        const int outerCoord = outerBase + glyphY;
+        int outerCoord;
+        if constexpr (rotation == TextRotation::Sideways90CW) {
+          outerCoord = outerBase - glyphY;
+        } else {
+          outerCoord = outerBase + glyphY;
+        }
         for (int glyphX = 0; glyphX < width; glyphX++, pixelPosition++) {
           int screenX, screenY;
           if constexpr (rotation == TextRotation::Rotated90CW) {
             screenX = outerCoord;
             screenY = innerBase - glyphX;
+          } else if constexpr (rotation == TextRotation::Sideways90CW) {
+            screenX = outerCoord;
+            screenY = innerBase + glyphX;
           } else {
             screenX = innerBase + glyphX;
             screenY = outerCoord;
@@ -2129,6 +2181,16 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
 }
 
+int GfxRenderer::getFontDescenderSize(const int fontId) const {
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+
+  return fontIt->second.getData(EpdFontFamily::REGULAR)->descender;
+}
+
 int GfxRenderer::getLineHeight(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
@@ -2150,6 +2212,76 @@ int GfxRenderer::getTextHeight(const int fontId) const {
     return 0;
   }
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
+}
+
+void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, const char* text, const int cellWidth,
+                                   const bool black, const EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0') {
+    return;
+  }
+
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  const auto fontIt = fontMap.find(resolvedFontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
+    return;
+  }
+
+  // Scan pass: the glyphs still have to reach the SD font prewarm cache, or every
+  // sideways run pays per-glyph SD reads while drawing.
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
+    fontCacheManager_->recordText(text, resolvedFontId, style);
+    return;
+  }
+
+  const auto& font = fontIt->second;
+  const EpdFontData* fontData = font.getData(style);
+  if (fontData == nullptr) {
+    return;
+  }
+
+  // Turning clockwise maps the line box's "up" onto screen-right, so the run occupies
+  // [baseline + descender, baseline + ascender] horizontally (descender is negative).
+  // Centre that span on the character cell, which is where the upright glyphs sit.
+  //
+  // A SUP/SUB run is drawn at half scale, so it is half as wide across the column as the
+  // font's own line box. Centring the full one would push it off the cell it belongs to --
+  // for ruby, into the body column beside it.
+  const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+  int lineBoxCentre = (fontData->ascender + fontData->descender) / 2;
+  if (isSupSub) {
+    lineBoxCentre /= 2;
+  }
+  const int baselineX = x + cellWidth / 2 - lineBoxCentre;
+
+  int cursorY = y;
+  int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
+  uint32_t prevCp = 0;
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    cp = font.applyLigatures(cp, text, style);
+
+    // Same differential-rounding rule as drawText, applied along the column.
+    if (prevCp != 0) {
+      const auto kernFP = font.getKerning(prevCp, cp, style);
+      cursorY += fp4::toPixel(prevAdvanceFP + kernFP);
+    }
+
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    if (isSupSub) {
+      // Halved to match the scaled glyph, exactly as drawText and getTextAdvanceX do, so
+      // a measured run and a drawn one stay the same length.
+      prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    }
+
+    if (isSupSub) {
+      renderCharScaled<TextRotation::Sideways90CW>(*this, renderMode, font, cp, baselineX, cursorY, black, style);
+    } else {
+      renderCharImpl<TextRotation::Sideways90CW>(*this, renderMode, font, cp, baselineX, cursorY, black, style);
+    }
+    prevCp = cp;
+  }
 }
 
 void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y, const char* text, const bool black,
