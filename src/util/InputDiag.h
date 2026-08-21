@@ -106,6 +106,12 @@ class InputDiag {
   // prewarm not landing rather than to the drawing itself.
   static void noteUiPrewarmFailure();
 
+  // One chapter-image processing event (found/probe/extract/alt/lazy-extract), with the heap at
+  // that moment. Rewrites /image-diag.txt per event, same crash-surviving scheme as noteOpenStage:
+  // image failures happen mid-build under RenderLock where the periodic flush never runs. The
+  // ring keeps the last 24 events, enough for every image in the diagnostic EPUB.
+  static void noteImageEvent(const char* line);
+
   // Snapshot the RTC log ring into memory, to be written out by the next flush().
   //
   // Copies rather than writing on the spot: this is called from failure paths that may already
@@ -134,6 +140,7 @@ class InputDiag {
   static void noteBuildChunk(int, uint16_t, uint16_t, unsigned long) {}
   static void noteBuildTotal(int, unsigned long, int) {}
   static void noteUiPrewarmFailure() {}
+  static void noteImageEvent(const char*) {}
   static void captureLogs(const char*) {}
   static void flush(bool) {}
 };

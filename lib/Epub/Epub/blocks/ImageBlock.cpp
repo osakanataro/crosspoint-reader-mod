@@ -13,6 +13,18 @@
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 
+#if INPUT_DIAG
+#include "../../../../src/util/InputDiag.h"
+#define IMG_DIAG(fmt, ...)                                        \
+  do {                                                            \
+    char imgDiagBuf[72];                                          \
+    snprintf(imgDiagBuf, sizeof(imgDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(imgDiagBuf);                        \
+  } while (0)
+#else
+#define IMG_DIAG(fmt, ...)
+#endif
+
 // Cache file format:
 // - uint16_t width
 // - uint16_t height
@@ -336,6 +348,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight) {
     LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
             screenHeight);
+    IMG_DIAG("dropped: pos (%d,%d) %dx%d scr %dx%d", x, y, width, height, screenWidth, screenHeight);
     return;
   }
 
@@ -367,6 +380,9 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     LOG_DBG("IMG", "Lazy-extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
     if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) {
       LOG_ERR("IMG", "Lazy extraction failed: %s", srcPath.c_str());
+      IMG_DIAG("lazyx FAIL %s", srcPath.size() > 24 ? srcPath.c_str() + srcPath.size() - 24 : srcPath.c_str());
+    } else {
+      IMG_DIAG("lazyx ok %s", srcPath.size() > 24 ? srcPath.c_str() + srcPath.size() - 24 : srcPath.c_str());
     }
   }
 
@@ -375,6 +391,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
+    IMG_DIAG("placeholder: no file");
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -415,6 +432,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
+    IMG_DIAG("placeholder: decode FAIL");
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;

@@ -279,6 +279,32 @@ void InputDiag::noteOpenStage(const uint8_t slot, const char* label) {
   }
 }
 
+namespace {
+constexpr uint8_t IMG_EVENT_COUNT = 24;
+char imgEvents[IMG_EVENT_COUNT][96];
+uint8_t imgEventCount = 0;  // total recorded; ring position = count % IMG_EVENT_COUNT
+}  // namespace
+
+void InputDiag::noteImageEvent(const char* line) {
+  if (!line) return;
+  snprintf(imgEvents[imgEventCount % IMG_EVENT_COUNT], sizeof(imgEvents[0]), "%s free=%u max=%u", line,
+           static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  imgEventCount++;
+
+  // Same rewrite-per-event scheme as noteOpenStage: build holds RenderLock, the periodic
+  // flush never runs there, and a crash must not lose the trail.
+  HalFile f;
+  if (Storage.openFileForWrite("DIAG", "/image-diag.txt", f)) {
+    const uint8_t n = imgEventCount < IMG_EVENT_COUNT ? imgEventCount : IMG_EVENT_COUNT;
+    const uint8_t start = imgEventCount < IMG_EVENT_COUNT ? 0 : imgEventCount % IMG_EVENT_COUNT;
+    for (uint8_t i = 0; i < n; i++) {
+      const char* e = imgEvents[(start + i) % IMG_EVENT_COUNT];
+      f.write(reinterpret_cast<const uint8_t*>(e), strlen(e));
+      f.write(reinterpret_cast<const uint8_t*>("\n"), 1);
+    }
+  }
+}
+
 void InputDiag::noteScanOutcome(const uint32_t scanBytes, const uint8_t scanFonts, const uint32_t prewarmEntryFails) {
   scanLastBytes = scanBytes;
   scanLastFonts = scanFonts;

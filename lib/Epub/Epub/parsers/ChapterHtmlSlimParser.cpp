@@ -13,6 +13,19 @@
 #include <new>
 
 #include "../../../../src/fontIds.h"
+#if INPUT_DIAG
+#include "../../../../src/util/InputDiag.h"
+// Tail of the src attribute, so /image-diag.txt lines identify the image without
+// blowing the 96-byte event budget on directory prefixes.
+#define IMG_DIAG(fmt, ...)                                        \
+  do {                                                            \
+    char imgDiagBuf[72];                                          \
+    snprintf(imgDiagBuf, sizeof(imgDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(imgDiagBuf);                        \
+  } while (0)
+#else
+#define IMG_DIAG(fmt, ...)
+#endif
 #include "Epub.h"
 #include "Epub/Page.h"
 #include "Epub/VisibleTextUtils.h"
@@ -703,6 +716,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
       if (!src.empty() && self->imageRendering != 1) {
         LOG_DBG("EHP", "Found image: src=%s", src.c_str());
+        IMG_DIAG("img %s", src.size() > 26 ? src.c_str() + src.size() - 26 : src.c_str());
 
         {
           // Resolve the image path relative to the HTML file
@@ -725,8 +739,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // image-heavy chapter from stalling for seconds per image.
               ImageDimensions dims = {0, 0};
               ImageDimsProbe headerProbe;
-              self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+              const bool probeStreamOk =
+                  self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
               bool gotDimensions = headerProbe.getDimensions(dims);
+              IMG_DIAG("probe %s stream=%d %dx%d", gotDimensions ? "ok" : "FAIL", probeStreamOk ? 1 : 0, dims.width,
+                       dims.height);
 
               if (!gotDimensions) {
                 // No header within the stream (rare) — fall back to extracting the
@@ -756,6 +773,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 } else {
                   LOG_ERR("EHP", "Failed to extract image");
                 }
+                IMG_DIAG("fullext %s dims %s %dx%d", extractSuccess ? "ok" : "FAIL", gotDimensions ? "ok" : "FAIL",
+                         dims.width, dims.height);
               }
 
               if (gotDimensions) {
@@ -934,6 +953,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   return;
                 }
                 self->currentPage->elements.push_back(pageImage);
+                IMG_DIAG("placed %dx%d y=%d vert=%d", displayWidth, displayHeight, self->currentPageNextY,
+                         self->isVertical ? 1 : 0);
                 self->setCurrentPageVisibleOffset(self->visibleTextOffset);
                 self->currentPageNextY += displayHeight + imageMarginBottom;
 
@@ -960,6 +981,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       }
 
       // Fallback to alt text if image processing fails
+      IMG_DIAG("-> ALT fallback");
       if (!alt.empty()) {
         alt = "[Image: " + alt + "]";
         self->startNewTextBlock(self->blockStyleStack.back()
