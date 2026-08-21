@@ -93,11 +93,10 @@ the comparison the set exists for.
 vertical-test-suite.epub
 ------------------------
 
-Four one-shot diagnostic books from the 1.6 vertical-writing work, merged into
-one so they survive as a reusable set. Each test is preceded by a guide page in
-Japanese saying what to look at and what counts as a pass, so the book can be
-judged on the device without consulting anything else. Eight chapters, in
-guide/body pairs:
+Diagnostic tests merged into one book so they survive as a reusable set. Each
+test is preceded by a guide page in Japanese saying what to look at and what
+counts as a pass, so the book can be judged on the device without consulting
+anything else. Twelve chapters, in guide/body pairs:
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -114,6 +113,15 @@ guide/body pairs:
   4  Ideographic-space indentation. A leading U+3000 must survive as a
      one-character indent; two otherwise identical paragraphs make its loss
      visible as stars starting at the same height.
+  5  The &apos; entity (upstream #3122). Body text written with &apos;
+     references must show apostrophes as characters; control paragraphs
+     carry the XML-predefined entities and table entries that worked before
+     the fix, so a failure isolates to the one entity.
+  6  Trailing junk after </html> (upstream #3134). The body file carries
+     deliberately non-XML garbage after its closing tag; the chapter
+     rendering at all is the pass condition. Unfixed parsers error out and
+     show nothing. This file is intentionally not well-formed XML, so
+     strict validators (epubcheck) will flag it -- that is the test.
 
 The spine is page-progression-direction=rtl and every chapter is class="vrtl",
 so the whole book takes the vertical path. The stylesheet is a few hundred
