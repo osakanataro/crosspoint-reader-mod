@@ -10,7 +10,7 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
   - コンパイルなどはUbuntu 24.04仮想マシン上で実施
 - 本家をベースにする
   - X3の最近のバージョンは液晶パネルが違う件への対応などが本家には入っているため
-  - 初期は1.5.0ベースで開始。本家にXteink x4 pro対応が入ったあたりで乖離が始まった
+  - 2026/08/09から1.5.0ベースで開発開始。本家にXteink x4 pro対応が入ったあたりで乖離が始まった
   - 2026/08/20から1.6.0rcをベースにして再構成開始
 - 日本語訳は付けない
 - フォントはSDカード上に配置する
@@ -21,11 +21,11 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
   - 一部、特殊なフォントを必要とする文字以外について表示できることが期待される
 - ルビ表示について対応中
   - 横書きであればルビに対応してるなら縦書きでも対応しておくかな、って
-- 電書連 EPUB 3 制作ガイド ver.1.1.4に準拠したEPUB表示についての対策は悩み中
+- 電書連 EPUB 3 制作ガイド ver.1.1.4に準拠したEPUB表示についての対策をぼちぼちと
   - ~~CSSが巨大すぎてメモリクラッシュを起こす件についての対応をやる必要があるのかという問題~~
   - ~~[Setings]-[Reader]-[Text Settings]にある[Style]にて「Embedded Style」を「OFF」にするとCSSを使わないため回避できる~~
   - こんな小さな端末で著者がやりたいという複雑な表現をやって期待通りの表示になるのか？
-- 開発に際して下記URLをClaude codeに読み込ませている
+- 開発に際して下記URLをClaude codeに読み込ませている(実装内容まとめで使う略語)
   - 本家 https://github.com/crosspoint-reader/crosspoint-reader
   - JP版 https://github.com/zrn-ns/crosspoint-jp
   - CJK版 https://github.com/aBER0724/crosspoint-reader-cjk
@@ -41,13 +41,13 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
 レース修正、#3026 SDフォールバック一括warm、#3001 EPUBメタデータの名前空間対応）は
 1.6.0rcに全て含まれているため、移植対象から除外した。
 
-### 診断基盤（INPUT_DIAG）の移植
+### 診断基盤（INPUT_DIAG）の実装
 - 目的: 動作の遅さや不具合を「体感で遅い」という主観の表現で扱うのではなく、
   ページめくりの所要ミリ秒やヒープ残量といった実測値として定量的に記録し、
-  修正前後の比較や原因の切り分けを数値で行えるようにするため
+  修正前後の比較や原因の切り分けを数値で行えるようにするため作成
 - シリアルコンソールが使えないX3向けの、SDカードへ書き出す入力・描画計測
   （`/input-diag.txt`、`src/util/InputDiag.*`、`-diag`ビルド命名の`scripts/ost_version.py`）
-- 1.6系で追加: プリウォーム経路の計測（`page_scan_last`/`prewarm_entry_fails`）と、
+- 1.6系開発時に追加: プリウォーム経路の計測（`page_scan_last`/`prewarm_entry_fails`）と、
   本を開く6段階のヒープ記録（`/open-heap.txt`。クラッシュしても直前までの段階が残る）
 
 ### メモリ断片化・クラッシュ対策
@@ -80,7 +80,7 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
 - rc側で進んでいた #2892（フォーカス分割の新データモデル）、#3001、#3025（リーダー統合）、
   スワイプ操作に適応する手移植（機械的なcherry-pickは不可能だった）
 
-### 時計表示機能（clock mode）の移植
+### 時計表示機能（clock mode）の作成
 - Homeメニューに「Start clock mode」を追加。大きなデジタル時計を全画面表示し、
   Backボタンでhomeに戻る
 - X3はスリープ中のタイマー起床ができない（GPIO13が電池側の電源を切る設計）ため、
@@ -102,7 +102,7 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
   （修正前は章全体が解析エラーで表示不能になる）
 
 ### テスト用EPUBの追加
-- `test/epubs-ja/vertical-test-suite.epub`: 開発中に作った使い捨ての診断用EPUBを
+- `test/epubs-ja/vertical-test-suite.epub`: 開発中に作った診断用EPUBを
   1冊に統合して恒久資産化したもの。現在6テスト・12章構成（OPF名前空間接頭辞・
   段落配置と字下げ・半角記号の縦書き位置・全角スペース字下げ・実体参照2経路・
   閉じタグ後のゴミデータ）。各テストの前に「どこを見て合否を判断するか」の日本語解説ページが
