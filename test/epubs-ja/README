@@ -3,6 +3,9 @@ from test/epubs so this fork's own material, with its own provenance, does not
 mix into the upstream set. Nothing here is loaded by the gtest suites; copy a
 file to an SD card and open it.
 
+Two kinds of material live here: four builds of one novel (below), and one
+merged diagnostic suite (vertical-test-suite.epub, last section).
+
 The four files
 --------------
 
@@ -86,3 +89,39 @@ reuse what the first fetched, so the site is polled once rather than four times.
 Rebuild all four together. They are only worth what their shared text is worth,
 and the source gains chapters over time -- regenerating one alone silently breaks
 the comparison the set exists for.
+
+vertical-test-suite.epub
+------------------------
+
+Four one-shot diagnostic books from the 1.6 vertical-writing work, merged into
+one so they survive as a reusable set. Each test is preceded by a guide page in
+Japanese saying what to look at and what counts as a pass, so the book can be
+judged on the device without consulting anything else. Eight chapters, in
+guide/body pairs:
+
+  1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
+     every element (package/metadata/manifest/spine/item/itemref), so this
+     book opening at all -- title 「縦書き表示検証テスト集」, author, and eight
+     TOC entries intact -- is itself the pass condition (upstream #3001,
+     prefix-independent element matching).
+  2  Paragraph alignment against auto indent. Classless paragraphs under
+     justify/left/center/right alignment, next to a text-indent:3em reference
+     that bypasses the auto CJK first-line indent and its alignment gate.
+  3  Halfwidth punctuation in vertical lines. Halfwidth kagi brackets
+     (U+FF62/63), prolonged sound mark (U+FF70) and middle dot (U+FF65)
+     against their fullwidth counterparts in the same column; the halfwidth
+     forms must rotate and center like the fullwidth ones.
+  4  Ideographic-space indentation. A leading U+3000 must survive as a
+     one-character indent; two otherwise identical paragraphs make its loss
+     visible as stars starting at the same height.
+
+The spine is page-progression-direction=rtl and every chapter is class="vrtl",
+so the whole book takes the vertical path. The stylesheet is a few hundred
+bytes and minimal on purpose: the base p rule sets no text-align (test 2
+depends on that), and the chapters that need justified text carry a p-justify
+class per paragraph instead.
+
+Unlike the four novels above, this one is not generated from anywhere: the
+markup is written by hand and zipped by a throwaway Python script. To change
+it, unzip, edit, and rezip -- with the mimetype entry first and stored
+uncompressed, as EPUB requires.
