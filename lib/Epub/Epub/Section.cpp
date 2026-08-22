@@ -309,12 +309,33 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   } else {
     Storage.mkdir(htmlDir.c_str());
 
+    // Inflating a deflated chapter wants its 32KB dictionary window (plus state and
+    // two chunk buffers) each in one piece, and a mid-book heap is often too
+    // fragmented for that even with plenty free in total. Layout has not started and
+    // the font caches are idle at this point — the between-chunks release hazard does
+    // not apply — so hand their blocks back before the stream rather than letting all
+    // three attempts fail the same way and the book die as "failed to index".
+    const auto releaseFontCachesForStream = [this](const char* when) {
+      LOG_ERR("SCT", "Fragmented heap %s chapter stream (max block %u), releasing SD font caches", when,
+              ESP.getMaxAllocHeap());
+      if (auto* fcm = renderer.getFontCacheManager()) {
+        fcm->releaseSdFontCaches();
+      }
+    };
+    constexpr uint32_t STREAM_MIN_MAX_ALLOC = 48 * 1024;
+    if (ESP.getMaxAllocHeap() < STREAM_MIN_MAX_ALLOC) {
+      releaseFontCachesForStream("before");
+    }
+
     // Retry logic for SD card timing issues
     bool streamed = false;
     uint32_t fileSize = 0;
     for (int attempt = 0; attempt < 3 && !streamed; attempt++) {
       if (attempt > 0) {
         LOG_DBG("SCT", "Retrying stream (attempt %d)...", attempt + 1);
+        if (ESP.getMaxAllocHeap() < STREAM_MIN_MAX_ALLOC) {
+          releaseFontCachesForStream("retrying");
+        }
         delay(50);  // Brief delay before retry
       }
 
