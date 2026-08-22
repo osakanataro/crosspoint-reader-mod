@@ -1,5 +1,6 @@
 #include "Section.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -45,7 +46,11 @@ namespace {
 // v40: Vertical writing (tategaki). The header carries isVertical + verticalCharSpacing
 //      as cache-key fields, and TextBlock serializes an isVertical flag plus a per-word
 //      ypos array for vertical blocks, so v39 files cannot be read with the new layout.
-constexpr uint8_t SECTION_FILE_VERSION = 40;
+// v42: Vertical sections substitute 、。， with their Vertical Forms counterparts
+//      (U+FE10-FE12) when the reading face carries them, so cached word text differs.
+//      41 is skipped: upstream uses 40 (ruby soft-flush) and 41 (table columns) for
+//      unrelated formats, and sharing a number with either invites a silent mismatch.
+constexpr uint8_t SECTION_FILE_VERSION = 42;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

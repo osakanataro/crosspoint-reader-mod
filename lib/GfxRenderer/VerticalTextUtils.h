@@ -49,7 +49,10 @@ struct PunctuationOffset {
 // A vo=Tu character with no vertical alternate in the face (、。) is approximated by
 // the offsets above; a vo=Tr one is approximated by plain rotation.
 static constexpr PunctuationOffset VERTICAL_PUNCTUATION[] = {
-    // Punctuation - translate from the bottom-left to the top-right quadrant
+    // Punctuation - translate from the bottom-left to the top-right quadrant.
+    // This is the fallback: when the face carries the Vertical Forms block
+    // (U+FE10-FE12), the parser substitutes those codepoints instead (see
+    // verticalPresentationForm) and the glyph needs no offset at all.
     {0x3001, 4, -4, false},  // 、 ideographic comma
     {0x3002, 4, -4, false},  // 。 ideographic period
     {0xFF0C, 4, -4, false},  // ， fullwidth comma
@@ -122,6 +125,24 @@ inline const PunctuationOffset* getVerticalPunctuationOffset(uint32_t cp) {
   return nullptr;
 }
 
+// The Vertical Forms (U+FE10..) counterpart of a punctuation mark, or 0 if none.
+// These are real glyphs designed for vertical text (ink in the top-right corner),
+// so a face that carries them beats the translate-the-horizontal-glyph fallback
+// above. Only the marks whose horizontal glyph sits in the wrong corner need a
+// form; brackets and long marks are already right after rotation.
+inline uint32_t verticalPresentationForm(uint32_t cp) {
+  switch (cp) {
+    case 0xFF0C:
+      return 0xFE10;  // ， -> ︐
+    case 0x3001:
+      return 0xFE11;  // 、 -> ︑
+    case 0x3002:
+      return 0xFE12;  // 。 -> ︒
+    default:
+      return 0;
+  }
+}
+
 // An exclamation/question pair (!? !! ?? ?!) is set as one upright cell in vertical
 // Japanese, the same treatment a 1-2 digit number gets. Longer ASCII runs are not:
 // "Wow!!" is a Latin phrase and turns with the column like any other.
@@ -142,6 +163,7 @@ inline bool isUprightInVertical(uint32_t cp) {
   // and must rotate. Excluding them here routes them to the sideways draw path, which
   // also reserves their real (half-em) advance as the cell height.
   if (cp >= 0xFF00 && cp <= 0xFF60) return true;  // Fullwidth Forms
+  if (cp >= 0xFE10 && cp <= 0xFE1F) return true;  // Vertical Forms (︐︑︒ etc.)
   if (cp >= 0xFFA0 && cp <= 0xFFEF) return true;  // Halfwidth Hangul, fullwidth signs
   if (cp >= 0xF900 && cp <= 0xFAFF) return true;  // CJK Compatibility Ideographs
   if (cp >= 0x3200 && cp <= 0x32FF) return true;  // Enclosed CJK Letters
@@ -183,6 +205,7 @@ inline bool shouldUseVertGlyph(uint32_t cp) {
 inline bool isKinsokuHead(uint32_t cp) {
   // Closing brackets and punctuation (行頭禁止)
   if (cp == 0x3001 || cp == 0x3002) return true;                                  // 、。
+  if (cp >= 0xFE10 && cp <= 0xFE16) return true;                                  // ︐︑︒︓︔︕︖
   if (cp == 0x300D || cp == 0x300F || cp == 0x3011) return true;                  // 」』】
   if (cp == 0x3015 || cp == 0x3017 || cp == 0x3019 || cp == 0x301B) return true;  // 〕〗〙〛
   if (cp == 0xFF09 || cp == 0xFF3D || cp == 0xFF5D) return true;                  // ）］｝

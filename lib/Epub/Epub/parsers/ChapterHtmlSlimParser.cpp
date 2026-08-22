@@ -339,7 +339,16 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
     if (cp == 0) break;
 
     if (VerticalTextUtils::isUprightInVertical(cp) || VerticalTextUtils::getVerticalPunctuationOffset(cp) != nullptr) {
-      // Upright CJK/kana/punctuation: one cell each.
+      // Upright CJK/kana/punctuation: one cell each. 、。， become their Vertical
+      // Forms counterparts when the reading face carries those glyphs, so the
+      // draw path gets a real vertical glyph instead of the shifted horizontal one.
+      const uint32_t formCp = VerticalTextUtils::verticalPresentationForm(cp);
+      if (formCp != 0 && fontHasVerticalForm(formCp)) {
+        std::string token;
+        utf8AppendCodepoint(formCp, token);
+        currentTextBlock->addVerticalToken(std::move(token), fontStyle, VerticalTextUtils::VerticalBehavior::Upright);
+        continue;
+      }
       currentTextBlock->addVerticalToken(std::string(reinterpret_cast<const char*>(cpStart), p - cpStart), fontStyle,
                                          VerticalTextUtils::VerticalBehavior::Upright);
       continue;
@@ -397,6 +406,22 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
         tateChuYoko ? VerticalTextUtils::VerticalBehavior::TateChuYoko : VerticalTextUtils::VerticalBehavior::Sideways;
     currentTextBlock->addVerticalToken(std::move(token), fontStyle, behavior);
   }
+}
+
+// Coverage-interval probe of the reading face, cached per form because the answer is
+// needed once per 、。， in the chapter. Faces predating the Vertical Forms block
+// answer false and the shifted-horizontal-glyph fallback stays in effect.
+bool ChapterHtmlSlimParser::fontHasVerticalForm(const uint32_t formCp) {
+  const uint8_t bit = 1u << (formCp - 0xFE10);
+  if ((vertFormProbe & bit) == 0) {
+    vertFormProbe |= bit;
+    const auto& fonts = renderer.getFontMap();
+    const auto it = fonts.find(fontId);
+    if (it != fonts.end() && it->second.hasCodepoint(formCp)) {
+      vertFormProbe |= bit << 4;
+    }
+  }
+  return (vertFormProbe & (bit << 4)) != 0;
 }
 
 // start a new text block if needed

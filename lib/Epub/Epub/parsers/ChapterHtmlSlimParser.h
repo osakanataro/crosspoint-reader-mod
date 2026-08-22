@@ -63,6 +63,9 @@ class ChapterHtmlSlimParser {
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   bool isVertical;  // tategaki: lay text out in right-to-left vertical columns
+  // Lazy probe of the reading face for Vertical Forms punctuation (U+FE10-FE12).
+  // Bit n of the low nibble: form FE10+n probed; bit n of the high nibble: present.
+  uint8_t vertFormProbe = 0;
   const CssParser* cssParser;
   bool embeddedStyle;
   uint8_t imageRendering;
@@ -139,6 +142,7 @@ class ChapterHtmlSlimParser {
   void flushPendingAnchor();
   void flushPartWordBuffer();
   void flushPartWordBufferVertical(EpdFontFamily::Style fontStyle);
+  bool fontHasVerticalForm(uint32_t formCp);
   void setCurrentPageVisibleOffset(uint32_t offset);
   void makePages();
   // Vertical (tategaki) analogue of addLineToPage: places a laid-out column at the current
