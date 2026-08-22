@@ -57,8 +57,12 @@ INTERVAL_PRESETS = {
     # codepoint lists carry: the JIS X 0213 symbol rows. Circled numbers open chapter
     # asides and list items, the enclosed/compatibility blocks carry (株) and the unit
     # ligatures. Without these a title like "…よろしく①" draws the replacement glyph.
+    # The Vertical Forms row (︐︑︒ …) feeds the reader's vertical punctuation
+    # substitution; faces without cmap entries there get the glyphs through the
+    # 'vert' feature (see extract_vertical_forms_fonttools).
     "cjk-symbols": [(0x2460, 0x24FF), (0x2E80, 0x2EFF), (0x3190, 0x319F),
-                    (0x31F0, 0x31FF), (0x3200, 0x32FF), (0x3300, 0x33FF)],
+                    (0x31F0, 0x31FF), (0x3200, 0x32FF), (0x3300, 0x33FF),
+                    (0xFE10, 0xFE19)],
     "hangul":      [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)],
     "cherokee":    [(0x13A0, 0x13FF), (0xAB70, 0xABBF)],
     "tifinagh":    [(0x2D30, 0x2D7F)],
@@ -240,6 +244,64 @@ def extract_ligature_glyph_indices_fonttools(font_path):
                         lig_cp = STANDARD_LIGATURE_MAP.get(seq)
                         if lig_cp is not None and lig_cp not in cmap:
                             overrides[lig_cp] = glyph_indices[lig.LigGlyph]
+
+    font.close()
+    return overrides
+
+
+# Vertical Forms row -> the base punctuation whose 'vert' alternate carries the
+# same shape. Used when the face has the vertical glyph but no cmap entry for
+# the form codepoint (BIZ UD does; Noto Sans CJK encodes the forms directly).
+VERTICAL_FORM_BASE = {
+    0xFE10: 0xFF0C,  # ︐ <- ，
+    0xFE11: 0x3001,  # ︑ <- 、
+    0xFE12: 0x3002,  # ︒ <- 。
+    0xFE13: 0xFF1A,  # ︓ <- ：
+    0xFE14: 0xFF1B,  # ︔ <- ；
+    0xFE15: 0xFF01,  # ︕ <- ！
+    0xFE16: 0xFF1F,  # ︖ <- ？
+    0xFE17: 0x3016,  # ︗ <- 〖
+    0xFE18: 0x3017,  # ︘ <- 〗
+    0xFE19: 0x2026,  # ︙ <- …
+}
+
+
+def extract_vertical_forms_fonttools(font_path):
+    """Map Vertical Forms codepoints without a cmap entry to 'vert' alternate glyph IDs.
+
+    A vert alternate keeps the base glyph's horizontal origin and advance and only
+    moves the ink inside the em box, so rasterizing it under the form codepoint
+    yields a drop-in upright cell for vertical text.
+    """
+    from fontTools.ttLib import TTFont
+
+    font = TTFont(font_path)
+    cmap = font.getBestCmap() or {}
+    glyph_indices = {gname: index for index, gname in enumerate(font.getGlyphOrder())}
+    overrides = {}
+
+    vert_map = {}
+    if 'GSUB' in font:
+        gsub = font['GSUB'].table
+        if gsub.FeatureList:
+            vert_lookup_indices = set()
+            for fr in gsub.FeatureList.FeatureRecord:
+                if fr.FeatureTag in ('vert', 'vrt2'):
+                    vert_lookup_indices.update(fr.Feature.LookupListIndex)
+            for li in vert_lookup_indices:
+                lookup = gsub.LookupList.Lookup[li]
+                for st in lookup.SubTable:
+                    actual = st.ExtSubTable if lookup.LookupType == 7 and hasattr(st, 'ExtSubTable') else st
+                    if hasattr(actual, 'mapping'):
+                        vert_map.update(actual.mapping)
+
+    for form_cp, base_cp in VERTICAL_FORM_BASE.items():
+        if form_cp in cmap:
+            continue  # the interval rasterizes it through the cmap as usual
+        base_gname = cmap.get(base_cp)
+        sub_gname = vert_map.get(base_gname) if base_gname else None
+        if sub_gname in glyph_indices:
+            overrides[form_cp] = glyph_indices[sub_gname]
 
     font.close()
     return overrides
@@ -586,6 +648,8 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     # Invalid_Size_Handle on some fonts.
     face.set_char_size(size << 6, size << 6, 150, 150)
     ligature_glyph_indices = extract_ligature_glyph_indices_fonttools(fontfile)
+    # Same cmap-less rasterize-by-glyph-ID path the ligatures use.
+    ligature_glyph_indices.update(extract_vertical_forms_fonttools(fontfile))
     # Fallback chain, tried in order. The first face carrying the codepoint wins, so a
     # specialist face (maths, symbols) can sit behind the general text one without
     # displacing it for the glyphs they both have.
