@@ -700,7 +700,7 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
 // consuming emitted words like the horizontal path.
 void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fontId, const uint16_t columnHeight,
                                        const std::function<void(std::shared_ptr<TextBlock>)>& processColumn,
-                                       const bool includeLastColumn) {
+                                       int* cjkCellWidthMemo, const bool includeLastColumn) {
   if (words.empty()) return;
 
   // Load SD-card font advance metrics (no bitmaps) so getTextAdvanceX needs no per-glyph SD I/O.
@@ -722,6 +722,11 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     if (vb == VerticalTextUtils::VerticalBehavior::Upright) {
       cjkCharAdvance = renderer.getTextAdvanceX(fontId, words[i].c_str(), wordStyles[i]);
     }
+  }
+  if (cjkCharAdvance != 0) {
+    if (cjkCellWidthMemo != nullptr) *cjkCellWidthMemo = cjkCharAdvance;
+  } else if (cjkCellWidthMemo != nullptr && *cjkCellWidthMemo > 0) {
+    cjkCharAdvance = *cjkCellWidthMemo;
   }
   if (cjkCharAdvance == 0) cjkCharAdvance = lineHeight;
 
@@ -820,7 +825,8 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
       colRuby.assign(std::make_move_iterator(rubyTexts.begin() + start),
                      std::make_move_iterator(rubyTexts.begin() + end));
     }
-    processColumn(std::make_shared<TextBlock>(colWords, colXpos, colYpos, colStyles, blockStyle, std::move(colRuby)));
+    processColumn(std::make_shared<TextBlock>(colWords, colXpos, colYpos, colStyles, blockStyle, std::move(colRuby),
+                                              static_cast<uint16_t>(cjkCharAdvance)));
     isFirstColumn = false;
     emitStart = end;
   }

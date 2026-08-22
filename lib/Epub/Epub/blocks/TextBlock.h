@@ -50,6 +50,11 @@ class TextBlock final : public Block {
   uint16_t textBytes = 0;  // total size of the text region, including NULs
   bool focusPresent = false;
   bool isVertical = false;  // tategaki: arena carries a per-word ypos array
+  // Full-width (CJK em) cell advance the layout used, carried because a column
+  // holding only sideways runs has no upright word to re-derive it from at draw
+  // time -- the line-height stand-in it fell back to overshot the cell by ~40%,
+  // pushing the column's ruby into its right-hand neighbour. 0 = re-derive.
+  uint16_t vertCellWidth = 0;
   bool isValid = true;
   // The ONLY allocation: makeUniqueNoThrow, so OOM yields an invalid block
   // instead of abort() (bare new is not nothrow with -fno-exceptions).
@@ -82,7 +87,8 @@ class TextBlock final : public Block {
   // baseline. No focus-split support (bionic reading is horizontal-only).
   explicit TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<int16_t>& wordYpos, const std::vector<EpdFontFamily::Style>& wordStyles,
-                     const BlockStyle& blockStyle = BlockStyle(), std::vector<std::string> rubyTexts = {});
+                     const BlockStyle& blockStyle = BlockStyle(), std::vector<std::string> rubyTexts = {},
+                     uint16_t cellWidth = 0);
   ~TextBlock() override = default;
   TextBlock(const TextBlock&) = delete;
   TextBlock& operator=(const TextBlock&) = delete;

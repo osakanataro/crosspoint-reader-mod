@@ -50,7 +50,11 @@ namespace {
 //      (U+FE10-FE12) when the reading face carries them, so cached word text differs.
 //      41 is skipped: upstream uses 40 (ruby soft-flush) and 41 (table columns) for
 //      unrelated formats, and sharing a number with either invites a silent mismatch.
-constexpr uint8_t SECTION_FILE_VERSION = 42;
+// v43: Vertical TextBlocks serialize the layout's full-width cell advance, so a
+//      column of nothing but sideways Latin no longer re-derives its cell from the
+//      line height at draw time (which misplaced its body run and pushed its ruby
+//      into the neighbouring column).
+constexpr uint8_t SECTION_FILE_VERSION = 43;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

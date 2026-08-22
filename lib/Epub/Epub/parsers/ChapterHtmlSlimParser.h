@@ -66,6 +66,9 @@ class ChapterHtmlSlimParser {
   // Lazy probe of the reading face for Vertical Forms punctuation (U+FE10-FE12).
   // Bit n of the low nibble: form FE10+n probed; bit n of the high nibble: present.
   uint8_t vertFormProbe = 0;
+  // Full-width cell advance carried across paragraphs for layoutVerticalColumns,
+  // so a pure-Latin paragraph keeps its neighbours' cell width.
+  int verticalCellWidthMemo = 0;
   const CssParser* cssParser;
   bool embeddedStyle;
   uint8_t imageRendering;

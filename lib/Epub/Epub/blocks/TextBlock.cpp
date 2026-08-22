@@ -136,8 +136,8 @@ TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<in
 
 TextBlock::TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& wordXpos,
                      const std::vector<int16_t>& wordYpos, const std::vector<EpdFontFamily::Style>& wordStyles,
-                     const BlockStyle& blockStyle, std::vector<std::string> rubyTexts)
-    : blockStyle(blockStyle), rubyTexts(std::move(rubyTexts)) {
+                     const BlockStyle& blockStyle, std::vector<std::string> rubyTexts, const uint16_t cellWidth)
+    : blockStyle(blockStyle), vertCellWidth(cellWidth), rubyTexts(std::move(rubyTexts)) {
   // Same invariant the horizontal constructor keeps: never hold an all-empty rubyTexts.
   // A column split out of a ruby-bearing paragraph often lands entirely on unannotated
   // words, and that column should not pay for a vector of empty strings.
@@ -318,7 +318,9 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // Every upright token is full-width, so the first one measures the cell for the whole
   // block. A block of nothing but Latin has none to measure; fall back to the line height,
   // matching layoutVerticalColumns' own fallback for cjkCharAdvance.
-  int cellWidth = 0;
+  // The layout's cell width travels with the block; the scan below only serves
+  // blocks serialized before it did, and misses on columns holding no upright word.
+  int cellWidth = vertCellWidth;
   for (uint16_t i = 0; i < numWords && cellWidth == 0; i++) {
     if (!isSidewaysToken(wordText(i))) {
       cellWidth = renderer.getTextAdvanceX(fontId, wordText(i), wordStyle(i));
@@ -757,6 +759,9 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, static_cast<uint8_t>(focusPresent ? 1 : 0));
   serialization::writePod(file, static_cast<uint8_t>(isVertical ? 1 : 0));
   serialization::writePod(file, textBytes);
+  if (isVertical) {
+    serialization::writePod(file, vertCellWidth);
+  }
   if (numWords > 0) {
     const size_t size = arenaSize(numWords, focusPresent, isVertical, textBytes);
     if (file.write(arena.get(), size) != size) {
@@ -819,6 +824,9 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   block->textBytes = textBytes;
   block->focusPresent = hasFocus != 0;
   block->isVertical = hasVertical != 0;
+  if (block->isVertical) {
+    serialization::readPod(file, block->vertCellWidth);
+  }
 
   if (wc > 0) {
     const size_t size = arenaSize(wc, block->focusPresent, block->isVertical, textBytes);

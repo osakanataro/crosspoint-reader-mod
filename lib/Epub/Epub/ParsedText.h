@@ -137,7 +137,11 @@ class ParsedText {
   // column (words positioned by ypos; the page composes columns right-to-left). Consumes
   // emitted words like the horizontal path; includeLastColumn=false preserves a trailing
   // partial column across mid-block flushes.
+  // cjkCellWidthMemo carries the full-width cell advance across paragraphs: a block with
+  // an upright word writes its advance there, and a block without one (a pure-Latin
+  // paragraph) reads it back instead of falling back to the line height, which is ~40%
+  // wider and used to push such columns' ruby into the neighbouring column.
   void layoutVerticalColumns(const GfxRenderer& renderer, int fontId, uint16_t columnHeight,
                              const std::function<void(std::shared_ptr<TextBlock>)>& processColumn,
-                             bool includeLastColumn = true);
+                             int* cjkCellWidthMemo = nullptr, bool includeLastColumn = true);
 };

@@ -1514,7 +1514,8 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
                                            : self->viewportHeight;
       self->currentTextBlock->layoutVerticalColumns(
           self->renderer, self->fontId, effectiveHeight,
-          [self](const std::shared_ptr<TextBlock>& col) { self->addColumnToPage(col); }, false);
+          [self](const std::shared_ptr<TextBlock>& col) { self->addColumnToPage(col); }, &self->verticalCellWidthMemo,
+          false);
     } else {
       const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
       const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
@@ -1967,8 +1968,9 @@ void ChapterHtmlSlimParser::makePages() {
     const int verticalInset = blockStyle.topInset() + blockStyle.bottomInset();
     const uint16_t effectiveHeight =
         (verticalInset < viewportHeight) ? static_cast<uint16_t>(viewportHeight - verticalInset) : viewportHeight;
-    currentTextBlock->layoutVerticalColumns(renderer, fontId, effectiveHeight,
-                                            [this](const std::shared_ptr<TextBlock>& col) { addColumnToPage(col); });
+    currentTextBlock->layoutVerticalColumns(
+        renderer, fontId, effectiveHeight, [this](const std::shared_ptr<TextBlock>& col) { addColumnToPage(col); },
+        &verticalCellWidthMemo);
     if (!pendingFootnotes.empty() && currentPage) {
       for (const auto& [idx, fn] : pendingFootnotes) {
         currentPage->addFootnote(fn.number, fn.href);
