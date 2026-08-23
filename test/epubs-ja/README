@@ -96,7 +96,7 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Sixteen chapters, in guide/body pairs:
+anything else. Eighteen chapters, in guide/body pairs:
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -154,6 +154,26 @@ anything else. Sixteen chapters, in guide/body pairs:
      Pass condition: 𠮟 renders as the real kanji (not tofu) AND stands
      upright in the column like its neighbours, not rotated like the Latin
      "NG" two lines below it.
+  9  CJK Compatibility Ideographs and Forms (2026-08-23, from a 955-book scan
+     of commercial EPUBs -- text itself wasn't read or kept, only aggregate
+     codepoint stats and titles). 溺 U+F9EC (10 books), 蓮 U+F999 (5), 煉
+     U+F993 (3) are Compatibility-Ideograph duplicates of kanji the JIS
+     X 0213 allowlist already carries in their unified BMP form; that same
+     allowlist gates F900-FAFF, so a font can carry the glyph and the book
+     still draw tofu unless the exact duplicate codepoint is on the list.
+     ⦿ U+29BF (1010 uses in one book, as a bullet marker) and the vertical
+     presentation forms ︱/︲ U+FE31-32 (em dash) and ︽/︾ U+FE3D-3E (《》)
+     were simply absent from every interval preset. The last two also
+     needed isUprightInVertical() and kinsoku entries -- they're glyphs
+     pre-shaped for vertical text, so rotating them (the treatment their
+     horizontal originals — and 《》 get) would turn an already-vertical
+     stroke sideways. Pass condition: (1) 溺 蓮 煉 render as real kanji;
+     (2) ⦿ renders as a filled circle, not tofu; (3) ︱︱ reads as a
+     straight vertical stroke, not rotated; (4) ︽注意︾ stands upright,
+     brackets right-side-out, not flipped like 《》 would be if rotated.
+     BIZ UD's source font lacks 溺/煉/︱/︽/︾ outright (only 蓮 and ⦿);
+     that face draws whatever its existing missing-glyph fallback does for
+     those five, same as any other rare glyph it was already missing.
 
 The spine is page-progression-direction=rtl and every chapter is class="vrtl",
 so the whole book takes the vertical path. The stylesheet is a few hundred
