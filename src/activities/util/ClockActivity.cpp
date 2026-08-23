@@ -114,7 +114,8 @@ void ClockActivity::render(RenderLock&&) {
     paintsSinceClean = 0;
   }
 
-  ClockFace::render(renderer, haveTime ? &now : nullptr, clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+  ClockFace::render(renderer, haveTime ? &now : nullptr, clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH,
+                    SETTINGS.clockFormat == 1);
 }
 
 void ClockActivity::writeBatteryLog(const bool finished) const {

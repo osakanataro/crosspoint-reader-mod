@@ -32,12 +32,19 @@ except ImportError:
 # The clock face draws dates and times, so these eleven and nothing else.
 GLYPHS = "0123456789:/"
 
+# AM/PM markers for the 12-hour format, kept as their own set so the wide 'M'
+# does not stretch the digits' common box (every cell in a set is padded to the
+# widest glyph, and the 24-hour face's metrics must not change).
+LETTERS = "APM"
+
 # C identifiers for characters that cannot appear in one.
 NAMES = {":": "Colon", "/": "Slash"}
 
 
 def glyph_name(ch):
-    return NAMES.get(ch, f"Digit{ch}")
+    if ch in NAMES:
+        return NAMES[ch]
+    return f"Digit{ch}" if ch.isdigit() else f"Letter{ch}"
 
 
 def render(face, ch, pixel_size):
@@ -76,7 +83,7 @@ def pad_to_common_box(glyphs, pixel_size):
         g["pixels"] = padded
         g["width"] = box_w
         g["rows"] = box_h
-    return box_w, box_h
+    return box_w, box_h, max_descent
 
 
 def rotate(pixels, width, height, quarter_turns):
@@ -115,9 +122,9 @@ def emit_array(name, data, width, height):
     return "\n".join(lines)
 
 
-def build_set(face, pixel_size, prefix, rotate_turns):
+def build_set(face, pixel_size, prefix, rotate_turns, chars=GLYPHS):
     glyphs = []
-    for ch in GLYPHS:
+    for ch in chars:
         width, rows, pixels = render(face, ch, pixel_size)
         glyphs.append({
             "ch": ch,
@@ -126,7 +133,7 @@ def build_set(face, pixel_size, prefix, rotate_turns):
             "pixels": pixels,
             "bearing_y": face.glyph.bitmap_top,
         })
-    box_w, box_h = pad_to_common_box(glyphs, pixel_size)
+    box_w, box_h, descent = pad_to_common_box(glyphs, pixel_size)
 
     blocks = []
     for g in glyphs:
@@ -138,7 +145,7 @@ def build_set(face, pixel_size, prefix, rotate_turns):
     out_w, out_h = glyphs[0]["out_w"], glyphs[0]["out_h"]
     table = [f"// Indexed by ClockGlyph. Every cell is {out_w}x{out_h}, so the face advances a fixed pitch.",
              f"static const uint8_t* const {prefix}Glyphs[] = {{"]
-    table += [f"    {prefix}{glyph_name(ch)}," for ch in GLYPHS]
+    table += [f"    {prefix}{glyph_name(ch)}," for ch in chars]
     table.append("};")
 
     header = [
@@ -147,6 +154,10 @@ def build_set(face, pixel_size, prefix, rotate_turns):
         f"// Unrotated cell, for laying the face out in logical coordinates.",
         f"#define {prefix.upper()}_CELL_W {box_w}",
         f"#define {prefix.upper()}_CELL_H {box_h}",
+        f"// Rows below the baseline in the (unrotated) cell. Sets differ -- '/'",
+        f"// descends, letters do not -- so mixing sets on one line needs baseline",
+        f"// alignment, not bottom-edge alignment.",
+        f"#define {prefix.upper()}_DESCENT {descent}",
     ]
     return "\n".join(header) + "\n\n" + "\n\n".join(blocks) + "\n\n" + "\n".join(table)
 
@@ -181,6 +192,8 @@ def main():
         build_set(face, args.large, "ClockLarge", args.rotate),
         "",
         build_set(face, args.small, "ClockSmall", args.rotate),
+        "",
+        build_set(face, args.small, "ClockAmPm", args.rotate, chars=LETTERS),
         "",
     ]
     text = "\n".join(parts)

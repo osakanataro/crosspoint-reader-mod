@@ -23,6 +23,10 @@ namespace ClockFace {
 //
 // `mode` is the caller's, because the right waveform depends on how often this
 // runs rather than on what it draws. See ClockActivity for the policy.
-void render(const GfxRenderer& renderer, const Rtc::DateTime* now, HalDisplay::RefreshMode mode);
+//
+// `twelveHour` mirrors the status bar's Clock Format setting: false keeps the
+// 24-hour "HH:MM", true switches to "H:MM" with an AM/PM marker beside it.
+// Passed as a value so this stays free of CrossPointSettings (see above).
+void render(const GfxRenderer& renderer, const Rtc::DateTime* now, HalDisplay::RefreshMode mode, bool twelveHour);
 
 }  // namespace ClockFace
