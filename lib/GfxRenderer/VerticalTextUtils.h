@@ -166,6 +166,14 @@ inline bool isUprightInVertical(uint32_t cp) {
   if (cp >= 0xFE10 && cp <= 0xFE1F) return true;  // Vertical Forms (︐︑︒ etc.)
   if (cp >= 0xFFA0 && cp <= 0xFFEF) return true;  // Halfwidth Hangul, fullwidth signs
   if (cp >= 0xF900 && cp <= 0xFAFF) return true;  // CJK Compatibility Ideographs
+  // CJK Compatibility Forms: presentation glyphs pre-shaped for vertical text
+  // (a vertical em-dash stroke, vertical 《》 brackets). Unlike their horizontal
+  // originals (2014, 300A, 300B), which VERTICAL_PUNCTUATION rotates, these
+  // glyphs are already correctly oriented -- rotating them again would turn a
+  // vertical stroke sideways. Added 2026-08-23 for ︱︲︽︾, found in commercial
+  // EPUBs (⦿ from the same scan needs no entry here: it's a symbol, not a mark
+  // with a horizontal-vs-vertical shape distinction).
+  if (cp >= 0xFE30 && cp <= 0xFE4F) return true;  // CJK Compatibility Forms
   if (cp >= 0x3200 && cp <= 0x32FF) return true;  // Enclosed CJK Letters
   if (cp >= 0x3300 && cp <= 0x33FF) return true;  // CJK Compatibility
   if (cp >= 0x3100 && cp <= 0x312F) return true;  // Bopomofo
@@ -220,6 +228,7 @@ inline bool isKinsokuHead(uint32_t cp) {
   if (cp == 0xFF01 || cp == 0xFF1F) return true;                                  // ！？
   if (cp == 0xFF1A || cp == 0xFF1B) return true;                                  // ：；
   if (cp == 0x3009 || cp == 0x300B) return true;                                  // 〉》
+  if (cp == 0xFE3E) return true;                                                  // ︾ (vertical 》)
   // Small kana (行頭禁止)
   if (cp == 0x3041 || cp == 0x3043 || cp == 0x3045 || cp == 0x3047 || cp == 0x3049) return true;  // ぁぃぅぇぉ
   if (cp == 0x3063 || cp == 0x3083 || cp == 0x3085 || cp == 0x3087) return true;                  // っゃゅょ
@@ -236,6 +245,7 @@ inline bool isKinsokuTail(uint32_t cp) {
   if (cp == 0x3014 || cp == 0x3016 || cp == 0x3018 || cp == 0x301A) return true;  // 〔〖〘〚
   if (cp == 0xFF08 || cp == 0xFF3B || cp == 0xFF5B) return true;                  // （［｛
   if (cp == 0x3008 || cp == 0x300A) return true;                                  // 〈《
+  if (cp == 0xFE3D) return true;                                                  // ︽ (vertical 《)
   return false;
 }
 
