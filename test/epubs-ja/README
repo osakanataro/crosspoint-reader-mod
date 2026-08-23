@@ -96,7 +96,7 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Fourteen chapters, in guide/body pairs:
+anything else. Sixteen chapters, in guide/body pairs:
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -144,6 +144,16 @@ anything else. Fourteen chapters, in guide/body pairs:
      38 books (up to 275 in one). Pass condition: the symbols in test (1)
      and (2) render as their real glyphs rather than tofu, and the ☆/♪/❤
      sentences in test (3) read with no gap or box after the mark.
+  8  Supplementary-plane kanji (2026-08-23). 𠮟 U+20B9F -- the JIS X 0213 form
+     of しかる, found in 6 of the 513 books -- sits above the Basic
+     Multilingual Plane (4-byte UTF-8) and needed two separate fixes: the
+     font generator's presets stopped at U+FFEF, so the glyph was never a
+     rasterization candidate, and isUprightInVertical() (VerticalTextUtils.h)
+     didn't know the supplementary range either, so even a font that carried
+     it would draw it rotated -- the sideways path meant for Latin runs.
+     Pass condition: 𠮟 renders as the real kanji (not tofu) AND stands
+     upright in the column like its neighbours, not rotated like the Latin
+     "NG" two lines below it.
 
 The spine is page-progression-direction=rtl and every chapter is class="vrtl",
 so the whole book takes the vertical path. The stylesheet is a few hundred
