@@ -96,7 +96,7 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Twelve chapters, in guide/body pairs:
+anything else. Fourteen chapters, in guide/body pairs:
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -130,6 +130,20 @@ anything else. Twelve chapters, in guide/body pairs:
      rendering at all is the pass condition. Unfixed parsers error out and
      show nothing. This file is intentionally not well-formed XML, so
      strict validators (epubcheck) will flag it -- that is the test.
+  7  Letterlike Symbols and variation selectors (2026-08-23, from a scan of
+     513 real Kakuyomu/Narou EPUBs against the generated fonts). ℃ ℓ № Å ℘
+     sat in a preset gap between "punctuation" and "symbols" -- neither
+     starts before U+2150, so the whole Letterlike Symbols block was absent
+     even though the source fonts carry it; ℃ alone appeared in 57 of the
+     513 books. ⭐ ⬛ ⬇ ⬜ ⬅ ⬆ ⌒ ⌘ are the other real corpus hits, added as
+     narrow ranges rather than their full parent blocks. The body also
+     carries literal U+FE0E/U+FE0F (VS15/VS16) right after ☆ ♪ ❤ -- these
+     are zero-width presentation-style selectors with no glyph in any font,
+     but before the parser fix they fell through to the replacement glyph
+     and drew a visible tofu box; the corpus scan found 1,288 of them across
+     38 books (up to 275 in one). Pass condition: the symbols in test (1)
+     and (2) render as their real glyphs rather than tofu, and the ☆/♪/❤
+     sentences in test (3) read with no gap or box after the mark.
 
 The spine is page-progression-direction=rtl and every chapter is class="vrtl",
 so the whole book takes the vertical path. The stylesheet is a few hundred
