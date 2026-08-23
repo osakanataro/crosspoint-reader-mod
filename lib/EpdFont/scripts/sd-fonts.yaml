@@ -281,6 +281,7 @@ families:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
       - codepoints/japanese_supplementary_kanji.txt
+      - codepoints/japanese_compat_kanji.txt
     extra_fallbacks:
       - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]
@@ -295,6 +296,7 @@ families:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
       - codepoints/japanese_supplementary_kanji.txt
+      - codepoints/japanese_compat_kanji.txt
     extra_fallbacks:
       - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]
@@ -309,6 +311,7 @@ families:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
       - codepoints/japanese_supplementary_kanji.txt
+      - codepoints/japanese_compat_kanji.txt
     extra_fallbacks:
       - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]

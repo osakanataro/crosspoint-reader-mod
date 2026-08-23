@@ -69,11 +69,17 @@ INTERVAL_PRESETS = {
     # (arrows/stars used as emphasis marks, ⌒⌘ as decorative asides) rather than
     # importing their full parent blocks (2B00.. and 2300.. run to 256 codepoints
     # each for a handful of real hits).
+    # 2026-08-23: ⦿ and the vertical em-dash/bracket presentation forms below are
+    # from the same 955-book commercial-EPUB scan that added 𠮟 -- ⦿ as a bullet
+    # marker used 1010 times in one book, FE31/FE32/FE3D/FE3E as the pre-rotated
+    # vertical forms of the em dash and 《》brackets (already shaped for vertical
+    # text, unlike their horizontal originals U+2014/300A/300B which the reader
+    # rotates itself -- see VerticalTextUtils.h's isUprightInVertical).
     "cjk-symbols": [(0x2100, 0x214F), (0x2312, 0x2312), (0x2318, 0x2318),
-                    (0x2460, 0x24FF), (0x2B05, 0x2B07), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50),
+                    (0x2460, 0x24FF), (0x29BF, 0x29BF), (0x2B05, 0x2B07), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50),
                     (0x2E80, 0x2EFF), (0x3190, 0x319F),
                     (0x31F0, 0x31FF), (0x3200, 0x32FF), (0x3300, 0x33FF),
-                    (0xFE10, 0xFE19)],
+                    (0xFE10, 0xFE19), (0xFE31, 0xFE32), (0xFE3D, 0xFE3E)],
     # Supplementary-plane ideographs (CJK Ext B..I, U+20000-2FFFF -- the same span
     # IDEOGRAPH_RANGES below already gates). Nominally huge, but this preset is only
     # ever combined with --codepoints-file: the allowlist filter runs BEFORE any
