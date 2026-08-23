@@ -137,13 +137,18 @@ anything else. Eighteen chapters, in guide/body pairs:
      even though the source fonts carry it; ℃ alone appeared in 57 of the
      513 books. ⭐ ⬛ ⬇ ⬜ ⬅ ⬆ ⌒ ⌘ are the other real corpus hits, added as
      narrow ranges rather than their full parent blocks. The body also
-     carries literal U+FE0E/U+FE0F (VS15/VS16) right after ☆ ♪ ❤ -- these
+     carries literal U+FE0E/U+FE0F (VS15/VS16) right after ☆ ♪ ♥ -- these
      are zero-width presentation-style selectors with no glyph in any font,
      but before the parser fix they fell through to the replacement glyph
      and drew a visible tofu box; the corpus scan found 1,288 of them across
-     38 books (up to 275 in one). Pass condition: the symbols in test (1)
-     and (2) render as their real glyphs rather than tofu, and the ☆/♪/❤
-     sentences in test (3) read with no gap or box after the mark.
+     38 books (up to 275 in one). The VS16 base is ♥ U+2665 (heart SUIT, in
+     JIS and every source font), deliberately not ❤ U+2764 (Dingbats heavy
+     heart): no source font carries 2764, so a sentence built on it shows a
+     replacement glyph regardless of the selector fix -- the first version
+     of this chapter did exactly that and the on-device photo was misread
+     as a pass. Pass condition: the symbols in test (1) and (2) render as
+     their real glyphs rather than tofu, and the ☆/♪/♥ sentences in test
+     (3) read with no gap or box after the mark.
   8  Supplementary-plane kanji (2026-08-23). 𠮟 U+20B9F -- the JIS X 0213 form
      of しかる, found in 6 of the 513 books -- sits above the Basic
      Multilingual Plane (4-byte UTF-8) and needed two separate fixes: the
