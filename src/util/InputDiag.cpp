@@ -126,6 +126,11 @@ struct OpenStage {
 };
 OpenStage openStages[OPEN_STAGE_COUNT];
 
+// Reader-teardown heap figures (see noteCloseHeap in the header). 0 = no close yet.
+uint16_t closeBeforeFreeKb = 0;
+uint16_t closeAfterFreeKb = 0;
+uint16_t closeAfterMaxKb = 0;
+
 uint32_t pageRenderPrewarmMs = 0;
 uint32_t pageRenderDrawMs = 0;
 uint32_t pageRenderDisplayMs = 0;
@@ -253,6 +258,12 @@ void InputDiag::noteOpenBegin() {
     s.maxAllocKb = 0;
   }
   Storage.remove("/open-heap.txt");
+}
+
+void InputDiag::noteCloseHeap(const uint32_t beforeFreeKb, const uint32_t afterFreeKb, const uint32_t afterMaxKb) {
+  closeBeforeFreeKb = static_cast<uint16_t>(beforeFreeKb);
+  closeAfterFreeKb = static_cast<uint16_t>(afterFreeKb);
+  closeAfterMaxKb = static_cast<uint16_t>(afterMaxKb);
 }
 
 void InputDiag::noteOpenStage(const uint8_t slot, const char* label) {
@@ -439,6 +450,12 @@ void InputDiag::flush(const bool inputActive) {
   }
   if (static_cast<size_t>(len) < sizeof(reportBuf)) {
     len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "\n");
+  }
+
+  // Heap around the last reader teardown (KB free before, free/largest block after).
+  if (closeBeforeFreeKb != 0 || closeAfterFreeKb != 0) {
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "close_heap=%u -> %u/%u\n", closeBeforeFreeKb,
+                    closeAfterFreeKb, closeAfterMaxKb);
   }
 
   // Oldest first, so the list reads in the order the renders happened.

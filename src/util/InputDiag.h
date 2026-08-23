@@ -63,6 +63,12 @@ class InputDiag {
   static void noteOpenBegin();
   static void noteOpenStage(uint8_t slot, const char* label);
 
+  // Heap around the reader's teardown: free before the section/epub release, free
+  // and largest block after. Together with open_heap's "enter" this answers "how
+  // much of the open cost came back when the book was closed" -- the question the
+  // 30KB-at-enter crash session left open. Reported as close_heap= in the diag file.
+  static void noteCloseHeap(uint32_t beforeFreeKb, uint32_t afterFreeKb, uint32_t afterMaxKb);
+
   // What the page scope's scan pass handed to the prewarm (bytes recorded, distinct fonts) and the
   // running count of prewarm() entry bails (scratch alloc failure / zero heap budget). Splits the
   // "prewarm reported done in 10ms yet the draw faulted a screenful" symptom into its three
@@ -133,6 +139,7 @@ class InputDiag {
   static void noteUiPrewarmEnd() {}
   static void noteOpenBegin() {}
   static void noteOpenStage(uint8_t, const char*) {}
+  static void noteCloseHeap(uint32_t, uint32_t, uint32_t) {}
   static void noteScanOutcome(uint32_t, uint8_t, uint32_t) {}
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
   static void notePageDrawParts(unsigned long, unsigned long) {}

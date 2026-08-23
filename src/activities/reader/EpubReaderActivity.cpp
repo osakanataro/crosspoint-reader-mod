@@ -158,6 +158,8 @@ EpubReaderActivity::~EpubReaderActivity() {
     saveProgress(origin.spineIndex, origin.pageNumber, 0);
   }
 
+  const uint32_t freeBefore = ESP.getFreeHeap();
+
   section.reset();
   if (pendingReadFolderMove && epub) {
     const std::string srcPath = epub->getPath();
@@ -168,10 +170,30 @@ EpubReaderActivity::~EpubReaderActivity() {
   } else {
     epub.reset();
   }
+
+  InputDiag::noteCloseHeap(freeBefore / 1024, ESP.getFreeHeap() / 1024, ESP.getMaxAllocHeap() / 1024);
 }
 
 bool EpubReaderActivity::loadBook() {
   InputDiag::noteOpenBegin();
+
+  // Opening a second book in one power-on starts from whatever the first left
+  // behind -- the reading font's resident caches survive an exit by design, and
+  // a CSS-heavy book then opens ~60KB worse off than a fresh boot. One session
+  // opened at 30KB free, starved the advance tables (a 1KB alloc failed), fell
+  // back to per-glyph SD reads at 16s/page, and died in a bare allocation.
+  // Handing the caches back up front makes a re-open behave like a first open;
+  // the cost is re-warming them over the next page or two.
+  constexpr uint32_t OPEN_MIN_FREE_HEAP = 60 * 1024;
+  constexpr uint32_t OPEN_MIN_MAX_ALLOC = 40 * 1024;
+  if (ESP.getFreeHeap() < OPEN_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < OPEN_MIN_MAX_ALLOC) {
+    LOG_ERR("ERS", "Low heap opening book (%u free, %u max block), releasing SD font caches", ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseSdFontCaches();
+    }
+  }
+
   InputDiag::noteOpenStage(0, "enter");
   auto loadedEpub = makeUniqueNoThrow<Epub>(bookPath, "/.crosspoint");
   if (!loadedEpub) {
