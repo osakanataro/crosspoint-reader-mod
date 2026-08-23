@@ -1456,6 +1456,18 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       }
     }
 
+    // Skip variation selectors VS15/VS16 (U+FE0E/U+FE0F = 0xEF 0xB8 0x8E/0x8F). These
+    // are zero-width presentation hints ("draw the preceding character as text, not
+    // emoji") with no glyph of their own; no font carries one. Left unskipped they fell
+    // through to the replacement-glyph path and drew a visible tofu box per occurrence --
+    // one real book in the Kakuyomu/Narou corpus scan carried 275 of them (word-processor
+    // autocorrect commonly appends VS15 after ☆ and similar marks).
+    if (s[i] == 0xEF && i + 2 < len && s[i + 1] == static_cast<XML_Char>(0xB8) &&
+        (s[i + 2] == static_cast<XML_Char>(0x8E) || s[i + 2] == static_cast<XML_Char>(0x8F))) {
+      i += 2;
+      continue;
+    }
+
     // If we're about to run out of space, then cut the word off and start a new one.
     // For CJK text (no spaces), this is the primary word-breaking mechanism.
     // We must avoid splitting multi-byte UTF-8 sequences across word boundaries,
