@@ -276,10 +276,11 @@ families:
 
   - name: BIZUDGothic
     description: "UD Gothic Japanese (MORISAWA, optimized for readability)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols,cjk-ext-supplementary
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
+      - codepoints/japanese_supplementary_kanji.txt
     extra_fallbacks:
       - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]
@@ -289,10 +290,11 @@ families:
 
   - name: BIZUDMincho
     description: "UD Mincho Japanese (MORISAWA, optimized for readability)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols,cjk-ext-supplementary
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
+      - codepoints/japanese_supplementary_kanji.txt
     extra_fallbacks:
       - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]
@@ -302,10 +304,11 @@ families:
 
   - name: NotoSansJP
     description: "Sans-serif Japanese (JIS X 0213)"
-    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols,cjk-ext-supplementary
     codepoints_file:
       - codepoints/japanese_jis0213.txt
       - codepoints/jis0208_greek_cyrillic.txt
+      - codepoints/japanese_supplementary_kanji.txt
     extra_fallbacks:
       - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
     sizes: [8, 10, 12, 14, 16, 18]

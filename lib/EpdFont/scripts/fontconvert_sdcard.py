@@ -74,6 +74,16 @@ INTERVAL_PRESETS = {
                     (0x2E80, 0x2EFF), (0x3190, 0x319F),
                     (0x31F0, 0x31FF), (0x3200, 0x32FF), (0x3300, 0x33FF),
                     (0xFE10, 0xFE19)],
+    # Supplementary-plane ideographs (CJK Ext B..I, U+20000-2FFFF -- the same span
+    # IDEOGRAPH_RANGES below already gates). Nominally huge, but this preset is only
+    # ever combined with --codepoints-file: the allowlist filter runs BEFORE any
+    # FreeType validation, so only the handful of codepoints actually listed in a
+    # codepoints file (e.g. japanese_supplementary_kanji.txt) survive to rasterize --
+    # naming the full range here just means a newly-added line in that file takes
+    # effect without touching this preset again. 2026-08-23: added for 𠮟 U+20B9F,
+    # found used in 6 of 513 real Kakuyomu/Narou books (its JIS X 0213 form; 叱 is
+    # the older BMP variant some fonts substitute instead).
+    "cjk-ext-supplementary": [(0x20000, 0x2FFFF)],
     "hangul":      [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)],
     "cherokee":    [(0x13A0, 0x13FF), (0xAB70, 0xABBF)],
     "tifinagh":    [(0x2D30, 0x2D7F)],
