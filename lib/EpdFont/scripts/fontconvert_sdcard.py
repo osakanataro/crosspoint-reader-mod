@@ -60,7 +60,18 @@ INTERVAL_PRESETS = {
     # The Vertical Forms row (︐︑︒ …) feeds the reader's vertical punctuation
     # substitution; faces without cmap entries there get the glyphs through the
     # 'vert' feature (see extract_vertical_forms_fonttools).
-    "cjk-symbols": [(0x2460, 0x24FF), (0x2E80, 0x2EFF), (0x3190, 0x319F),
+    # Letterlike Symbols (2026-08-23: found by scanning 513 real Kakuyomu/Narou
+    # EPUBs against the built fonts) sat in the gap between "punctuation" and
+    # "symbols" below -- neither preset starts before 0x2150, so the whole block
+    # was silently absent. Ordinary Japanese prose reaches for it constantly:
+    # U+2103 ℃ alone appeared in 57 of the 513 books. The two narrow ranges after
+    # it are the same kind of gap, sized to what the corpus scan actually found
+    # (arrows/stars used as emphasis marks, ⌒⌘ as decorative asides) rather than
+    # importing their full parent blocks (2B00.. and 2300.. run to 256 codepoints
+    # each for a handful of real hits).
+    "cjk-symbols": [(0x2100, 0x214F), (0x2312, 0x2312), (0x2318, 0x2318),
+                    (0x2460, 0x24FF), (0x2B05, 0x2B07), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50),
+                    (0x2E80, 0x2EFF), (0x3190, 0x319F),
                     (0x31F0, 0x31FF), (0x3200, 0x32FF), (0x3300, 0x33FF),
                     (0xFE10, 0xFE19)],
     "hangul":      [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)],
