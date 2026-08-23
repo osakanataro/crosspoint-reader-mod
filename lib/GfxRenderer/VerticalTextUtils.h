@@ -170,6 +170,13 @@ inline bool isUprightInVertical(uint32_t cp) {
   if (cp >= 0x3300 && cp <= 0x33FF) return true;  // CJK Compatibility
   if (cp >= 0x3100 && cp <= 0x312F) return true;  // Bopomofo
   if (cp >= 0xAC00 && cp <= 0xD7AF) return true;  // Hangul
+  // Supplementary-plane ideographs (CJK Ext B..I). Matches the span the SD font
+  // generator gates behind --codepoints-file (fontconvert_sdcard.py's
+  // IDEOGRAPH_RANGES / the "cjk-ext-supplementary" preset), so any kanji that
+  // font pipeline is later taught to carry lands upright here without a second
+  // edit. Added 2026-08-23 for 𠮟 U+20B9F; without this an ideograph up here
+  // fell through to the sideways/rotated path meant for Latin runs.
+  if (cp >= 0x20000 && cp <= 0x3FFFF) return true;
   return false;
 }
 
