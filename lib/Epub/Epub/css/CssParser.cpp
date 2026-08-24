@@ -270,6 +270,56 @@ CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
   return explicitNone ? CssTextDecoration::None : result;
 }
 
+CssTextEmphasis CssParser::interpretTextEmphasis(std::string_view val) {
+  // Shorthand grammar is "<fill> || <shape>" in either order, with the colour of the
+  // text-emphasis shorthand ignored here. An omitted fill is "filled" and an omitted
+  // shape is "sesame", matching what a bare "text-emphasis: dot" or ": open" means.
+  bool none = false;
+  bool open = false;
+  bool haveShape = false;
+  CssTextEmphasis shape = CssTextEmphasis::FilledSesame;
+  forEachDelimitedToken(stripTrailingImportant(val), isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      none = true;
+    } else if (iequalsAscii(token, "open")) {
+      open = true;
+    } else if (iequalsAscii(token, "filled")) {
+      open = false;
+    } else if (iequalsAscii(token, "sesame")) {
+      shape = CssTextEmphasis::FilledSesame;
+      haveShape = true;
+    } else if (iequalsAscii(token, "double-circle")) {
+      shape = CssTextEmphasis::FilledDoubleCircle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "circle")) {
+      shape = CssTextEmphasis::FilledCircle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "triangle")) {
+      shape = CssTextEmphasis::FilledTriangle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "dot")) {
+      shape = CssTextEmphasis::FilledDot;
+      haveShape = true;
+    }
+  });
+
+  if (none) return CssTextEmphasis::None;
+  if (!haveShape) shape = CssTextEmphasis::FilledSesame;
+  if (!open) return shape;
+  switch (shape) {
+    case CssTextEmphasis::FilledDoubleCircle:
+      return CssTextEmphasis::OpenDoubleCircle;
+    case CssTextEmphasis::FilledCircle:
+      return CssTextEmphasis::OpenCircle;
+    case CssTextEmphasis::FilledTriangle:
+      return CssTextEmphasis::OpenTriangle;
+    case CssTextEmphasis::FilledDot:
+      return CssTextEmphasis::OpenDot;
+    default:
+      return CssTextEmphasis::OpenSesame;
+  }
+}
+
 CssLength CssParser::interpretLength(std::string_view val) {
   CssLength result;
   tryInterpretLength(val, result);
@@ -418,6 +468,11 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.verticalAlign = CssVerticalAlign::Sub;
       style.defined.verticalAlign = 1;
     }
+  } else if (iequalsAscii(name, "text-emphasis-style") || iequalsAscii(name, "text-emphasis") ||
+             iequalsAscii(name, "-epub-text-emphasis-style") || iequalsAscii(name, "-epub-text-emphasis") ||
+             iequalsAscii(name, "-webkit-text-emphasis-style") || iequalsAscii(name, "-webkit-text-emphasis")) {
+    style.textEmphasis = interpretTextEmphasis(value);
+    style.defined.textEmphasis = 1;
   }
 }
 
@@ -770,6 +825,7 @@ bool CssParser::saveToCache() const {
     writeLength(style.imageWidth);
     file.write(static_cast<uint8_t>(style.display));
     file.write(static_cast<uint8_t>(style.verticalAlign));
+    file.write(static_cast<uint8_t>(style.textEmphasis));
 
     // Write defined flags as uint32_t
     uint32_t definedBits = 0;
@@ -791,6 +847,7 @@ bool CssParser::saveToCache() const {
     if (style.defined.display) definedBits |= 1 << 15;
     if (style.defined.direction) definedBits |= 1 << 16;
     if (style.defined.verticalAlign) definedBits |= 1 << 17;
+    if (style.defined.textEmphasis) definedBits |= 1 << 18;
     file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
   }
 
@@ -982,6 +1039,14 @@ bool CssParser::loadFromCache(const CssSelectorUsage* usage) {
     }
     style.verticalAlign = static_cast<CssVerticalAlign>(verticalAlignVal);
 
+    // Read textEmphasis value
+    uint8_t textEmphasisVal;
+    if (file.read(&textEmphasisVal, 1) != 1) {
+      rulesBySelector_.clear();
+      return false;
+    }
+    style.textEmphasis = static_cast<CssTextEmphasis>(textEmphasisVal);
+
     // Read defined flags
     uint32_t definedBits = 0;
     if (file.read(&definedBits, sizeof(definedBits)) != sizeof(definedBits)) {
@@ -1006,6 +1071,7 @@ bool CssParser::loadFromCache(const CssSelectorUsage* usage) {
     style.defined.display = (definedBits & 1 << 15) != 0;
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+    style.defined.textEmphasis = (definedBits & 1 << 18) != 0;
 
     // Skip rules that can never match the scanned document; the style
     // payload has already been consumed from the stream at this point.

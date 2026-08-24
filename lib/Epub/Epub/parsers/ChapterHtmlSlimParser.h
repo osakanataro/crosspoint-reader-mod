@@ -66,6 +66,9 @@ class ChapterHtmlSlimParser {
   // Lazy probe of the reading face for Vertical Forms punctuation (U+FE10-FE12).
   // Bit n of the low nibble: form FE10+n probed; bit n of the high nibble: present.
   uint8_t vertFormProbe = 0;
+  // Same lazy probe for the two sesame marks (U+FE45/FE46), which the reading faces do not
+  // all carry. Bit 0/1: FE45/FE46 probed; bit 2/3: present.
+  uint8_t sesameProbe = 0;
   // Full-width cell advance carried across paragraphs for layoutVerticalColumns,
   // so a pure-Latin paragraph keeps its neighbours' cell width.
   int verticalCellWidthMemo = 0;
@@ -87,6 +90,8 @@ class ChapterHtmlSlimParser {
     CssTextDirection direction = CssTextDirection::Ltr;
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
+    bool hasEmphasis = false;
+    CssTextEmphasis emphasis = CssTextEmphasis::None;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -98,6 +103,9 @@ class ChapterHtmlSlimParser {
   CssTextDirection effectiveDirection = CssTextDirection::Ltr;
   bool effectiveSup = false;
   bool effectiveSub = false;
+  // Active text-emphasis (bouten). Drawn as a synthetic ruby annotation, so a real
+  // <rt> on the same run overwrites it -- furigana wins over bouten.
+  CssTextEmphasis effectiveEmphasis = CssTextEmphasis::None;
   int tableDepth = 0;
   int tableRowIndex = 0;
   int tableColIndex = 0;
@@ -146,6 +154,9 @@ class ChapterHtmlSlimParser {
   void flushPartWordBuffer();
   void flushPartWordBufferVertical(EpdFontFamily::Style fontStyle);
   bool fontHasVerticalForm(uint32_t formCp);
+  bool fontHasCodepoint(uint32_t cp) const;
+  void substituteMissingCompatibilityIdeographs();
+  const char* resolveEmphasisMark(CssTextEmphasis e);
   void setCurrentPageVisibleOffset(uint32_t offset);
   void makePages();
   // Vertical (tategaki) analogue of addLineToPage: places a laid-out column at the current
@@ -154,6 +165,8 @@ class ChapterHtmlSlimParser {
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
+  static void applyTextEmphasisToEntry(StyleStackEntry& entry, const CssStyle& css);
+  void applyHorizontalEmphasis(size_t wordIndex);
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);
   // XML callbacks

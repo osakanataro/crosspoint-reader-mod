@@ -228,7 +228,9 @@ inline bool isKinsokuHead(uint32_t cp) {
   if (cp == 0xFF01 || cp == 0xFF1F) return true;                                  // ！？
   if (cp == 0xFF1A || cp == 0xFF1B) return true;                                  // ：；
   if (cp == 0x3009 || cp == 0x300B) return true;                                  // 〉》
-  if (cp == 0xFE3E) return true;                                                  // ︾ (vertical 》)
+  // Vertical bracket forms run FE35..FE44 as open, close, open, close, so the odd
+  // steps from FE35 are the closing halves (︶︸︺︼︾﹀﹂﹄).
+  if (cp >= 0xFE35 && cp <= 0xFE44) return ((cp - 0xFE35) & 1) == 1;
   // Small kana (行頭禁止)
   if (cp == 0x3041 || cp == 0x3043 || cp == 0x3045 || cp == 0x3047 || cp == 0x3049) return true;  // ぁぃぅぇぉ
   if (cp == 0x3063 || cp == 0x3083 || cp == 0x3085 || cp == 0x3087) return true;                  // っゃゅょ
@@ -245,7 +247,8 @@ inline bool isKinsokuTail(uint32_t cp) {
   if (cp == 0x3014 || cp == 0x3016 || cp == 0x3018 || cp == 0x301A) return true;  // 〔〖〘〚
   if (cp == 0xFF08 || cp == 0xFF3B || cp == 0xFF5B) return true;                  // （［｛
   if (cp == 0x3008 || cp == 0x300A) return true;                                  // 〈《
-  if (cp == 0xFE3D) return true;                                                  // ︽ (vertical 《)
+  // Even steps from FE35 are the opening halves (︵︷︹︻︽︿﹁﹃).
+  if (cp >= 0xFE35 && cp <= 0xFE44) return ((cp - 0xFE35) & 1) == 0;
   return false;
 }
 

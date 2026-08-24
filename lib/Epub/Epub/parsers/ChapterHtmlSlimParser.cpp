@@ -56,6 +56,11 @@ constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS = 320;
 // on resource-constrained devices (~380KB heap). TOC anchors bypass this cap.
 constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
 
+// Cap on the marks a single horizontal word gets. Japanese bouten runs are short; a longer
+// word is almost always Latin, where the per-character annotation buys nothing and the
+// spacer string would outweigh the word.
+constexpr size_t MAX_EMPHASIS_CODEPOINTS_PER_WORD = 24;
+
 constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
 constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
 constexpr const char* BOLD_TAGS[] = {"b", "strong"};
@@ -64,6 +69,119 @@ constexpr const char* UNDERLINE_TAGS[] = {"u", "ins"};
 constexpr const char* LINETHROUGH_TAGS[] = {"del", "s", "strike"};
 constexpr const char* IMAGE_TAGS[] = {"img", "image"};
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
+
+// CJK Compatibility Ideographs (U+F900-FAFF) -> the unified ideograph each one
+// decomposes to, 0 where there is none or it lives outside the BMP (no reading face
+// carries those). Publishers' typesetting systems reach for a compatibility codepoint
+// to pin a particular glyph shape, but a face that never drew that shape has nothing
+// there: BIZ UD has 蓮 U+F999 and neither 溺 U+F9EC nor 煉 U+F993, so a book using them
+// drew the replacement box. The character is the same either way, so falling back to
+// the unified form shows the word instead of a hole.
+//
+// 512 uint16 = 1 KB of flash, no RAM: the table is only read on the rare codepoint
+// that lands in the block.
+constexpr uint16_t CJK_COMPAT_UNIFIED[512] = {
+    0x8C48, 0x66F4, 0x8ECA, 0x8CC8, 0x6ED1, 0x4E32, 0x53E5, 0x9F9C,  // U+F900
+    0x9F9C, 0x5951, 0x91D1, 0x5587, 0x5948, 0x61F6, 0x7669, 0x7F85,  // U+F908
+    0x863F, 0x87BA, 0x88F8, 0x908F, 0x6A02, 0x6D1B, 0x70D9, 0x73DE,  // U+F910
+    0x843D, 0x916A, 0x99F1, 0x4E82, 0x5375, 0x6B04, 0x721B, 0x862D,  // U+F918
+    0x9E1E, 0x5D50, 0x6FEB, 0x85CD, 0x8964, 0x62C9, 0x81D8, 0x881F,  // U+F920
+    0x5ECA, 0x6717, 0x6D6A, 0x72FC, 0x90CE, 0x4F86, 0x51B7, 0x52DE,  // U+F928
+    0x64C4, 0x6AD3, 0x7210, 0x76E7, 0x8001, 0x8606, 0x865C, 0x8DEF,  // U+F930
+    0x9732, 0x9B6F, 0x9DFA, 0x788C, 0x797F, 0x7DA0, 0x83C9, 0x9304,  // U+F938
+    0x9E7F, 0x8AD6, 0x58DF, 0x5F04, 0x7C60, 0x807E, 0x7262, 0x78CA,  // U+F940
+    0x8CC2, 0x96F7, 0x58D8, 0x5C62, 0x6A13, 0x6DDA, 0x6F0F, 0x7D2F,  // U+F948
+    0x7E37, 0x964B, 0x52D2, 0x808B, 0x51DC, 0x51CC, 0x7A1C, 0x7DBE,  // U+F950
+    0x83F1, 0x9675, 0x8B80, 0x62CF, 0x6A02, 0x8AFE, 0x4E39, 0x5BE7,  // U+F958
+    0x6012, 0x7387, 0x7570, 0x5317, 0x78FB, 0x4FBF, 0x5FA9, 0x4E0D,  // U+F960
+    0x6CCC, 0x6578, 0x7D22, 0x53C3, 0x585E, 0x7701, 0x8449, 0x8AAA,  // U+F968
+    0x6BBA, 0x8FB0, 0x6C88, 0x62FE, 0x82E5, 0x63A0, 0x7565, 0x4EAE,  // U+F970
+    0x5169, 0x51C9, 0x6881, 0x7CE7, 0x826F, 0x8AD2, 0x91CF, 0x52F5,  // U+F978
+    0x5442, 0x5973, 0x5EEC, 0x65C5, 0x6FFE, 0x792A, 0x95AD, 0x9A6A,  // U+F980
+    0x9E97, 0x9ECE, 0x529B, 0x66C6, 0x6B77, 0x8F62, 0x5E74, 0x6190,  // U+F988
+    0x6200, 0x649A, 0x6F23, 0x7149, 0x7489, 0x79CA, 0x7DF4, 0x806F,  // U+F990
+    0x8F26, 0x84EE, 0x9023, 0x934A, 0x5217, 0x52A3, 0x54BD, 0x70C8,  // U+F998
+    0x88C2, 0x8AAA, 0x5EC9, 0x5FF5, 0x637B, 0x6BAE, 0x7C3E, 0x7375,  // U+F9A0
+    0x4EE4, 0x56F9, 0x5BE7, 0x5DBA, 0x601C, 0x73B2, 0x7469, 0x7F9A,  // U+F9A8
+    0x8046, 0x9234, 0x96F6, 0x9748, 0x9818, 0x4F8B, 0x79AE, 0x91B4,  // U+F9B0
+    0x96B8, 0x60E1, 0x4E86, 0x50DA, 0x5BEE, 0x5C3F, 0x6599, 0x6A02,  // U+F9B8
+    0x71CE, 0x7642, 0x84FC, 0x907C, 0x9F8D, 0x6688, 0x962E, 0x5289,  // U+F9C0
+    0x677B, 0x67F3, 0x6D41, 0x6E9C, 0x7409, 0x7559, 0x786B, 0x7D10,  // U+F9C8
+    0x985E, 0x516D, 0x622E, 0x9678, 0x502B, 0x5D19, 0x6DEA, 0x8F2A,  // U+F9D0
+    0x5F8B, 0x6144, 0x6817, 0x7387, 0x9686, 0x5229, 0x540F, 0x5C65,  // U+F9D8
+    0x6613, 0x674E, 0x68A8, 0x6CE5, 0x7406, 0x75E2, 0x7F79, 0x88CF,  // U+F9E0
+    0x88E1, 0x91CC, 0x96E2, 0x533F, 0x6EBA, 0x541D, 0x71D0, 0x7498,  // U+F9E8
+    0x85FA, 0x96A3, 0x9C57, 0x9E9F, 0x6797, 0x6DCB, 0x81E8, 0x7ACB,  // U+F9F0
+    0x7B20, 0x7C92, 0x72C0, 0x7099, 0x8B58, 0x4EC0, 0x8336, 0x523A,  // U+F9F8
+    0x5207, 0x5EA6, 0x62D3, 0x7CD6, 0x5B85, 0x6D1E, 0x66B4, 0x8F3B,  // U+FA00
+    0x884C, 0x964D, 0x898B, 0x5ED3, 0x5140, 0x55C0, 0x0000, 0x0000,  // U+FA08
+    0x585A, 0x0000, 0x6674, 0x0000, 0x0000, 0x51DE, 0x732A, 0x76CA,  // U+FA10
+    0x793C, 0x795E, 0x7965, 0x798F, 0x9756, 0x7CBE, 0x7FBD, 0x0000,  // U+FA18
+    0x8612, 0x0000, 0x8AF8, 0x0000, 0x0000, 0x9038, 0x90FD, 0x0000,  // U+FA20
+    0x0000, 0x0000, 0x98EF, 0x98FC, 0x9928, 0x9DB4, 0x90DE, 0x96B7,  // U+FA28
+    0x4FAE, 0x50E7, 0x514D, 0x52C9, 0x52E4, 0x5351, 0x559D, 0x5606,  // U+FA30
+    0x5668, 0x5840, 0x58A8, 0x5C64, 0x5C6E, 0x6094, 0x6168, 0x618E,  // U+FA38
+    0x61F2, 0x654F, 0x65E2, 0x6691, 0x6885, 0x6D77, 0x6E1A, 0x6F22,  // U+FA40
+    0x716E, 0x722B, 0x7422, 0x7891, 0x793E, 0x7949, 0x7948, 0x7950,  // U+FA48
+    0x7956, 0x795D, 0x798D, 0x798E, 0x7A40, 0x7A81, 0x7BC0, 0x7DF4,  // U+FA50
+    0x7E09, 0x7E41, 0x7F72, 0x8005, 0x81ED, 0x8279, 0x8279, 0x8457,  // U+FA58
+    0x8910, 0x8996, 0x8B01, 0x8B39, 0x8CD3, 0x8D08, 0x8FB6, 0x9038,  // U+FA60
+    0x96E3, 0x97FF, 0x983B, 0x6075, 0x0000, 0x8218, 0x0000, 0x0000,  // U+FA68
+    0x4E26, 0x51B5, 0x5168, 0x4F80, 0x5145, 0x5180, 0x52C7, 0x52FA,  // U+FA70
+    0x559D, 0x5555, 0x5599, 0x55E2, 0x585A, 0x58B3, 0x5944, 0x5954,  // U+FA78
+    0x5A62, 0x5B28, 0x5ED2, 0x5ED9, 0x5F69, 0x5FAD, 0x60D8, 0x614E,  // U+FA80
+    0x6108, 0x618E, 0x6160, 0x61F2, 0x6234, 0x63C4, 0x641C, 0x6452,  // U+FA88
+    0x6556, 0x6674, 0x6717, 0x671B, 0x6756, 0x6B79, 0x6BBA, 0x6D41,  // U+FA90
+    0x6EDB, 0x6ECB, 0x6F22, 0x701E, 0x716E, 0x77A7, 0x7235, 0x72AF,  // U+FA98
+    0x732A, 0x7471, 0x7506, 0x753B, 0x761D, 0x761F, 0x76CA, 0x76DB,  // U+FAA0
+    0x76F4, 0x774A, 0x7740, 0x78CC, 0x7AB1, 0x7BC0, 0x7C7B, 0x7D5B,  // U+FAA8
+    0x7DF4, 0x7F3E, 0x8005, 0x8352, 0x83EF, 0x8779, 0x8941, 0x8986,  // U+FAB0
+    0x8996, 0x8ABF, 0x8AF8, 0x8ACB, 0x8B01, 0x8AFE, 0x8AED, 0x8B39,  // U+FAB8
+    0x8B8A, 0x8D08, 0x8F38, 0x9072, 0x9199, 0x9276, 0x967C, 0x96E3,  // U+FAC0
+    0x9756, 0x97DB, 0x97FF, 0x980B, 0x983B, 0x9B12, 0x9F9C, 0x0000,  // U+FAC8
+    0x0000, 0x0000, 0x3B9D, 0x4018, 0x4039, 0x0000, 0x0000, 0x0000,  // U+FAD0
+    0x9F43, 0x9F8E, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAD8
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAE0
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAE8
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAF0
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAF8
+};
+
+// Unified form for a compatibility ideograph, 0 when there is no BMP one.
+uint32_t unifiedIdeographFor(const uint32_t cp) {
+  if (cp < 0xF900 || cp > 0xFAFF) return 0;
+  return CJK_COMPAT_UNIFIED[cp - 0xF900];
+}
+
+// UTF-8 mark glyph for a text-emphasis style, nullptr for none. The sesame forms are the
+// Vertical Forms codepoints; every mark here is inside the coverage the reading faces
+// already carry for kutouten and enclosed CJK.
+const char* emphasisMarkUtf8(const CssTextEmphasis e) {
+  switch (e) {
+    case CssTextEmphasis::FilledDot:
+      return "\xE2\x80\xA2";  // •
+    case CssTextEmphasis::OpenDot:
+      return "\xE2\x97\xA6";  // ◦
+    case CssTextEmphasis::FilledCircle:
+      return "\xE2\x97\x8F";  // ●
+    case CssTextEmphasis::OpenCircle:
+      return "\xE2\x97\x8B";  // ○
+    case CssTextEmphasis::FilledSesame:
+      return "\xEF\xB9\x85";  // ﹅
+    case CssTextEmphasis::OpenSesame:
+      return "\xEF\xB9\x86";  // ﹆
+    case CssTextEmphasis::FilledTriangle:
+      return "\xE2\x96\xB2";  // ▲
+    case CssTextEmphasis::OpenTriangle:
+      return "\xE2\x96\xB3";  // △
+    case CssTextEmphasis::FilledDoubleCircle:
+      return "\xE2\x97\x89";  // ◉
+    case CssTextEmphasis::OpenDoubleCircle:
+      return "\xE2\x97\x8E";  // ◎
+    default:
+      return nullptr;
+  }
+}
 
 std::string trimAndNormalize(const std::string& str) {
   if (str.empty()) return "";
@@ -156,6 +274,13 @@ EpdFontFamily::Style ChapterHtmlSlimParser::fontStyleForTextDecoration(const Css
   return style;
 }
 
+void ChapterHtmlSlimParser::applyTextEmphasisToEntry(StyleStackEntry& entry, const CssStyle& css) {
+  if (css.hasTextEmphasis()) {
+    entry.hasEmphasis = true;
+    entry.emphasis = css.textEmphasis;
+  }
+}
+
 void ChapterHtmlSlimParser::applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css) {
   if (css.hasTextDecoration()) {
     entry.hasTextDecoration = true;
@@ -178,6 +303,7 @@ void ChapterHtmlSlimParser::pushDecorationStyleEntry(const CssTextDecoration def
     entry.italic = cssStyle.fontStyle == CssFontStyle::Italic;
   }
   applyDirectionToEntry(entry, cssStyle);
+  applyTextEmphasisToEntry(entry, cssStyle);
   inlineStyleStack.push_back(entry);
   updateEffectiveInlineStyle();
 }
@@ -193,6 +319,7 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   effectiveDirection = currentCssStyle.direction;
   effectiveSup = false;
   effectiveSub = false;
+  effectiveEmphasis = currentCssStyle.hasTextEmphasis() ? currentCssStyle.textEmphasis : CssTextEmphasis::None;
 
   // Apply inline style stack in order
   for (const auto& entry : inlineStyleStack) {
@@ -218,6 +345,10 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
     if (entry.hasSub) {
       effectiveSub = entry.sub;
       if (entry.sub) effectiveSup = false;
+    }
+    // Unlike line decorations, a descendant's "none" cancels an ancestor's mark.
+    if (entry.hasEmphasis) {
+      effectiveEmphasis = entry.emphasis;
     }
   }
 
@@ -286,6 +417,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
+  substituteMissingCompatibilityIdeographs();
   if (isVertical) {
     // Spend the pending whitespace run as a separator token.
     //
@@ -314,11 +446,47 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
     // addColumnToPage for the page-granularity fallback used instead).
     flushPartWordBufferVertical(fontStyle);
   } else {
+    const size_t wordIndex = currentTextBlock->size();
     currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset);
+    applyHorizontalEmphasis(wordIndex);
   }
   partWordBufferIndex = 0;
   nextWordContinues = false;
   listItemBulletOnly = false;
+}
+
+// Attach bouten to a word the horizontal path just added, as a synthetic ruby annotation.
+//
+// The spacer is what makes the marks line up. Ruby draws in SUP style, which the renderer
+// puts out at 50% scale, and one annotation is centred over the whole word, so bare marks
+// advance only half a cell each and bunch into the middle of the run they mark. U+3000 is
+// full-width, so at SUP it is the other half: mark + space is exactly one character cell,
+// making the annotation as wide as the word and landing one mark per character.
+//
+// U+3000 shares its block with the brackets and kutouten on every page, so it is present
+// in any face that can render the text being marked.
+void ChapterHtmlSlimParser::applyHorizontalEmphasis(const size_t wordIndex) {
+  const char* mark = resolveEmphasisMark(effectiveEmphasis);
+  if (!mark) return;
+
+  size_t codepoints = 0;
+  for (int i = 0; i < partWordBufferIndex; i++) {
+    if ((static_cast<unsigned char>(partWordBuffer[i]) & 0xC0) != 0x80) codepoints++;
+  }
+  // Long runs would build a string bigger than the word itself for no legibility gain.
+  if (codepoints == 0 || codepoints > MAX_EMPHASIS_CODEPOINTS_PER_WORD) return;
+
+  static constexpr char IDEOGRAPHIC_SPACE[] = "\xE3\x80\x80";  // U+3000
+  constexpr size_t SPACE_LEN = sizeof(IDEOGRAPHIC_SPACE) - 1;
+  const size_t markLen = strlen(mark);
+
+  std::string marks;
+  marks.reserve((markLen + SPACE_LEN) * codepoints);
+  for (size_t i = 0; i < codepoints; i++) {
+    marks.append(mark, markLen);
+    marks.append(IDEOGRAPHIC_SPACE, SPACE_LEN);
+  }
+  currentTextBlock->setRubyForWordAt(wordIndex, marks);
 }
 
 // Tokenize the pending buffer into vertical cells. Emits one token per CJK/upright
@@ -330,6 +498,10 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
   // Vertical layout emits roughly one token per codepoint, so a full buffer becomes a burst of
   // pushes. Reserve up front (worst case one token per byte) so the parallel arrays grow once.
   currentTextBlock->ensureTokenCapacity(static_cast<size_t>(partWordBufferIndex));
+
+  // Bouten ride the ruby path, so they need the token range this flush produces.
+  const char* emphasisMark = resolveEmphasisMark(effectiveEmphasis);
+  const size_t emphasisFirstToken = emphasisMark ? currentTextBlock->size() : 0;
 
   const auto* p = reinterpret_cast<const unsigned char*>(partWordBuffer);
   const auto* end = p + partWordBufferIndex;
@@ -406,11 +578,79 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
         tateChuYoko ? VerticalTextUtils::VerticalBehavior::TateChuYoko : VerticalTextUtils::VerticalBehavior::Sideways;
     currentTextBlock->addVerticalToken(std::move(token), fontStyle, behavior);
   }
+
+  // One mark per token. Vertical layout already gives every upright codepoint its own
+  // cell, so a per-token annotation lands one mark beside one character with no spacing
+  // trick needed; a coalesced Latin or tate-chu-yoko run takes a single mark over the
+  // cell it occupies. The mark is 3 UTF-8 bytes, inside the small-string buffer, so this
+  // costs no allocation per token.
+  if (emphasisMark) {
+    const size_t tokenEnd = currentTextBlock->size();
+    for (size_t i = emphasisFirstToken; i < tokenEnd; i++) {
+      currentTextBlock->setRubyForWordAt(i, emphasisMark);
+    }
+  }
 }
 
 // Coverage-interval probe of the reading face, cached per form because the answer is
 // needed once per 、。， in the chapter. Faces predating the Vertical Forms block
 // answer false and the shifted-horizontal-glyph fallback stays in effect.
+// Mark glyph for a text-emphasis style, substituting a dot when the reading face has no
+// sesame. U+FE45/FE46 are the default shape for CSS text-emphasis and the usual choice in
+// Japanese books, but they sit in Vertical Forms and most faces stop short of it -- the
+// generated OST reading faces included. Drawing the replacement box for every marked
+// character is worse than the dot every reader recognises as bouten, so the face is probed
+// once and the shape downgraded if it comes back empty.
+const char* ChapterHtmlSlimParser::resolveEmphasisMark(const CssTextEmphasis e) {
+  const bool filledSesame = e == CssTextEmphasis::FilledSesame;
+  if (!filledSesame && e != CssTextEmphasis::OpenSesame) {
+    return emphasisMarkUtf8(e);
+  }
+
+  const uint8_t bit = filledSesame ? 1u : 2u;
+  if ((sesameProbe & bit) == 0) {
+    sesameProbe |= bit;
+    const uint32_t cp = filledSesame ? 0xFE45 : 0xFE46;
+    const auto& fonts = renderer.getFontMap();
+    const auto it = fonts.find(fontId);
+    if (it != fonts.end() && it->second.hasCodepoint(cp)) {
+      sesameProbe |= static_cast<uint8_t>(bit << 2);
+    }
+  }
+  if ((sesameProbe & static_cast<uint8_t>(bit << 2)) != 0) {
+    return emphasisMarkUtf8(e);
+  }
+  return emphasisMarkUtf8(filledSesame ? CssTextEmphasis::FilledDot : CssTextEmphasis::OpenDot);
+}
+
+bool ChapterHtmlSlimParser::fontHasCodepoint(const uint32_t cp) const {
+  const auto& fonts = renderer.getFontMap();
+  const auto it = fonts.find(fontId);
+  return it != fonts.end() && it->second.hasCodepoint(cp);
+}
+
+// Rewrite compatibility ideographs the reading face has no glyph for into their unified
+// form. Both sit in the BMP and so encode to three UTF-8 bytes, which is what lets this
+// patch the buffer in place instead of rebuilding it. Runs on the flush path so the
+// vertical and horizontal tokenizers both see the substituted text.
+void ChapterHtmlSlimParser::substituteMissingCompatibilityIdeographs() {
+  auto* write = reinterpret_cast<unsigned char*>(partWordBuffer);
+  const auto* p = write;
+  const auto* end = p + partWordBufferIndex;
+  while (p < end) {
+    const unsigned char* cpStart = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+    if (cp < 0xF900 || cp > 0xFAFF || (p - cpStart) != 3) continue;
+    const uint32_t unified = unifiedIdeographFor(cp);
+    if (unified == 0 || fontHasCodepoint(cp)) continue;
+    auto* out = write + (cpStart - write);
+    out[0] = static_cast<unsigned char>(0xE0 | (unified >> 12));
+    out[1] = static_cast<unsigned char>(0x80 | ((unified >> 6) & 0x3F));
+    out[2] = static_cast<unsigned char>(0x80 | (unified & 0x3F));
+  }
+}
+
 bool ChapterHtmlSlimParser::fontHasVerticalForm(const uint32_t formCp) {
   const uint8_t bit = 1u << (formCp - 0xFE10);
   if ((vertFormProbe & bit) == 0) {
@@ -1229,6 +1469,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     applyTextDecorationToEntry(entry, cssStyle);
     applyDirectionToEntry(entry, cssStyle);
+    applyTextEmphasisToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, ITALIC_TAGS, std::size(ITALIC_TAGS))) {
@@ -1249,6 +1490,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     applyTextDecorationToEntry(entry, cssStyle);
     applyDirectionToEntry(entry, cssStyle);
+    applyTextEmphasisToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "sup") == 0 || strcmp(name, "sub") == 0) {
@@ -1270,7 +1512,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   } else if (strcmp(name, "span") == 0 || !isHeaderOrBlock(name)) {
     // Handle span and other inline elements for CSS styling
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
-        cssStyle.hasDirection() || cssStyle.hasVerticalAlign()) {
+        cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || cssStyle.hasTextEmphasis()) {
       // Flush buffer before style change so preceding text gets current style
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
@@ -1297,6 +1539,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
           entry.sub = true;
         }
       }
+      applyTextEmphasisToEntry(entry, cssStyle);
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
     }

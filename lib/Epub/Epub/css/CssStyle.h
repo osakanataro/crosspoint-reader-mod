@@ -72,6 +72,25 @@ enum class CssDisplay : uint8_t { Block = 0, None = 1 };
 // Vertical alignment options for inline elements (e.g. superscript/subscript)
 enum class CssVerticalAlign : uint8_t { Baseline = 0, Super = 1, Sub = 2 };
 
+// text-emphasis-style (bouten / 圏点). The fill keyword and the shape keyword are
+// collapsed into one enum because only the resulting mark glyph matters here;
+// "none" resets a mark inherited from an ancestor. Parsed from text-emphasis and
+// text-emphasis-style, including the -epub-/-webkit- prefixed spellings that
+// Japanese EPUB templates still ship.
+enum class CssTextEmphasis : uint8_t {
+  None = 0,
+  FilledDot = 1,
+  OpenDot = 2,
+  FilledCircle = 3,
+  OpenCircle = 4,
+  FilledSesame = 5,
+  OpenSesame = 6,
+  FilledTriangle = 7,
+  OpenTriangle = 8,
+  FilledDoubleCircle = 9,
+  OpenDoubleCircle = 10,
+};
+
 // Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
   uint16_t textAlign : 1;
@@ -92,6 +111,7 @@ struct CssPropertyFlags {
   uint16_t display : 1;
   uint16_t direction : 1;
   uint16_t verticalAlign : 1;
+  uint16_t textEmphasis : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -111,23 +131,24 @@ struct CssPropertyFlags {
         imageWidth(0),
         display(0),
         direction(0),
-        verticalAlign(0) {}
+        verticalAlign(0),
+        textEmphasis(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign;
+           imageWidth || display || direction || verticalAlign || textEmphasis;
   }
 
   void clearAll() {
     textAlign = fontStyle = fontWeight = textDecoration = textIndent = 0;
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
-    imageHeight = imageWidth = display = direction = verticalAlign = 0;
+    imageHeight = imageWidth = display = direction = verticalAlign = textEmphasis = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..17.
+// Cache serializes defined flags as uint32_t with bit indices 0..18.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -154,6 +175,7 @@ struct CssStyle {
   CssLength imageWidth;     // Width for img when both or only width set
   CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
+  CssTextEmphasis textEmphasis = CssTextEmphasis::None;         // text-emphasis (bouten marks beside the text)
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -232,6 +254,10 @@ struct CssStyle {
       verticalAlign = base.verticalAlign;
       defined.verticalAlign = 1;
     }
+    if (base.hasTextEmphasis()) {
+      textEmphasis = base.textEmphasis;
+      defined.textEmphasis = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -252,6 +278,7 @@ struct CssStyle {
   [[nodiscard]] bool hasDisplay() const { return defined.display; }
   [[nodiscard]] bool hasDirection() const { return defined.direction; }
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
+  [[nodiscard]] bool hasTextEmphasis() const { return defined.textEmphasis; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -265,6 +292,7 @@ struct CssStyle {
     imageHeight = imageWidth = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
+    textEmphasis = CssTextEmphasis::None;
     defined.clearAll();
   }
 };
