@@ -75,11 +75,18 @@ INTERVAL_PRESETS = {
     # vertical forms of the em dash and 《》brackets (already shaped for vertical
     # text, unlike their horizontal originals U+2014/300A/300B which the reader
     # rotates itself -- see VerticalTextUtils.h's isUprightInVertical).
+    # FE30-FE46 is declared as one span rather than the three narrow ranges it started
+    # as: the 256-interval cap below merges FE10-FE46 into one entry regardless, so the
+    # codepoints between them cost placeholder bytes whether or not they carry a glyph.
+    # Declaring the span turns those placeholders into the real vertical brackets
+    # (﹁﹂﹃﹄︵︶ …) and the sesame dots FE45/FE46 that CSS text-emphasis defaults to.
+    # Noto Sans CJK encodes the whole span; BIZ UD reaches it through 'vert'
+    # (see VERTICAL_FORM_BASE).
     "cjk-symbols": [(0x2100, 0x214F), (0x2312, 0x2312), (0x2318, 0x2318),
                     (0x2460, 0x24FF), (0x29BF, 0x29BF), (0x2B05, 0x2B07), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50),
                     (0x2E80, 0x2EFF), (0x3190, 0x319F),
                     (0x31F0, 0x31FF), (0x3200, 0x32FF), (0x3300, 0x33FF),
-                    (0xFE10, 0xFE19), (0xFE31, 0xFE32), (0xFE3D, 0xFE3E)],
+                    (0xFE10, 0xFE19), (0xFE30, 0xFE46)],
     # Supplementary-plane ideographs (CJK Ext B..I, U+20000-2FFFF -- the same span
     # IDEOGRAPH_RANGES below already gates). Nominally huge, but this preset is only
     # ever combined with --codepoints-file: the allowlist filter runs BEFORE any
@@ -276,7 +283,7 @@ def extract_ligature_glyph_indices_fonttools(font_path):
     return overrides
 
 
-# Vertical Forms row -> the base punctuation whose 'vert' alternate carries the
+# Presentation form -> the base punctuation whose 'vert' alternate carries the
 # same shape. Used when the face has the vertical glyph but no cmap entry for
 # the form codepoint (BIZ UD does; Noto Sans CJK encodes the forms directly).
 VERTICAL_FORM_BASE = {
@@ -290,6 +297,32 @@ VERTICAL_FORM_BASE = {
     0xFE17: 0x3016,  # ︗ <- 〖
     0xFE18: 0x3017,  # ︘ <- 〗
     0xFE19: 0x2026,  # ︙ <- …
+    # CJK Compatibility Forms. FE31's base is U+2015, not the U+2014 its Unicode
+    # decomposition names: BIZ UD gives the vert alternate to the full-width dash
+    # Japanese prose sets, and leaves the Latin em dash alone.
+    0xFE30: 0x2025,  # ︰ <- ‥
+    0xFE31: 0x2015,  # ︱ <- ―
+    # Brackets, alternating open/close from FE35. Their horizontal originals are the
+    # ones VERTICAL_PUNCTUATION rotates; these are pre-shaped and draw upright.
+    0xFE35: 0xFF08,  # ︵ <- （
+    0xFE36: 0xFF09,  # ︶ <- ）
+    0xFE37: 0xFF5B,  # ︷ <- ｛
+    0xFE38: 0xFF5D,  # ︸ <- ｝
+    0xFE39: 0x3014,  # ︹ <- 〔
+    0xFE3A: 0x3015,  # ︺ <- 〕
+    0xFE3B: 0x3010,  # ︻ <- 【
+    0xFE3C: 0x3011,  # ︼ <- 】
+    0xFE3D: 0x300A,  # ︽ <- 《
+    0xFE3E: 0x300B,  # ︾ <- 》
+    0xFE3F: 0x3008,  # ︿ <- 〈
+    0xFE40: 0x3009,  # ﹀ <- 〉
+    0xFE41: 0x300C,  # ﹁ <- 「
+    0xFE42: 0x300D,  # ﹂ <- 」
+    0xFE43: 0x300E,  # ﹃ <- 『
+    0xFE44: 0x300F,  # ﹄ <- 』
+    # Left out on purpose: FE32 ︲ (BIZ UD has no vert alternate for the en dash) and
+    # FE33 ︳/FE34 ︴, whose one shared base ＿ cannot tell the straight form from the
+    # wavy one. They stay blank placeholders inside the merged interval.
 }
 
 
