@@ -265,6 +265,23 @@ bool EpubReaderActivity::loadBook() {
 
 void EpubReaderActivity::openReaderMenu() {
   pendingManualTurn = 0;
+
+  // A starved heap must not turn a menu press into a reboot. This construction
+  // aborted once at ~0 free (stack-verified: loop -> openReaderMenu -> operator
+  // new -> terminate), so give it the loadBook() treatment: hand back the font
+  // caches first -- the menu is a list screen whose entry releases them anyway,
+  // so this only moves a cost the press was already going to pay. The threshold
+  // is smaller than loadBook()'s because a menu needs an activity object and a
+  // handful of rows, not a chapter build.
+  constexpr uint32_t MENU_MIN_MAX_ALLOC = 16 * 1024;
+  if (ESP.getMaxAllocHeap() < MENU_MIN_MAX_ALLOC) {
+    LOG_ERR("ERS", "Low heap opening menu (%u free, %u max block), releasing SD font caches", ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseSdFontCaches();
+    }
+  }
+
   const int currentPage = section ? section->currentPage + 1 : 0;
   const int totalPages = section ? section->estimatedTotalPages() : 0;
   float bookProgress = 0.0f;
@@ -274,19 +291,25 @@ void EpubReaderActivity::openReaderMenu() {
     bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
   }
   const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
-  startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
-                             renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
-                             SETTINGS.orientation, !currentPageFootnotes.empty(), !cachedBookmarks.empty()),
-                         [this](const ActivityResult& result) {
-                           const auto& menu = std::get<MenuResult>(result.data);
-                           if (SETTINGS.orientation != menu.orientation) {
-                             applyOrientation(menu.orientation);
-                           }
-                           toggleAutoPageTurn(menu.pageTurnOption);
-                           if (!result.isCancelled) {
-                             onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
-                           }
-                         });
+  auto menu = makeUniqueNoThrow<EpubReaderMenuActivity>(renderer, mappedInput, epub->getTitle(), currentPage,
+                                                        totalPages, bookProgressPercent, SETTINGS.orientation,
+                                                        !currentPageFootnotes.empty(), !cachedBookmarks.empty());
+  if (!menu) {
+    // Fail the press, not the session: the reader stays up and the next press
+    // retries against whatever the release above recovered.
+    LOG_ERR("ERS", "OOM opening reader menu (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    return;
+  }
+  startActivityForResult(std::move(menu), [this](const ActivityResult& result) {
+    const auto& menu = std::get<MenuResult>(result.data);
+    if (SETTINGS.orientation != menu.orientation) {
+      applyOrientation(menu.orientation);
+    }
+    toggleAutoPageTurn(menu.pageTurnOption);
+    if (!result.isCancelled) {
+      onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
+    }
+  });
 }
 
 bool EpubReaderActivity::buildTickHeapGate() {
@@ -1360,9 +1383,19 @@ void EpubReaderActivity::renderBook() {
     LOG_ERR("ERS", "Low heap with live build (%u free), suspending it before the page load", ESP.getFreeHeap());
     section->suspendBuild();
   }
+  // Two ways to be too poor for a page: little heap at all, or plenty of heap
+  // in pieces too small to build a glyph arena from. The second is the one that
+  // creeps up over a long session -- measured collapsing from 37KB to 16KB of
+  // largest block while total free held ~51KB, at which point prewarm cannot
+  // place the arena, every glyph goes through the 8-slot overflow ring at
+  // ~10ms/read, and an AA page takes 28s+. Releasing the caches defragments
+  // (a later measurement recovered 71KB contiguous); the next page re-warms in
+  // 1-2s, which is the cheapest thing on this list.
   constexpr uint32_t PAGE_PATH_MIN_FREE_HEAP = 12 * 1024;
-  if (ESP.getFreeHeap() < PAGE_PATH_MIN_FREE_HEAP) {
-    LOG_ERR("ERS", "Low heap before page load (%u free), releasing SD font caches", ESP.getFreeHeap());
+  constexpr uint32_t PAGE_PATH_MIN_MAX_ALLOC = 24 * 1024;
+  if (ESP.getFreeHeap() < PAGE_PATH_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < PAGE_PATH_MIN_MAX_ALLOC) {
+    LOG_ERR("ERS", "Low heap before page load (%u free, %u max block), releasing SD font caches", ESP.getFreeHeap(),
+            ESP.getMaxAllocHeap());
     if (auto* fcm = renderer.getFontCacheManager()) {
       fcm->releaseSdFontCaches();
     }
