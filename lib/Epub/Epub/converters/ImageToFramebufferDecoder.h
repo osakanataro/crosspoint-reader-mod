@@ -23,6 +23,12 @@ struct RenderConfig {
   float sourceCropY = 0.0f;         // Fraction cropped equally from the top and bottom edges
   bool preserveAlpha = false;       // Skip transparent pixels instead of compositing them against white
   std::string cachePath;            // If non-empty, decoder will write pixel cache to this path
+  // Write only the pixel cache, touching no framebuffer pixels. This is the
+  // build-time pregeneration mode: the section build runs it while the heap can
+  // still supply the decoder's working set, so the render path -- which cannot
+  // -- finds a ready .pxc and never decodes. Requires a non-empty cachePath;
+  // x/y are used only as cache metadata and should be 0.
+  bool cacheOnly = false;
 };
 
 class ImageToFramebufferDecoder {

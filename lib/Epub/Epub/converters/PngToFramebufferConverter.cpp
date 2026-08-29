@@ -41,6 +41,7 @@ struct PngContext {
   int lastDstY{-1};  // Track last rendered destination Y to avoid duplicates
   PixelCache cache;
   bool caching{false};
+  bool drawToFb{true};  // false in cacheOnly mode: pixels go to the cache stream alone
 
   uint8_t* grayLineBuffer{nullptr};
   uint8_t* alphaLineBuffer{nullptr};
@@ -294,7 +295,7 @@ int pngDrawCallback(PNGDRAW* pDraw) {
             ditheredGray = gray / 85;
             if (ditheredGray > 3) ditheredGray = 3;
           }
-          pw.writePixel(outX, ditheredGray, ctx->alphaLineBuffer != nullptr);
+          if (ctx->drawToFb) pw.writePixel(outX, ditheredGray, ctx->alphaLineBuffer != nullptr);
           if (caching) cw.writePixel(outX, ditheredGray);
         }
       }
@@ -454,11 +455,18 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   // nor forces larger images to skip caching - which previously meant a full
   // re-decode on every one of an image page's ~14 render passes.
   ctx.caching = !config.preserveAlpha && !config.cachePath.empty();
+  ctx.drawToFb = !config.cacheOnly;
   if (ctx.caching) {
     if (!ctx.cache.begin(config.cachePath, ctx.dstWidth, ctx.dstHeight, config.x, config.y, 1)) {
       LOG_ERR("PNG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
     }
+  }
+  if (config.cacheOnly && !ctx.caching) {
+    // The cache is the sole output in this mode; decoding without it would do
+    // nothing but spend seconds.
+    LOG_ERR("PNG", "Cache-only decode with no cache stream, aborting");
+    return false;
   }
 
   unsigned long decodeStart = millis();

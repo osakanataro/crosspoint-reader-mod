@@ -3,6 +3,10 @@
 #include <Arduino.h>
 #include <Logging.h>
 
+#ifdef DEBUG_RENDER_WATCHDOG
+#include <esp_task_wdt.h>
+#endif
+
 bool ImageToFramebufferDecoder::validateAndStoreDimensions(const int64_t width, const int64_t height,
                                                            ImageDimensions& out, const char* format) {
   if (width <= 0 || height <= 0) {
@@ -35,6 +39,13 @@ void ImageToFramebufferDecoder::yieldDuringDecode(uint32_t& lastYieldMs) {
   if (now - lastYieldMs >= 250) {
     lastYieldMs = now;
     vTaskDelay(1);
+#ifdef DEBUG_RENDER_WATCHDOG
+    // A decode row callback is forward progress, the same way an on-demand
+    // glyph load is (see SdCardFont::onGlyphMiss). Build-time pregeneration
+    // can string several multi-second decodes into one build chunk on the
+    // render task; without this the render watchdog reads that as a hang.
+    esp_task_wdt_reset();
+#endif
   }
 }
 

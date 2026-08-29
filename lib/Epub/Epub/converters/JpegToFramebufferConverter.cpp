@@ -46,6 +46,7 @@ struct JpegContext {
 
   PixelCache cache;
   bool caching{false};
+  bool drawToFb{true};  // false in cacheOnly mode: pixels go to the cache stream alone
 
   uint32_t lastYieldMs{0};  // throttle state for yieldDuringDecode()
 };
@@ -207,7 +208,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (ctx->drawToFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
     }
@@ -266,7 +267,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (ctx->drawToFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
 
@@ -289,7 +290,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (ctx->drawToFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
 
@@ -315,7 +316,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (ctx->drawToFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
     }
@@ -348,7 +349,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
         dithered = gray / 85;
         if (dithered > 3) dithered = 3;
       }
-      pw.writePixel(outX, dithered);
+      if (ctx->drawToFb) pw.writePixel(outX, dithered);
       if (caching) cw.writePixel(outX, dithered);
     }
   }
@@ -483,12 +484,19 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   // tallest single decode block: a JPEGDEC MCU cell is at most 16 scaled-source
   // rows tall, which our fine scale maps to this many output rows.
   ctx.caching = !config.cachePath.empty();
+  ctx.drawToFb = !config.cacheOnly;
   if (ctx.caching) {
     const int maxBlockDstRows = (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
     if (!ctx.cache.begin(config.cachePath, destWidth, destHeight, config.x, config.y, maxBlockDstRows)) {
       LOG_ERR("JPG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
     }
+  }
+  if (config.cacheOnly && !ctx.caching) {
+    // The cache is the sole output in this mode; decoding without it would do
+    // nothing but spend seconds.
+    LOG_ERR("JPG", "Cache-only decode with no cache stream, aborting");
+    return false;
   }
 
   unsigned long decodeStart = millis();
