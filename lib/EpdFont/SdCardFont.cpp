@@ -4,6 +4,10 @@
 #include <Logging.h>
 #include <Utf8.h>
 
+#ifdef DEBUG_RENDER_WATCHDOG
+#include <esp_task_wdt.h>
+#endif
+
 #include <algorithm>
 #include <climits>
 #include <cstring>
@@ -1647,6 +1651,16 @@ uint8_t SdCardFont::resolveStyleMask(uint8_t styleMask) const {
 // --- On-demand glyph loading (overflow buffer) ---
 
 const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
+#ifdef DEBUG_RENDER_WATCHDOG
+  // An on-demand load is proof the render is alive. A starved arena plus AA
+  // tiling sends thousands of glyphs through here at ~10ms each, and such a
+  // render legitimately runs past the watchdog window meant to separate "slow"
+  // from "never" -- one was shot mid-crawl at 30s (2026-08-29, stack ended in
+  // this function's SD read). A genuinely stuck render loads nothing, so
+  // feeding here keeps the timeout meaning "no progress", not "not done".
+  // Harmless no-op error on tasks that are not subscribed (UI-path calls).
+  esp_task_wdt_reset();
+#endif
   auto* oc = static_cast<OverflowContext*>(ctx);
   auto* self = oc->self;
   uint8_t styleIdx = oc->styleIdx;
