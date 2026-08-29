@@ -13,9 +13,15 @@ machine. It answers "which build is on the device", not "which release is this",
 so there is nothing for anyone else to reproduce. A fresh clone restarts at 01;
 the date in front keeps the ordering right regardless.
 
-Injects OST_VERSION, and copies the built image to dist/ under a name carrying
-the same number. Diagnostic builds (INPUT_DIAG) get a -diag suffix so the two
-cannot be confused on the card.
+Copies the built image to dist/ under a name carrying the number. Diagnostic
+builds (INPUT_DIAG) get a -diag suffix so the two cannot be confused on the card.
+
+The number stays out of the compile: defining it (a past OST_VERSION macro) put
+a value that changes every build into every translation unit's command line,
+which invalidated all objects -- libraries included -- and made each no-change
+rebuild a 3-minute full recompile. Nothing ever read the macro; the filename is
+the only consumer. If the firmware is ever to display it, generate a header and
+include it from the one file that shows it.
 """
 
 import datetime
@@ -122,8 +128,6 @@ def main(env):
     project_dir = env.subst('$PROJECT_DIR')
     version = next_version(project_dir)
     diag_at_pre = has_input_diag(env)
-
-    env.Append(CPPDEFINES=[('OST_VERSION', f'\\"{version}\\"')])
 
     def post_action(target, source, env):
         # Re-check against the fully folded environment and keep whichever pass
