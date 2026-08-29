@@ -18,6 +18,13 @@ class ImageBlock final : public Block {
   bool imageExists() const;
   bool hasValidCache() const;
   bool needsDecode() const;
+
+  // The .pxc path for an extracted image, and whether a usable cache already
+  // sits there. Static so the section build can ask before it owns an
+  // ImageBlock -- build-time pregeneration decides extract/decode work with
+  // exactly these two questions.
+  static std::string cachePathFor(const std::string& imagePath);
+  static bool hasValidCacheFor(const std::string& imagePath, int width, int height);
   void renderPlaceholder(GfxRenderer& renderer, int x, int y) const;
   static void clearSessionRenderFailures();
 

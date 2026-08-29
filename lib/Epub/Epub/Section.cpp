@@ -56,7 +56,10 @@ namespace {
 //      into the neighbouring column).
 // v44: Ruby groups remain intact when a large text block is soft-flushed
 //      (upstream #3102, their v40 bump re-numbered onto this tree's sequence).
-constexpr uint8_t SECTION_FILE_VERSION = 44;
+// v45: Vertical pages place images in the column flow (consuming the right-to-left
+//      cursor, centered on the column axis) instead of at horizontal-model
+//      coordinates that overlapped the columns.
+constexpr uint8_t SECTION_FILE_VERSION = 45;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

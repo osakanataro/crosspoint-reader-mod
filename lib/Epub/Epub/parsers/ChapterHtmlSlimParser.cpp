@@ -1,5 +1,6 @@
 #include "ChapterHtmlSlimParser.h"
 
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -32,6 +33,7 @@
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
+#include "Epub/converters/PngStreamDecoder.h"
 #include "Epub/htmlEntities.h"
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
@@ -1004,8 +1006,16 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // image-heavy chapter from stalling for seconds per image.
               ImageDimensions dims = {0, 0};
               ImageDimsProbe headerProbe;
-              const bool probeStreamOk =
-                  self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+              bool probeStreamOk;
+              {
+                // The probe reads only the first bytes, but starting the inflate
+                // still wants the full 32KB window -- measured failing at 32-36KB
+                // largest block (probe FAIL stream=0) while chapters whose build
+                // hit a recovered heap passed. Same loan as the full extraction.
+                GfxRenderer::FrameBufferLoan probeLoan(self->renderer);
+                probeStreamOk =
+                    self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+              }
               bool gotDimensions = headerProbe.getDimensions(dims);
               IMG_DIAG("probe %s stream=%d %dx%d", gotDimensions ? "ok" : "FAIL", probeStreamOk ? 1 : 0, dims.width,
                        dims.height);
@@ -1021,7 +1031,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 HalFile cachedImageFile;
                 bool extractSuccess = false;
                 if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-                  extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+                  {
+                    // Same 32KB-window need as the probe above; the popup is
+                    // already on screen, so the framebuffer is free to lend.
+                    GfxRenderer::FrameBufferLoan extractLoan(self->renderer);
+                    extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+                  }
                   cachedImageFile.flush();
                   cachedImageFile.close();
                 }
@@ -1139,6 +1154,94 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   LOG_DBG("EHP", "Display size: %dx%d (scale %.2f)", displayWidth, displayHeight, scale);
                 }
 
+                // Pregenerate the pixel cache now, while the build owns the heap. The
+                // render path cannot do this work: extraction wants a contiguous 32KB
+                // inflate window and the PNG decoder a ~62KB object, and the mid-render
+                // heap supplies neither (measured 12-28KB largest block; releasing
+                // caches was measured on-device to move it by zero bytes -- the
+                // fragments do not coalesce). Every failure path below simply leaves
+                // the old lazy render-time extract/decode as the fallback.
+                if (!ImageBlock::hasValidCacheFor(cachedImagePath, displayWidth, displayHeight)) {
+                  // The popup draws and refreshes the panel, so it must be on screen
+                  // before the framebuffer is lent below.
+                  if (self->popupFn && !self->imagePopupFired) {
+                    self->imagePopupFired = true;
+                    self->popupFn();
+                  }
+
+                  // A previous session's failed extraction can leave a file that
+                  // exists but is empty; existence alone would never retry it.
+                  bool haveFile = false;
+                  if (Storage.exists(cachedImagePath.c_str())) {
+                    HalFile probe;
+                    haveFile = Storage.openFileForRead("EHP", cachedImagePath, probe) && probe.size() > 0;
+                  }
+                  if (!haveFile) {
+                    HalFile outFile;
+                    if (Storage.openFileForWrite("EHP", cachedImagePath, outFile)) {
+                      bool extracted;
+                      {
+                        // The inflate window comes from the lent framebuffer bytes
+                        // (InflateStream claims buildscratch), not the fragmented
+                        // heap. Nothing draws inside this scope; the next page
+                        // render repaints the restored-white buffer in full.
+                        GfxRenderer::FrameBufferLoan loan(self->renderer);
+                        extracted = self->epub->readItemContentsToStream(resolvedPath, outFile, 4096);
+                      }
+                      outFile.flush();
+                      outFile.close();
+                      if (extracted) {
+                        haveFile = true;
+                      } else {
+                        // A partial file would satisfy the size probe next session.
+                        Storage.remove(cachedImagePath.c_str());
+                      }
+                      IMG_DIAG("pregen extract %s max=%u", extracted ? "ok" : "FAIL", ESP.getMaxAllocHeap());
+                    }
+                  }
+
+                  if (haveFile) {
+                    bool cached = false;
+                    if (FsHelpers::hasPngExtension(cachedImagePath)) {
+                      // Streamed decode: the inflate state comes out of the lent
+                      // framebuffer, so this works under any heap layout -- a
+                      // session was measured pinned at a 45KB largest block where
+                      // PNGdec's ~62KB object could never exist, build or render.
+                      GfxRenderer::FrameBufferLoan decodeLoan(self->renderer);
+                      cached = PngStreamDecoder::decodeToCache(
+                          cachedImagePath, ImageBlock::cachePathFor(cachedImagePath), displayWidth, displayHeight);
+                      IMG_DIAG("pregen stream %s %dx%d max=%u", cached ? "ok" : "FAIL", displayWidth, displayHeight,
+                               ESP.getMaxAllocHeap());
+                    }
+                    if (!cached) {
+                      // PNGdec/JPEGDEC fallback (JPEG always; PNG only for the forms
+                      // the streamer declines). The PNG object is a single ~62KB heap
+                      // block the 48KB loan cannot hold, so release the font caches
+                      // when the largest block looks short and hope the pieces
+                      // coalesce -- at build time they usually do.
+                      constexpr uint32_t PREGEN_MIN_MAX_ALLOC = 68 * 1024;
+                      if (ESP.getMaxAllocHeap() < PREGEN_MIN_MAX_ALLOC) {
+                        if (auto* fcm = self->renderer.getFontCacheManager()) {
+                          fcm->releaseSdFontCaches();
+                        }
+                      }
+                      RenderConfig pregen;
+                      pregen.x = 0;
+                      pregen.y = 0;
+                      pregen.maxWidth = displayWidth;
+                      pregen.maxHeight = displayHeight;
+                      pregen.useExactDimensions = true;
+                      pregen.cacheOnly = true;
+                      pregen.cachePath = ImageBlock::cachePathFor(cachedImagePath);
+                      ImageToFramebufferDecoder* pregenDecoder = ImageDecoderFactory::getDecoder(cachedImagePath);
+                      cached =
+                          pregenDecoder && pregenDecoder->decodeToFramebuffer(cachedImagePath, self->renderer, pregen);
+                      IMG_DIAG("pregen decode %s %dx%d max=%u", cached ? "ok" : "FAIL", displayWidth, displayHeight,
+                               ESP.getMaxAllocHeap());
+                    }
+                  }
+                }
+
                 // Flush any pending text block so it appears before the image
                 if (self->partWordBufferIndex > 0) {
                   self->flushPartWordBuffer();
@@ -1160,6 +1263,88 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   if (self->blockStyleStack.size() > 1) {
                     imageMarginBottom = self->blockStyleStack.back().bottomInset();
                   }
+                }
+
+                // Create ImageBlock before either placement model runs.
+                // nothrow: make_shared uses bare new, which aborts on OOM under
+                // -fno-exceptions; images arrive mid-parse when the heap is at its
+                // most loaded, so this must fail soft into the null-check below.
+                auto imageBlock = std::shared_ptr<ImageBlock>(
+                    new (std::nothrow) ImageBlock(cachedImagePath, resolvedPath, displayWidth, displayHeight));
+                if (!imageBlock) {
+                  LOG_ERR("EHP", "Failed to create ImageBlock");
+                  return;
+                }
+
+                if (self->isVertical) {
+                  // Tategaki: the page fills with columns advancing right-to-left, so an
+                  // image consumes horizontal span from the same cursor the columns use
+                  // and centers on the column axis. CSS vertical margins belong to the
+                  // horizontal model; here the column gap separates image from text. An
+                  // image wider than the space left moves to a fresh page, which is also
+                  // how a full-page illustration naturally becomes a page of its own.
+                  const int columnWidth = self->renderer.getLineHeight(self->fontId, self->lineCompression);
+                  const int columnSpacing = columnWidth / 4;
+
+                  if (!self->currentPage) {
+                    self->currentPage.reset(new Page());
+                    if (!self->currentPage) {
+                      LOG_ERR("EHP", "Failed to create initial page");
+                      return;
+                    }
+                    self->currentPageVisibleOffsetSet = false;
+                  }
+                  // Same re-anchor rule as addColumnToPage: the cursor belongs to a
+                  // page index, not to a Page object.
+                  if (self->verticalCursorPageIndex != self->completedPageCount) {
+                    self->currentPageNextX = static_cast<int16_t>(self->viewportWidth - columnWidth);
+                    self->verticalCursorPageIndex = self->completedPageCount;
+                  }
+
+                  int rightEdge = self->currentPageNextX + columnWidth;
+                  if (displayWidth > rightEdge && !self->currentPage->elements.empty()) {
+                    self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
+                                         self->xpathListItemIndex, self->currentPageVisibleOffset);
+                    self->completedPageCount++;
+                    self->currentPage.reset(new Page());
+                    if (!self->currentPage) {
+                      LOG_ERR("EHP", "Failed to create new page");
+                      return;
+                    }
+                    self->currentPageVisibleOffsetSet = false;
+                    self->currentPageNextX = static_cast<int16_t>(self->viewportWidth - columnWidth);
+                    self->verticalCursorPageIndex = self->completedPageCount;
+                    rightEdge = self->viewportWidth;
+                  }
+
+                  int vertX = rightEdge - displayWidth;
+                  if (vertX < 0) vertX = 0;
+                  int vertY = (self->viewportHeight - displayHeight) / 2;
+                  if (vertY < 0) vertY = 0;
+
+                  auto pageImage = std::shared_ptr<PageImage>(new (std::nothrow) PageImage(
+                      imageBlock, static_cast<int16_t>(vertX), static_cast<int16_t>(vertY)));
+                  if (!pageImage) {
+                    LOG_ERR("EHP", "Failed to create PageImage");
+                    return;
+                  }
+                  self->currentPage->elements.push_back(pageImage);
+                  IMG_DIAG("placed %dx%d x=%d y=%d vert=1", displayWidth, displayHeight, vertX, vertY);
+                  self->setCurrentPageVisibleOffset(self->visibleTextOffset);
+                  // The next column starts one gap to the image's left.
+                  self->currentPageNextX = static_cast<int16_t>(vertX - columnSpacing - columnWidth);
+
+                  // The image consumed the empty block's accumulated spacing; reset it so
+                  // the vertical merge in startNewTextBlock doesn't re-apply the margins.
+                  if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
+                    BlockStyle resetStyle;
+                    resetStyle.alignment = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                                               ? CssTextAlign::Justify
+                                               : static_cast<CssTextAlign>(self->paragraphAlignment);
+                    self->currentTextBlock->setBlockStyle(resetStyle);
+                  }
+                  self->depth += 1;
+                  return;
                 }
 
                 // Create page for image - only break if image won't fit remaining space
@@ -1200,16 +1385,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
                 self->currentPageNextY += imageMarginTop;
 
-                // Create ImageBlock and add to page
-                // nothrow: make_shared uses bare new, which aborts on OOM under
-                // -fno-exceptions; images arrive mid-parse when the heap is at its
-                // most loaded, so this must fail soft into the null-check below.
-                auto imageBlock = std::shared_ptr<ImageBlock>(
-                    new (std::nothrow) ImageBlock(cachedImagePath, resolvedPath, displayWidth, displayHeight));
-                if (!imageBlock) {
-                  LOG_ERR("EHP", "Failed to create ImageBlock");
-                  return;
-                }
                 int xPos = (self->viewportWidth - displayWidth) / 2;
                 auto pageImage =
                     std::shared_ptr<PageImage>(new (std::nothrow) PageImage(imageBlock, xPos, self->currentPageNextY));

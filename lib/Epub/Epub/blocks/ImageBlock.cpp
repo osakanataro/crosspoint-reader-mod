@@ -1,6 +1,7 @@
 #include "ImageBlock.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -12,6 +13,7 @@
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PngStreamDecoder.h"
 
 #if INPUT_DIAG
 #include "../../../../src/util/InputDiag.h"
@@ -306,7 +308,9 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
 }  // namespace
 
-bool ImageBlock::hasValidCache() const {
+std::string ImageBlock::cachePathFor(const std::string& imagePath) { return getCachePath(imagePath); }
+
+bool ImageBlock::hasValidCacheFor(const std::string& imagePath, const int width, const int height) {
   const auto cachePath = getCachePath(imagePath);
   HalFile cacheFile;
   if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
@@ -316,6 +320,8 @@ bool ImageBlock::hasValidCache() const {
   uint16_t cachedWidth, cachedHeight;
   return readValidCacheHeader(cacheFile, width, height, cachedWidth, cachedHeight);
 }
+
+bool ImageBlock::hasValidCache() const { return hasValidCacheFor(imagePath, width, height); }
 
 bool ImageBlock::needsDecode() const { return !imageFailedThisSession(imagePath) && !hasValidCache(); }
 
@@ -374,6 +380,22 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;  // Successfully rendered from cache
   }
 
+  // Neither the 32KB inflate window nor the PNG decoder's ~62KB object fits
+  // the typical mid-read heap (16-30KB largest block), which is what left
+  // build-time pregeneration misses as permanently empty boxes: the lazy path
+  // below failed on every visit. Handing back the font caches recovers ~70KB
+  // contiguous (measured via close_heap), the work below then succeeds once,
+  // writes the .pxc, and never runs again for this image. Cost: the rest of
+  // this render loads glyphs on demand and the next page re-warms -- paid once
+  // per image whose build missed.
+  constexpr uint32_t LAZY_DECODE_MIN_MAX_ALLOC = 68 * 1024;
+  if (ESP.getMaxAllocHeap() < LAZY_DECODE_MIN_MAX_ALLOC) {
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseSdFontCaches();
+    }
+    IMG_DIAG("lazy decode: released caches max=%u", ESP.getMaxAllocHeap());
+  }
+
   // The build only header-probed the image for dimensions; pull the actual
   // file out of the book now, on first visit to the page.
   if (!srcPath.empty() && extractFn && !Storage.exists(imagePath.c_str())) {
@@ -403,6 +425,18 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
+    return;
+  }
+
+  // Streamed PNG path first: its inflate state is two separate heap blocks of
+  // 11KB and 32KB, both available even under the measured 45KB largest-block
+  // ceiling that makes PNGdec's single ~62KB object impossible mid-read. On
+  // success the .pxc exists and the cache render above takes over -- for this
+  // pass and every future one.
+  if (FsHelpers::hasPngExtension(imagePath) && PngStreamDecoder::decodeToCache(imagePath, cachePath, width, height) &&
+      renderFromCache(renderer, cachePath, x, y, width, height)) {
+    renderer.preserveImagePolarity(x, y, width, height);
+    IMG_DIAG("lazy stream ok %dx%d max=%u", width, height, ESP.getMaxAllocHeap());
     return;
   }
 
