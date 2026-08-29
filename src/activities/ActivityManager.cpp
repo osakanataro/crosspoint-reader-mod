@@ -8,6 +8,10 @@
 
 #include <algorithm>
 
+#ifdef DEBUG_RENDER_WATCHDOG
+#include <esp_task_wdt.h>
+#endif
+
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
@@ -43,6 +47,27 @@ void ActivityManager::begin() {
                           renderTaskCore  // Keep long renders/cover decodes off CPU 0's idle watchdog when available
   );
   assert(renderTaskHandle != nullptr && "Failed to create render task");
+
+#ifdef DEBUG_RENDER_WATCHDOG
+  // Development safety net, off in every shipped build.
+  //
+  // A render that never returns leaves the device with no way back. The render task is
+  // subscribed to no watchdog and the idle task is not checked either (sdkconfig.default:
+  // CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0 is not set), while powering off is decided in
+  // loop() -- the task the stuck render is starving. Nothing on the outside of the case
+  // can interrupt it: the reset button is under the glued-down screen. The only remedy is
+  // to flatten the battery, which takes a day or more, and that cost is paid by every
+  // experiment that goes wrong.
+  //
+  // Watching the render turns that into a reboot. The timeout is deliberately loose: a
+  // first render can legitimately take seconds (SD font cache generation, cover decode),
+  // and this only has to tell "slow" apart from "never".
+  esp_task_wdt_config_t wdtConfig = {};
+  wdtConfig.timeout_ms = 30000;
+  wdtConfig.idle_core_mask = 0;
+  wdtConfig.trigger_panic = true;
+  esp_task_wdt_reconfigure(&wdtConfig);
+#endif
 }
 
 void ActivityManager::renderTaskTrampoline(void* param) {
@@ -53,6 +78,13 @@ void ActivityManager::renderTaskTrampoline(void* param) {
 void ActivityManager::renderTaskLoop() {
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#ifdef DEBUG_RENDER_WATCHDOG
+    // Subscribed around the render alone. This task spends the rest of its life blocked on
+    // the notify above, where a watchdog would fire on a device that is merely idle. The
+    // window it covers therefore includes waiting for the render lock, which is where a
+    // render already stuck would hold it.
+    esp_task_wdt_add(nullptr);
+#endif
     // Acquire the lock before reading currentActivity to avoid a TOCTOU race
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
@@ -103,6 +135,9 @@ void ActivityManager::renderTaskLoop() {
     if (waiter) {
       xTaskNotify(waiter, 1, eIncrement);
     }
+#ifdef DEBUG_RENDER_WATCHDOG
+    esp_task_wdt_delete(nullptr);
+#endif
   }
 }
 
