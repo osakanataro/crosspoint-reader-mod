@@ -395,6 +395,17 @@ void InputDiag::flush(const bool inputActive) {
   }
   lastFlushAt = now;
 
+  // The first write of a boot destroys the previous session's trail -- which,
+  // after a crash, is the only record of how the heap got to where it died
+  // (crash_report.txt carries the stack, not the approach). Set the old file
+  // aside once per boot so a post-mortem still has the render_log heap series.
+  static bool previousPreserved = false;
+  if (!previousPreserved) {
+    previousPreserved = true;
+    Storage.remove("/input-diag.prev.txt");
+    Storage.rename(DIAG_PATH, "/input-diag.prev.txt");
+  }
+
   int len = snprintf(
       reportBuf, sizeof(reportBuf),
       "uptime_ms=%lu\n"
