@@ -198,7 +198,8 @@ Images mixed into vertical text, kept as its own book so an image-path crash
 cannot take the main suite down with it. Another fork (ponto1216-ai) shipped a
 mitigation for paragraph-final inline images sinking to mid-screen in vertical
 mode; this book exists to see whether we inherit that class of bug before any
-image work starts. Guide page plus five chapters: a 48x48 inline image
+image work starts. Guide page plus five chapters (v5 adds a second guide and two
+more chapters, below): a 48x48 inline image
 mid-sentence and at paragraph end, the block-illustration chapter with the same
 300x200 stripes referenced four ways (../ grayscale PNG, same-directory PNG,
 JPEG, RGB-type PNG -- an isolation ladder from when images failed and the
@@ -212,11 +213,32 @@ a gradient -- so they are recognizable at a glance.
 What the 2026-08-21 investigation with this book established (details in the
 repo-external dev log): image display on the X3 is gated by two contiguous-heap
 walls, not by paths or formats. Reading a deflated zip entry wants a 32KB
-inflate window (why images are STORED in this book since v4, as real EPUBs
-store them), and PNGdec's decode struct wants ~60KB in one piece -- neither is
-available mid-build or mid-render once Japanese fonts and the vertical arena
+inflate window, and PNGdec's decode struct wants ~60KB in one piece -- neither
+is available mid-build or mid-render once Japanese fonts and the vertical arena
 are resident. Build now places the images; render falls back to empty
 placeholder boxes, drawn at horizontal-model coordinates that overlap vertical
 text. The diag firmware writes the whole trail to /image-diag.txt per image.
 The known fix direction is build-time pixel-cache pregeneration (the
 ponto1216-ai fork shipped exactly that); parked for now.
+
+v5 (2026-08-28) rebuilds the second half of the book around a survey of how 955
+commercial vertical EPUBs actually write their illustrations -- markup shape and
+sizing only, no text read. Three findings, and each one contradicted something
+this book had assumed:
+
+  Sizing comes from CSS classes, never from width/height attributes or inline
+  style, and a picture is fitted with max-width/max-height rather than a fixed
+  width. Chapter 8 is that shape: max-100%, max-80%, a wide picture, three gaiji
+  variants, and one unclassed image as the control.
+
+  Over half the illustrations are not img at all but an image element wrapped in
+  svg -- 527 of the 955 books, about 70,000 sites, all writing it the same way
+  (svg at 100%/100% with a viewBox, image inside). Chapter 9 is that form, and
+  ends with the same picture as a plain img so a failure there separates "svg
+  handling" from "images at all".
+
+  Every image in every book was deflated -- not one STORED among more than
+  100,000. So v4's decision to store this book's images uncompressed, taken
+  because real EPUBs were believed to do that, was testing a case that does not
+  occur. v5 puts them back to deflated. The 32KB inflate window is not an
+  obstacle a book can be authored around; it has to be met in firmware.
