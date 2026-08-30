@@ -250,6 +250,18 @@ void SdCardFont::clearOverflow() {
 void SdCardFont::applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const {
   // Kern data uses the per-page mini tables (renumbered class IDs). The full
   // kern matrix is never resident — see PerStyle::miniKernMatrix comment.
+  //
+  // Packed class maps and dense matrix, as stored in the .cpfont and mapped in
+  // place; the split and sparse forms are built-in only. Set explicitly rather
+  // than relying on the caller's initialisation: getKerning() picks the
+  // representation by which pointer is non-null.
+  data.kernLeftCodepoints = nullptr;
+  data.kernLeftClassIds = nullptr;
+  data.kernRightCodepoints = nullptr;
+  data.kernRightClassIds = nullptr;
+  data.kernRowOffsets = nullptr;
+  data.kernSparseCols = nullptr;
+  data.kernSparseValues = nullptr;
   data.kernLeftClasses = s.miniKernLeftClasses;
   data.kernRightClasses = s.miniKernRightClasses;
   data.kernMatrix = s.miniKernMatrix;
