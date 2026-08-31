@@ -57,6 +57,17 @@ class CssParser {
    */
   bool loadFromStream(HalFile& source);
 
+  // Register only the rules a chapter can reference, the same filter
+  // loadFromCache() applies. Set before parsing a book that has no rules
+  // cache: a publisher template runs to thousands of rules and parsing it
+  // whole exhausts the heap, after which nothing is registered at all.
+  // Cleared by passing nullptr. The filter is borrowed, not owned.
+  void setUsageFilter(const CssSelectorUsage* usage) { usageFilter_ = usage; }
+
+  // Drop every registered rule. Used before a filtered re-parse replaces a
+  // partial rule set left behind by an unfiltered pass that ran out of heap.
+  void clearRules() { rulesBySelector_.clear(); }
+
   /**
    * Look up the style for an HTML element, considering tag name and class attributes.
    * Applies CSS cascade: element style < class style < element.class style
@@ -161,6 +172,7 @@ class CssParser {
 
   // Internal parsing helpers
   void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
+  const CssSelectorUsage* usageFilter_ = nullptr;
   static CssStyle parseDeclarations(std::string_view declBlock);
   static void parseDeclarationIntoStyle(std::string_view decl, CssStyle& style);
 

@@ -563,6 +563,19 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         }
 
         // Store or merge with existing. Hash/equal are case-insensitive, so two
+        // A chapter-scoped parse keeps only what that chapter can reference.
+        // matches() takes a std::string, and building one per rejected
+        // selector would defeat the point, so the check runs on a stack copy
+        // bounded by MAX_SELECTOR_LENGTH -- selectors longer than that were
+        // already rejected above.
+        if (usageFilter_ != nullptr) {
+          char selBuf[MAX_SELECTOR_LENGTH + 1];
+          const size_t n = sel.size() < MAX_SELECTOR_LENGTH ? sel.size() : MAX_SELECTOR_LENGTH;
+          memcpy(selBuf, sel.data(), n);
+          selBuf[n] = '\0';
+          if (!usageFilter_->matches(selBuf)) return;
+        }
+
         // selectors that differ only in ASCII case collide on insert and merge.
         auto it = rulesBySelector_.find(sel);
         if (it != rulesBySelector_.end()) {

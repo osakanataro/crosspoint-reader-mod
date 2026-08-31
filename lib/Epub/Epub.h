@@ -9,6 +9,7 @@
 
 #include "Epub/BookMetadataCache.h"
 #include "Epub/css/CssParser.h"
+#include "Epub/css/CssSelectorUsage.h"
 
 class ZipFile;
 
@@ -37,7 +38,15 @@ class Epub {
   void discoverCssFilesFromZip();
   void parseCssFiles() const;
 
+  void parseCssFilesImpl(const CssSelectorUsage* usage) const;
+
  public:
+  // Re-read the stylesheets keeping only the rules this chapter can use.
+  // For books whose template is too large to parse whole: the unfiltered
+  // pass exhausts the heap partway, saves no cache, and leaves the reader
+  // with no rules at all. Costs one extra pass over the CSS per chapter
+  // build, which is SD time rather than heap.
+  void parseCssFilesFiltered(const CssSelectorUsage& usage) const;
   explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
     // create a cache key based on the filepath
     cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));

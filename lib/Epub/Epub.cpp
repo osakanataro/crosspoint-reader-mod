@@ -13,6 +13,20 @@
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
 
+#if INPUT_DIAG
+#include "../../../src/util/InputDiag.h"
+// CSS loading writes to the image log: an unstyled book shows up first as
+// pictures at the wrong size, so the two questions get read together.
+#define CSS_DIAG(fmt, ...)                                        \
+  do {                                                            \
+    char cssDiagBuf[72];                                          \
+    snprintf(cssDiagBuf, sizeof(cssDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(cssDiagBuf);                        \
+  } while (0)
+#else
+#define CSS_DIAG(fmt, ...)
+#endif
+
 bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   const auto containerPath = "META-INF/container.xml";
   size_t containerSize;
@@ -238,7 +252,11 @@ void Epub::discoverCssFilesFromZip() {
   }
 }
 
-void Epub::parseCssFiles() const {
+void Epub::parseCssFiles() const { parseCssFilesImpl(nullptr); }
+
+void Epub::parseCssFilesFiltered(const CssSelectorUsage& usage) const { parseCssFilesImpl(&usage); }
+
+void Epub::parseCssFilesImpl(const CssSelectorUsage* usage) const {
   // Maximum CSS file size we'll attempt to parse (uncompressed)
   // Larger files risk memory exhaustion on ESP32
   constexpr size_t MAX_CSS_FILE_SIZE = 128 * 1024;  // 128KB
@@ -252,9 +270,18 @@ void Epub::parseCssFiles() const {
   LOG_DBG("EBP", "CSS files to parse: %zu", cssFiles.size());
 
   // See if we have a cached version of the CSS rules
-  if (cssParser->hasCache()) {
+  if (usage == nullptr && cssParser->hasCache()) {
     LOG_DBG("EBP", "CSS cache exists, skipping parseCssFiles");
+    CSS_DIAG("css cache hit, %u files not parsed", static_cast<unsigned>(cssFiles.size()));
     return;
+  }
+
+  // A filtered pass replaces whatever the unfiltered one managed to register,
+  // and must not be written to the cache: it holds one chapter's rules, and a
+  // later chapter reading it back would silently lose everything it needs.
+  cssParser->setUsageFilter(usage);
+  if (usage != nullptr) {
+    cssParser->clearRules();
   }
 
   // Some converters emit one byte-identical stylesheet per chapter (100+ .css
@@ -305,6 +332,8 @@ void Epub::parseCssFiles() const {
     if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
       LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
               MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+      CSS_DIAG("css skip#%u heap free=%u need=%u", static_cast<unsigned>(cssIndex), freeHeap,
+               static_cast<unsigned>(MIN_HEAP_FOR_CSS_PARSING));
       cssComplete = false;
       continue;
     }
@@ -315,6 +344,7 @@ void Epub::parseCssFiles() const {
       if (cssFileSize > MAX_CSS_FILE_SIZE) {
         LOG_ERR("EBP", "CSS file too large (%zu bytes > %zu max), skipping: %s", cssFileSize, MAX_CSS_FILE_SIZE,
                 cssPath.c_str());
+        CSS_DIAG("css skip#%u size=%u", static_cast<unsigned>(cssIndex), static_cast<unsigned>(cssFileSize));
         continue;
       }
     }
@@ -342,9 +372,14 @@ void Epub::parseCssFiles() const {
       Storage.remove(tmpCssPath.c_str());
       continue;
     }
+    const size_t rulesBefore = cssParser->ruleCount();
     if (!cssParser->loadFromStream(tempCssFile)) {
       cssComplete = false;
+      CSS_DIAG("css trunc#%u at %u rules", static_cast<unsigned>(cssIndex),
+               static_cast<unsigned>(cssParser->ruleCount()));
     }
+    CSS_DIAG("css file#%u +%u rules", static_cast<unsigned>(cssIndex),
+             static_cast<unsigned>(cssParser->ruleCount() - rulesBefore));
     // Explicitly close() file before calling Storage.remove()
     tempCssFile.close();
     Storage.remove(tmpCssPath.c_str());
@@ -353,6 +388,12 @@ void Epub::parseCssFiles() const {
   // Save to cache for next time. A rule set truncated by low heap must not be
   // persisted: hasCache() would then skip rebuilds forever, making the
   // styling loss permanent.
+  cssParser->setUsageFilter(nullptr);
+  CSS_DIAG("css done rules=%u complete=%d filtered=%d", static_cast<unsigned>(cssParser->ruleCount()),
+           cssComplete ? 1 : 0, usage != nullptr ? 1 : 0);
+  if (usage != nullptr) {
+    return;
+  }
   if (!cssComplete) {
     LOG_ERR("EBP", "CSS parsing incomplete (low heap), not saving cache so it can be rebuilt later");
   } else if (!cssParser->saveToCache()) {

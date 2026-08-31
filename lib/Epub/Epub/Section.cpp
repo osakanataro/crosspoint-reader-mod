@@ -437,6 +437,14 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       const bool scanned = usage.scanHtmlFile(ctx->parsePath);
       if (!ctx->cssParser->loadFromCache(scanned ? &usage : nullptr)) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
+        // No cache means the book-open parse never completed -- the template
+        // was large enough to exhaust the heap partway, so nothing was saved
+        // and loadFromCache just cleared what little it had. Re-read the
+        // stylesheets now, keeping only this chapter's rules: the same filter,
+        // applied early enough that the heap never fills.
+        if (scanned) {
+          epub->parseCssFilesFiltered(usage);
+        }
       }
     }
   }
