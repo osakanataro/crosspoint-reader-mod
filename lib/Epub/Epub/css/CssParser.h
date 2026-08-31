@@ -36,7 +36,11 @@ class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
   // v9 appends the text-emphasis byte and its defined bit (18) to each rule record.
-  static constexpr uint8_t CSS_CACHE_VERSION = 10;
+  // v10 recognises max-width / max-height but does not yet store them.
+  // v11 appends those two lengths and their defined bits (19, 20). The bump is
+  //     what keeps a v10 cache -- same number, one record shorter -- from being
+  //     read back as v11 and shifting every rule after the first.
+  static constexpr uint8_t CSS_CACHE_VERSION = 11;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
