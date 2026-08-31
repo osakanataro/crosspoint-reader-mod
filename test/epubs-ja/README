@@ -96,7 +96,7 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Twenty-eight chapters, in guide/body pairs:
+anything else. Thirty chapters, in guide/body pairs:
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -195,9 +195,14 @@ anything else. Twenty-eight chapters, in guide/body pairs:
      From the Yomuka fork (#11).
  13  Small kana placement in vertical text. The horizontal glyph for ぁぃゃゅょっ
      sits low-left inside its em box; used as-is vertically the character
-     appears to sink. JLREQ 3.1.4 / JIS X 4051 place them high-right. The
+     appears to sink. The rule is JLREQ 2.1.2 note 1: vertically the face
+     goes "天地中央で右寄り" -- centred top-to-bottom, shifted right. Not
+     high-right: the JP fork's report cites 3.1.4 (a different section, on
+     runs of consecutive punctuation) and its fix moves the glyph up as well
+     as right, which overshoots the spec. The pass condition here follows
+     the spec, and a glyph riding high is recorded as its own deviation. The
      advance must not change, so column breaks, line spacing and ruby stay
-     put. From the JP fork (#98).
+     put. From the JP fork (#98), citation corrected against JLREQ.
  14  Long-paragraph and mid-flush stress. An Aozora-shaped body -- no inner
      paragraph tags, <br/> separators, several thousand CJK characters in
      one block -- which is where three failures live: the word vector's
@@ -210,6 +215,28 @@ anything else. Twenty-eight chapters, in guide/body pairs:
      extents in all three shipped SD fonts by reading the .cpfont tables --
      a character the font lacks would draw as tofu, which is exactly what
      the overlap being looked for also resembles.
+
+     Its guide also carries the pass conditions for ruby that overhangs its
+     base (JLREQ 3.3.8), since this chapter is where ruby meets column
+     breaks: the overhang may ride over kana, the prolonged sound mark,
+     small kana and an ideographic space by up to the ruby's own size, and
+     an implementation that refuses to overhang at all is equally
+     acceptable -- what fails either way is ruby colliding with the
+     neighbouring column. This is the open "ruby distribution across a
+     column break" item finally given a written pass condition.
+
+ 15  Consecutive punctuation, and brackets at the line head and line end.
+     Closing brackets, commas and full stops are half-width glyphs that take
+     a half-em of space beside kanji or kana to fill one em cell; when they
+     run together that space is dropped in specific places so the line does
+     not gape (JLREQ 2.5.2 and 3.1.4: 。」 and 」、 set solid with the half-em
+     after, 、「 and 」「 take the half-em between). The same chapter watches
+     the line-head/line-end rules -- no closing bracket, comma or full stop
+     alone at the head of a column, no opening bracket alone at the foot --
+     and asks only that the line-head opening bracket be treated the same
+     way every time (JLREQ 3.1.5 permits more than one convention, not a mix
+     of them). Dialogue-heavy fiction hits this on every page. Written from
+     JLREQ directly rather than carried over from another fork.
 
 Tests 11-14 came from closed PRs and issues in the sibling forks rather than
 from a fault seen here: they are cases those projects hit on real books, so
