@@ -1214,8 +1214,15 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   // appears for a picture that simply has no class. Seeing which
                   // classes were on the tag separates "the rule never loaded"
                   // from "the tag never asked for it".
-                  IMG_DIAG("fit mw=%d%s mh=%d%s cls=%.28s", maxWidth, imgStyle.hasImageMaxWidth() ? "*" : "", maxHeight,
-                           imgStyle.hasImageMaxHeight() ? "*" : "", classAttr.empty() ? "-" : classAttr.c_str());
+                  // rules= is how many CSS rules are resident. A book whose
+                  // pictures come back unbounded looks the same whether its
+                  // stylesheet was never loaded or was loaded and simply says
+                  // nothing about them; the count separates those two before
+                  // anyone starts reading the CSS by hand.
+                  IMG_DIAG("fit mw=%d%s mh=%d%s rules=%u cls=%.20s", maxWidth, imgStyle.hasImageMaxWidth() ? "*" : "",
+                           maxHeight, imgStyle.hasImageMaxHeight() ? "*" : "",
+                           self->cssParser ? static_cast<unsigned>(self->cssParser->ruleCount()) : 0,
+                           classAttr.empty() ? "-" : classAttr.c_str());
                 }
 
                 // Pregenerate the pixel cache now, while the build owns the heap. The
