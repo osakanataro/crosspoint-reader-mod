@@ -1605,7 +1605,17 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // the panel receptive to the gray waveform; pending cleanup still honors
     // the scheduled/manual HALF refresh.
     renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
-    pagesUntilFullRefresh = 1;
+    // Same cadence bookkeeping as displayWithRefreshCycle: a HALF that just ran
+    // restarts the interval, anything else counts down toward the next one.
+    // Arming the next page unconditionally here instead kept every illustrated
+    // page in the HALF waveform -- the arm outlived the refresh that satisfied
+    // it, so the counter never reached the configured interval and a run of
+    // image pages paid 3.2s each.
+    if (cleanImageBasePending) {
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    } else {
+      pagesUntilFullRefresh--;
+    }
   } else if (combinedGrayscaleBase) {
     // Stash the base without activating; displayGrayBuffer() below commits
     // base + grays as one waveform.
@@ -1709,6 +1719,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.cleanupGrayscaleWithFrameBuffer();
         }
       } else {
+#ifdef INPUT_DIAG
+        // The two plane loops below are the same work twice, yet the first has
+        // measured ~30x the second (2192ms vs 72ms on an image page). Whatever
+        // the first pass pays, the second finds already warm -- so bracket both
+        // separately: glyphs fetched one at a time, and the .pxc traffic split
+        // into RAM-slot hits versus draws that went back to the card.
+        (void)ImageBlock::takeCacheRenderStats();
+        const uint32_t onDemandBeforeLsb = renderer.glyphOnDemandLoads();
+#endif
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
         for (int y = 0; y < gh; y += STRIP_ROWS) {
           const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
@@ -1719,6 +1738,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
         }
         const auto tGrayLsb = millis();
+#ifdef INPUT_DIAG
+        const auto lsbImg = ImageBlock::takeCacheRenderStats();
+        const uint32_t lsbOnDemand = renderer.glyphOnDemandLoads() - onDemandBeforeLsb;
+#endif
 
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
         for (int y = 0; y < gh; y += STRIP_ROWS) {
@@ -1730,6 +1753,20 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
         }
         const auto tGrayMsb = millis();
+#ifdef INPUT_DIAG
+        {
+          const auto msbImg = ImageBlock::takeCacheRenderStats();
+          const uint32_t msbOnDemand = renderer.glyphOnDemandLoads() - onDemandBeforeLsb - lsbOnDemand;
+          LOG_DBG("ERS",
+                  "AA split: lsb=%lums glyphs=%u img_slot=%u/%u stream=%u sd=%lums | "
+                  "msb=%lums glyphs=%u img_slot=%u/%u stream=%u sd=%lums",
+                  tGrayLsb - tDisplay, lsbOnDemand, lsbImg.slotHits, lsbImg.slotLoads, lsbImg.streamDraws, lsbImg.sdMs,
+                  tGrayMsb - tGrayLsb, msbOnDemand, msbImg.slotHits, msbImg.slotLoads, msbImg.streamDraws, msbImg.sdMs);
+          InputDiag::noteGrayscaleSplit(tGrayLsb - tDisplay, lsbOnDemand, lsbImg.sdMs,
+                                        lsbImg.slotLoads + lsbImg.streamDraws, tGrayMsb - tGrayLsb, msbOnDemand,
+                                        msbImg.sdMs, msbImg.slotLoads + msbImg.streamDraws);
+        }
+#endif
 
         renderer.setRenderMode(GfxRenderer::BW);
         renderer.displayGrayBuffer();
