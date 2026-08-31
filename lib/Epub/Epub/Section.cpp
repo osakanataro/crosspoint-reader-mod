@@ -62,7 +62,11 @@ namespace {
 // v46: A paragraph opening with an ideographic space no longer also receives the
 //      reader's own first-line indent, so those paragraphs start one character in
 //      rather than two and their columns break in different places.
-constexpr uint8_t SECTION_FILE_VERSION = 46;
+// v47: An unbroken Latin run longer than the column is split into column-sized
+//      tokens, so vertical columns hold different words than before.
+// v48: max-width / max-height are honoured for images, so a picture the author
+//      bounded now renders smaller than the full container.
+constexpr uint8_t SECTION_FILE_VERSION = 48;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

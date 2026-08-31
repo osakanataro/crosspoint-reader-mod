@@ -578,6 +578,39 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
         (isDigit && runChars <= 2) || VerticalTextUtils::isTateChuYokoPunctuationPair(token.c_str());
     const auto behavior =
         tateChuYoko ? VerticalTextUtils::VerticalBehavior::TateChuYoko : VerticalTextUtils::VerticalBehavior::Sideways;
+
+    // A sideways run occupies its own WIDTH as the column's vertical extent, and this
+    // loop coalesces every unbroken ASCII stretch into one token -- so a path or an
+    // identifier with no space in it ("package/metadata/manifest/spine/item/itemref")
+    // becomes a single token taller than the column. Column breaking works between
+    // tokens, so it cannot split that one, and the run is drawn straight through the
+    // status bar and off the panel. Break the run into column-sized pieces here, where
+    // the character boundaries are still known; layout then treats them as ordinary
+    // adjacent tokens. Only over-long runs are touched, so ordinary words are unchanged.
+    if (behavior == VerticalTextUtils::VerticalBehavior::Sideways && viewportHeight > 0 &&
+        renderer.getTextAdvanceX(fontId, token.c_str(), fontStyle) > viewportHeight) {
+      size_t pieceStart = 0;
+      while (pieceStart < token.size()) {
+        // Grow a piece one character at a time until the next one would overflow.
+        size_t pieceEnd = pieceStart;
+        size_t lastFitting = pieceStart;
+        while (pieceEnd < token.size()) {
+          const size_t next = pieceEnd + 1;
+          if (renderer.getTextAdvanceX(fontId, token.substr(pieceStart, next - pieceStart).c_str(), fontStyle) >
+              viewportHeight) {
+            break;
+          }
+          lastFitting = next;
+          pieceEnd = next;
+        }
+        // A single character wider than the column would loop forever; emit it anyway.
+        if (lastFitting == pieceStart) lastFitting = pieceStart + 1;
+        currentTextBlock->addVerticalToken(token.substr(pieceStart, lastFitting - pieceStart), fontStyle, behavior);
+        pieceStart = lastFitting;
+      }
+      continue;
+    }
+
     currentTextBlock->addVerticalToken(std::move(token), fontStyle, behavior);
   }
 
@@ -1141,9 +1174,27 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   if (displayHeight < 1) displayHeight = 1;
                   LOG_DBG("EHP", "Display size from CSS width: %dx%d", displayWidth, displayHeight);
                 } else {
-                  // Scale to fit container while maintaining aspect ratio
+                  // Scale to fit container while maintaining aspect ratio. max-width
+                  // and max-height tighten those bounds when the author set them --
+                  // which is how commercial EPUBs size illustrations: of 955 vertical
+                  // books surveyed the sizing came from max-* classes, never from a
+                  // fixed width, so without this the whole convention collapses to
+                  // "fit the screen" and every class renders identically. Unlike
+                  // width/height these only shrink: a picture already inside the
+                  // bound keeps its own size, which is why the clamp below is a
+                  // minimum against the container rather than a replacement.
                   int maxWidth = containerWidth;
                   int maxHeight = self->viewportHeight;
+                  if (imgStyle.hasImageMaxWidth()) {
+                    const int bound = static_cast<int>(
+                        imgStyle.imageMaxWidth.toPixels(emSize, static_cast<float>(containerWidth)) + 0.5f);
+                    if (bound > 0 && bound < maxWidth) maxWidth = bound;
+                  }
+                  if (imgStyle.hasImageMaxHeight()) {
+                    const int bound = static_cast<int>(
+                        imgStyle.imageMaxHeight.toPixels(emSize, static_cast<float>(self->viewportHeight)) + 0.5f);
+                    if (bound > 0 && bound < maxHeight) maxHeight = bound;
+                  }
                   float scaleX = (dims.width > maxWidth) ? (float)maxWidth / dims.width : 1.0f;
                   float scaleY = (dims.height > maxHeight) ? (float)maxHeight / dims.height : 1.0f;
                   float scale = (scaleX < scaleY) ? scaleX : scaleY;
@@ -1152,6 +1203,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   displayWidth = (int)(dims.width * scale);
                   displayHeight = (int)(dims.height * scale);
                   LOG_DBG("EHP", "Display size: %dx%d (scale %.2f)", displayWidth, displayHeight, scale);
+                  // Whether the author's max-* bounds reached this calculation at
+                  // all, and what they resolved to. Two pictures that differ only
+                  // by their max- class look alike on the panel when the property
+                  // is being dropped, and alike again when it is honoured but the
+                  // source is small enough not to be clipped -- this line tells
+                  // those two apart without measuring the screen.
+                  IMG_DIAG("fit mw=%d%s mh=%d%s", maxWidth, imgStyle.hasImageMaxWidth() ? "*" : "", maxHeight,
+                           imgStyle.hasImageMaxHeight() ? "*" : "");
                 }
 
                 // Pregenerate the pixel cache now, while the build owns the heap. The

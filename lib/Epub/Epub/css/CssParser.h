@@ -36,7 +36,7 @@ class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
   // v9 appends the text-emphasis byte and its defined bit (18) to each rule record.
-  static constexpr uint8_t CSS_CACHE_VERSION = 9;
+  static constexpr uint8_t CSS_CACHE_VERSION = 10;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

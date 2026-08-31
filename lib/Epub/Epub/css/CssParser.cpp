@@ -447,6 +447,18 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.imageWidth = len;
       style.defined.imageWidth = 1;
     }
+  } else if (iequalsAscii(name, "max-height")) {
+    CssLength len;
+    if (tryInterpretLength(value, len)) {
+      style.imageMaxHeight = len;
+      style.defined.imageMaxHeight = 1;
+    }
+  } else if (iequalsAscii(name, "max-width")) {
+    CssLength len;
+    if (tryInterpretLength(value, len)) {
+      style.imageMaxWidth = len;
+      style.defined.imageMaxWidth = 1;
+    }
   } else if (iequalsAscii(name, "display")) {
     const std::string_view displayValue = stripTrailingImportant(value);
     style.display = iequalsAscii(displayValue, "none") ? CssDisplay::None : CssDisplay::Block;
@@ -823,6 +835,8 @@ bool CssParser::saveToCache() const {
     writeLength(style.paddingRight);
     writeLength(style.imageHeight);
     writeLength(style.imageWidth);
+    writeLength(style.imageMaxHeight);
+    writeLength(style.imageMaxWidth);
     file.write(static_cast<uint8_t>(style.display));
     file.write(static_cast<uint8_t>(style.verticalAlign));
     file.write(static_cast<uint8_t>(style.textEmphasis));
@@ -848,6 +862,8 @@ bool CssParser::saveToCache() const {
     if (style.defined.direction) definedBits |= 1 << 16;
     if (style.defined.verticalAlign) definedBits |= 1 << 17;
     if (style.defined.textEmphasis) definedBits |= 1 << 18;
+    if (style.defined.imageMaxHeight) definedBits |= 1 << 19;
+    if (style.defined.imageMaxWidth) definedBits |= 1 << 20;
     file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
   }
 
@@ -1018,7 +1034,8 @@ bool CssParser::loadFromCache(const CssSelectorUsage* usage) {
     if (!readLength(style.textIndent) || !readLength(style.marginTop) || !readLength(style.marginBottom) ||
         !readLength(style.marginLeft) || !readLength(style.marginRight) || !readLength(style.paddingTop) ||
         !readLength(style.paddingBottom) || !readLength(style.paddingLeft) || !readLength(style.paddingRight) ||
-        !readLength(style.imageHeight) || !readLength(style.imageWidth)) {
+        !readLength(style.imageHeight) || !readLength(style.imageWidth) || !readLength(style.imageMaxHeight) ||
+        !readLength(style.imageMaxWidth)) {
       rulesBySelector_.clear();
       return false;
     }
@@ -1072,6 +1089,8 @@ bool CssParser::loadFromCache(const CssSelectorUsage* usage) {
     style.defined.direction = (definedBits & 1 << 16) != 0;
     style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
     style.defined.textEmphasis = (definedBits & 1 << 18) != 0;
+    style.defined.imageMaxHeight = (definedBits & 1 << 19) != 0;
+    style.defined.imageMaxWidth = (definedBits & 1 << 20) != 0;
 
     // Skip rules that can never match the scanned document; the style
     // payload has already been consumed from the stream at this point.
