@@ -291,7 +291,12 @@ void InputDiag::noteOpenStage(const uint8_t slot, const char* label) {
 }
 
 namespace {
-constexpr uint8_t IMG_EVENT_COUNT = 24;
+// 48 rather than 24: one image writes up to five lines (img, probe, extract,
+// decode, placed, plus the fit bounds), so a ten-picture chapter overran the
+// ring and dropped exactly the entries an investigation wanted -- the first
+// images of the chapter. 48 x 96B is 4.6KB of static DRAM, and only in a
+// diagnostic build.
+constexpr uint8_t IMG_EVENT_COUNT = 48;
 char imgEvents[IMG_EVENT_COUNT][96];
 uint8_t imgEventCount = 0;  // total recorded; ring position = count % IMG_EVENT_COUNT
 }  // namespace
