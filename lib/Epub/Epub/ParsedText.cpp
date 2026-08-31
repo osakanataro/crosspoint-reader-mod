@@ -680,8 +680,22 @@ void ParsedText::ensureRubyCapacity() {
   // and no large contiguous reallocation to avoid). Kept for call-site stability.
 }
 
+bool ParsedText::beginsWithIdeographicSpace() const {
+  // Vertical layout emits one token per codepoint and horizontal one per word,
+  // so in both cases the ideographic space, when the paragraph opens with one,
+  // is at the front of the first token.
+  return !words.empty() && firstCodepoint(words.front()) == 0x3000;
+}
+
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& renderer, const int fontId) const {
   if (!isFirstLine || !isNaturalAlign) {
+    return 0;
+  }
+  // A leading U+3000 is the indent. Adding ours would set the line in twice --
+  // the shape most paperback-derived EPUBs take, so this is the common case,
+  // not an edge one. An explicit text-indent below still wins: that is the
+  // author asking for a specific measure rather than relying on the default.
+  if (!blockStyle.textIndentDefined && beginsWithIdeographicSpace()) {
     return 0;
   }
   if (blockStyle.textIndentDefined) {
@@ -760,7 +774,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
       blockStyle.alignment == CssTextAlign::Justify ||
       (blockStyle.isRtl ? blockStyle.alignment == CssTextAlign::Right : blockStyle.alignment == CssTextAlign::Left);
   int verticalIndent = 0;
-  if (naturalAlign && !blockStyle.textIndentDefined && !extraParagraphSpacing) {
+  if (naturalAlign && !blockStyle.textIndentDefined && !extraParagraphSpacing && !beginsWithIdeographicSpace()) {
     verticalIndent = cjkCharAdvance > 0 ? cjkCharAdvance : lineHeight;
   }
 

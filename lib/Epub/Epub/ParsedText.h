@@ -79,6 +79,11 @@ class ParsedText {
   int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
                                   int fontId) const;
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
+
+  // True when the paragraph already opens with an ideographic space (U+3000),
+  // which paperback-derived EPUBs use as the first-line indent itself. Adding
+  // the reader's own indent on top of it sets the line in two characters.
+  bool beginsWithIdeographicSpace() const;
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                         std::vector<bool>& noSpaceBeforeVec);
