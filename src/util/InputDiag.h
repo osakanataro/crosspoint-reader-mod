@@ -91,6 +91,15 @@ class InputDiag {
   static void noteVerticalRender(unsigned long bodyMs, unsigned long bodyCells, unsigned long rubyMeasureMs,
                                  unsigned long rubyDrawMs, unsigned long rubyGroups);
 
+  // The two antialiasing planes side by side, kept for the worst LSB seen. They run identical loops
+  // over identical content, yet the first has measured 2192 ms against the second's 72 ms -- so the
+  // first pass is warming something the second then reuses. These name the two candidates: glyphs
+  // fetched from the card one at a time, and .pxc draws that missed the RAM slot. Whichever column
+  // carries the gap decides what to fix; guessing at this cost eight wrong theories once already.
+  static void noteGrayscaleSplit(unsigned long lsbMs, unsigned long lsbGlyphs, unsigned long lsbSdMs,
+                                 unsigned long lsbSdDraws, unsigned long msbMs, unsigned long msbGlyphs,
+                                 unsigned long msbSdMs, unsigned long msbSdDraws);
+
   // One Section::buildSomeMore() call: the spine item, the page-count watermark before and
   // after, and how long it took. buildSomeMore has no internal time budget -- it lays out
   // whatever chunk it's given as one atomic call, holding RenderLock (and, from most call
@@ -144,6 +153,8 @@ class InputDiag {
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
   static void notePageDrawParts(unsigned long, unsigned long) {}
   static void noteVerticalRender(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long) {}
+  static void noteGrayscaleSplit(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long,
+                                 unsigned long, unsigned long, unsigned long) {}
   static void noteBuildChunk(int, uint16_t, uint16_t, unsigned long) {}
   static void noteBuildTotal(int, unsigned long, int) {}
   static void noteUiPrewarmFailure() {}

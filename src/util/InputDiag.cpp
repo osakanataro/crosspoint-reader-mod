@@ -103,7 +103,9 @@ uint8_t renderLogNext = 0;
 
 // File-scope so flush() stays inside the 256-byte stack budget for locals. Only the main loop task
 // calls flush(), so there is no second writer.
-char reportBuf[1280];
+// Sized with headroom: the report already filled 1279 of a 1280-byte buffer, which truncated the
+// trailing legend and would have silently dropped whatever line was added next.
+char reportBuf[1792];
 
 // Last and worst page-render phase split.
 // What the last page scope's scan handed to the prewarm, and how often prewarm()
@@ -147,6 +149,18 @@ uint32_t vertBodyCells = 0;
 uint32_t vertRubyMeasureMs = 0;
 uint32_t vertRubyDrawMs = 0;
 uint32_t vertRubyGroups = 0;
+
+// The worst grayscale pair seen, kept by LSB duration. Both planes run the same
+// loops, so a lopsided pair means the first pass warmed something -- these say
+// what: glyphs fetched one at a time, or .pxc draws that went back to the card.
+uint32_t aaWorstLsbMs = 0;
+uint32_t aaWorstLsbGlyphs = 0;
+uint32_t aaWorstLsbSdMs = 0;
+uint32_t aaWorstLsbSdDraws = 0;
+uint32_t aaWorstMsbMs = 0;
+uint32_t aaWorstMsbGlyphs = 0;
+uint32_t aaWorstMsbSdMs = 0;
+uint32_t aaWorstMsbSdDraws = 0;
 
 // Snapshot of the RTC log ring taken at a failure, waiting to be written out.
 constexpr char LOG_PATH[] = "/input-diag-log.txt";
@@ -353,6 +367,21 @@ void InputDiag::noteVerticalRender(const unsigned long bodyMs, const unsigned lo
   vertRubyGroups = static_cast<uint32_t>(rubyGroups);
 }
 
+void InputDiag::noteGrayscaleSplit(const unsigned long lsbMs, const unsigned long lsbGlyphs,
+                                   const unsigned long lsbSdMs, const unsigned long lsbSdDraws,
+                                   const unsigned long msbMs, const unsigned long msbGlyphs,
+                                   const unsigned long msbSdMs, const unsigned long msbSdDraws) {
+  if (static_cast<uint32_t>(lsbMs) <= aaWorstLsbMs) return;
+  aaWorstLsbMs = static_cast<uint32_t>(lsbMs);
+  aaWorstLsbGlyphs = static_cast<uint32_t>(lsbGlyphs);
+  aaWorstLsbSdMs = static_cast<uint32_t>(lsbSdMs);
+  aaWorstLsbSdDraws = static_cast<uint32_t>(lsbSdDraws);
+  aaWorstMsbMs = static_cast<uint32_t>(msbMs);
+  aaWorstMsbGlyphs = static_cast<uint32_t>(msbGlyphs);
+  aaWorstMsbSdMs = static_cast<uint32_t>(msbSdMs);
+  aaWorstMsbSdDraws = static_cast<uint32_t>(msbSdDraws);
+}
+
 void InputDiag::noteBuildChunk(const int spineIndex, const uint16_t pageCountBefore, const uint16_t pageCountAfter,
                                const unsigned long durationMs) {
   if (static_cast<uint32_t>(durationMs) <= buildChunkMaxMs) return;
@@ -432,6 +461,8 @@ void InputDiag::flush(const bool inputActive) {
       "page_display_ms=%u (max %u)\n"
       "page_blocks_ms=%u\n"
       "page_statusbar_ms=%u\n"
+      "aa_worst_lsb_ms=%u glyphs=%u sd_ms=%u sd_draws=%u\n"
+      "aa_worst_msb_ms=%u glyphs=%u sd_ms=%u sd_draws=%u\n"
       "vert_body_ms=%u cells=%u\n"
       "vert_ruby_measure_ms=%u\n"
       "vert_ruby_draw_ms=%u groups=%u\n"
@@ -446,8 +477,9 @@ void InputDiag::flush(const bool inputActive) {
       now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower, debounceEpisodes,
       committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount, ESP.getFreeHeap(), ESP.getMinFreeHeap(),
       ESP.getMaxAllocHeap(), pageRenderPrewarmMs, pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs,
-      pageRenderDisplayMs, pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, vertBodyMs, vertBodyCells,
-      vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
+      pageRenderDisplayMs, pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, aaWorstLsbMs, aaWorstLsbGlyphs,
+      aaWorstLsbSdMs, aaWorstLsbSdDraws, aaWorstMsbMs, aaWorstMsbGlyphs, aaWorstMsbSdMs, aaWorstMsbSdDraws, vertBodyMs,
+      vertBodyCells, vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
       buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
       buildTotalMaxChunkCount, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax,
       onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes,

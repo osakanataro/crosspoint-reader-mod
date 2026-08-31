@@ -35,6 +35,20 @@ class ImageBlock final : public Block {
   // render completes so nothing stays resident between pages.
   static void releaseRenderCache();
 
+#ifdef INPUT_DIAG
+  // Diagnostic only: how a page's draws got their pixels. The two grayscale
+  // planes run identical loops, so bracketing each one and comparing the split
+  // says whether an uneven pass cost is SD traffic for the image or something
+  // else. Reading the stats zeroes them.
+  struct CacheRenderStats {
+    uint32_t slotHits;     // drawn straight from the RAM slot, no SD access
+    uint32_t slotLoads;    // the slot was filled from SD for this draw
+    uint32_t streamDraws;  // streamed off SD a row-batch at a time (no slot)
+    uint32_t sdMs;         // time inside the draws that touched SD
+  };
+  static CacheRenderStats takeCacheRenderStats();
+#endif
+
   // Lazy extraction hook: the section build only header-probes images for their
   // dimensions; the file at imagePath is extracted out of the book on first
   // render, via this callback (function pointer + context, not std::function —

@@ -130,6 +130,14 @@ uint64_t pxcSlotHash = 0;
 uint16_t pxcSlotWidth = 0;
 uint16_t pxcSlotHeight = 0;
 
+#ifdef INPUT_DIAG
+// Accumulated across the images of one pass; drained by takeCacheRenderStats().
+uint32_t imgSlotHits = 0;
+uint32_t imgSlotLoads = 0;
+uint32_t imgStreamDraws = 0;
+uint32_t imgSdMs = 0;
+#endif
+
 void releasePxcSlot() {
   for (auto& chunk : pxcChunks) chunk.reset();
   pxcSlotHash = 0;
@@ -208,9 +216,15 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   const uint64_t cacheHash = imagePathHash(cachePath);
   if (pxcSlotHash == cacheHash && pxcSlotWidth != 0) {
     renderRowsFromPxcSlot(renderer, x, y);
+#ifdef INPUT_DIAG
+    imgSlotHits++;
+#endif
     return true;
   }
 
+#ifdef INPUT_DIAG
+  const uint32_t sdStart = millis();
+#endif
   HalFile cacheFile;
   if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
     return false;
@@ -239,6 +253,10 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   // images take the streaming path below, unchanged from pre-cache behavior.
   if (pxcSlotHash == 0 && loadPxcSlot(cacheHash, cacheFile, cachedWidth, cachedHeight, bytesPerRow)) {
     renderRowsFromPxcSlot(renderer, x, y);
+#ifdef INPUT_DIAG
+    imgSlotLoads++;
+    imgSdMs += millis() - sdStart;
+#endif
     LOG_DBG("IMG", "Cache render complete (payload now in RAM)");
     return true;
   }
@@ -302,6 +320,10 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   }
 
   free(readBuffer);
+#ifdef INPUT_DIAG
+  imgStreamDraws++;
+  imgSdMs += millis() - sdStart;
+#endif
   LOG_DBG("IMG", "Cache render complete");
   return true;
 }
@@ -328,6 +350,17 @@ bool ImageBlock::needsDecode() const { return !imageFailedThisSession(imagePath)
 void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
 
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
+
+#ifdef INPUT_DIAG
+ImageBlock::CacheRenderStats ImageBlock::takeCacheRenderStats() {
+  const CacheRenderStats stats{imgSlotHits, imgSlotLoads, imgStreamDraws, imgSdMs};
+  imgSlotHits = 0;
+  imgSlotLoads = 0;
+  imgStreamDraws = 0;
+  imgSdMs = 0;
+  return stats;
+}
+#endif
 
 void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int y) const {
   renderer.fillRect(x, y, width, height, true);
