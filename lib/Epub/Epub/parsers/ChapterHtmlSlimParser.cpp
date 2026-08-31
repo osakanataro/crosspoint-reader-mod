@@ -1209,8 +1209,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   // is being dropped, and alike again when it is honoured but the
                   // source is small enough not to be clipped -- this line tells
                   // those two apart without measuring the screen.
-                  IMG_DIAG("fit mw=%d%s mh=%d%s", maxWidth, imgStyle.hasImageMaxWidth() ? "*" : "", maxHeight,
-                           imgStyle.hasImageMaxHeight() ? "*" : "");
+                  // The class attribute travels with the bounds: a bound that is
+                  // absent tells you nothing on its own, since the same line
+                  // appears for a picture that simply has no class. Seeing which
+                  // classes were on the tag separates "the rule never loaded"
+                  // from "the tag never asked for it".
+                  IMG_DIAG("fit mw=%d%s mh=%d%s cls=%.28s", maxWidth, imgStyle.hasImageMaxWidth() ? "*" : "", maxHeight,
+                           imgStyle.hasImageMaxHeight() ? "*" : "", classAttr.empty() ? "-" : classAttr.c_str());
                 }
 
                 // Pregenerate the pixel cache now, while the build owns the heap. The
