@@ -784,6 +784,20 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     size_t columnStart = 0;
     int currentY = verticalIndent;
     for (size_t i = 0; i < words.size(); i++) {
+      // A token taller than the whole column cannot be made to fit by breaking
+      // around it, and the test below only fires when something precedes it in
+      // the column -- so left alone it would be stacked from the column head and
+      // run off the foot of the page. Give it a column to itself and carry on;
+      // it still overflows, but by as little as its own excess. The parser keeps
+      // sideways runs under this size, which is where such a token would
+      // otherwise come from, so this is the guard rather than the mechanism.
+      if (wordHeights[i] > columnHeight) {
+        if (i > columnStart) columnEnds.push_back(i);
+        columnEnds.push_back(i + 1);
+        columnStart = i + 1;
+        currentY = 0;
+        continue;
+      }
       if (currentY + wordHeights[i] > columnHeight && i > columnStart) {
         size_t breakAt = i;
         // Kinsoku-head pullback: closing brackets / small kana cannot start a column. An inter-word
