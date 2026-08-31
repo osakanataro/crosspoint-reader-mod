@@ -96,7 +96,7 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Eighteen chapters, in guide/body pairs:
+anything else. Twenty-eight chapters, in guide/body pairs:
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -180,6 +180,44 @@ anything else. Eighteen chapters, in guide/body pairs:
      that face draws whatever its existing missing-glyph fallback does for
      those five, same as any other rare glyph it was already missing.
 
+ 11  Ideographic-space indent against the reader's own, and vertical
+     paragraph alignment. Paperback EPUBs write the first-line indent as a
+     literal U+3000; if the reader then adds its own, the line starts two
+     characters in. The same chapter checks that choosing centre/right
+     alignment does not silently switch the indent off -- vertical columns
+     are laid right to left regardless, so alignment changing only the
+     indent reads as the indent vanishing on its own. From two fixes in the
+     Yomuka fork (#21, #20) and a report against Matcha (#163).
+ 12  Inter-word spaces in vertical Latin runs. Horizontal layout adds word
+     spacing at render time; vertical layout stores one advance per cell, so
+     a dropped space turns `Do you see the boy` into one run. Runs of spaces
+     and newlines must collapse to one, and leading/trailing ones must go.
+     From the Yomuka fork (#11).
+ 13  Small kana placement in vertical text. The horizontal glyph for ぁぃゃゅょっ
+     sits low-left inside its em box; used as-is vertically the character
+     appears to sink. JLREQ 3.1.4 / JIS X 4051 place them high-right. The
+     advance must not change, so column breaks, line spacing and ruby stay
+     put. From the JP fork (#98).
+ 14  Long-paragraph and mid-flush stress. An Aozora-shaped body -- no inner
+     paragraph tags, <br/> separators, several thousand CJK characters in
+     one block -- which is where three failures live: the word vector's
+     doubling reallocation aborting on a fragmented heap (JP fork #74), a
+     mid-flush emitting a visibly short final column (JP fork #53), and the
+     1024-codepoint advance table overflowing so later glyphs get a zero
+     advance and overlap (Yomuka fork #10). Ruby is sprinkled through the
+     long block so a flush boundary can land inside a group. The 1300
+     distinct kanji in the second half were each verified to have real glyph
+     extents in all three shipped SD fonts by reading the .cpfont tables --
+     a character the font lacks would draw as tofu, which is exactly what
+     the overlap being looked for also resembles.
+
+Tests 11-14 came from closed PRs and issues in the sibling forks rather than
+from a fault seen here: they are cases those projects hit on real books, so
+this tree's behaviour under them is simply unknown until the book is run.
+
+Every chapter title carries its test number ("第N章 解説/本文: ..."), so the
+status bar alone says which test is on screen.
+
 The spine is page-progression-direction=rtl and every chapter is class="vrtl",
 so the whole book takes the vertical path. The stylesheet is a few hundred
 bytes and minimal on purpose: the base p rule sets no text-align (test 2
@@ -199,7 +237,7 @@ cannot take the main suite down with it. Another fork (ponto1216-ai) shipped a
 mitigation for paragraph-final inline images sinking to mid-screen in vertical
 mode; this book exists to see whether we inherit that class of bug before any
 image work starts. Guide page plus five chapters (v5 adds a second guide and two
-more chapters, below): a 48x48 inline image
+more chapters, below; every chapter title carries its number): a 48x48 inline image
 mid-sentence and at paragraph end, the block-illustration chapter with the same
 300x200 stripes referenced four ways (../ grayscale PNG, same-directory PNG,
 JPEG, RGB-type PNG -- an isolation ladder from when images failed and the
