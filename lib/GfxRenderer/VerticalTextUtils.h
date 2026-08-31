@@ -215,6 +215,72 @@ inline bool shouldUseVertGlyph(uint32_t cp) {
   return false;
 }
 
+// Small kana (小書きの仮名, JLREQ cl-11): the ぁぃぅ / ァィゥ set, plus the
+// small ka/ke, the small wa-row kana and their katakana phonetic extensions.
+//
+// JLREQ 2.1.2 note 1: the face of a small kana sits "縦組では文字の外枠の天地
+// 中央で右寄り" -- in vertical writing, centred top to bottom and shifted
+// toward the right of its em box; in horizontal writing, centred left to right
+// and shifted down. Fonts ship the horizontal position, so vertical text has
+// to move it. The shift is right only: raising it as well (as one sibling fork
+// does) puts the glyph above where the spec places it.
+inline bool isSmallKana(uint32_t cp) {
+  switch (cp) {
+    // Hiragana: ぁぃぅぇぉっゃゅょゎ, small ka/ke
+    case 0x3041:
+    case 0x3043:
+    case 0x3045:
+    case 0x3047:
+    case 0x3049:
+    case 0x3063:
+    case 0x3083:
+    case 0x3085:
+    case 0x3087:
+    case 0x308E:
+    case 0x3095:
+    case 0x3096:
+    // Katakana: ァィゥェォッャュョヮ, small ka/ke/wa-row
+    case 0x30A1:
+    case 0x30A3:
+    case 0x30A5:
+    case 0x30A7:
+    case 0x30A9:
+    case 0x30C3:
+    case 0x30E3:
+    case 0x30E5:
+    case 0x30E7:
+    case 0x30EE:
+    case 0x30F5:
+    case 0x30F6:
+    // Katakana phonetic extensions: ㇰ..ㇿ
+    case 0x31F0:
+    case 0x31F1:
+    case 0x31F2:
+    case 0x31F3:
+    case 0x31F4:
+    case 0x31F5:
+    case 0x31F6:
+    case 0x31F7:
+    case 0x31F8:
+    case 0x31F9:
+    case 0x31FA:
+    case 0x31FB:
+    case 0x31FC:
+    case 0x31FD:
+    case 0x31FE:
+    case 0x31FF:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// How far right a small kana's face moves, as eighths of the character cell.
+// One eighth of the em: a small kana's face is roughly seven eighths of the
+// cell wide, so this lands its right edge on the cell's, as the spec's figure
+// shows. The advance is untouched, so column breaks and ruby are unaffected.
+constexpr int SMALL_KANA_DX_EIGHTHS = 1;
+
 // Kinsoku (禁則) processing for vertical text column breaks.
 // Returns true if this codepoint must NOT appear at the start of a column.
 inline bool isKinsokuHead(uint32_t cp) {

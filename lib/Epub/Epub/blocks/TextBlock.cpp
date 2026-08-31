@@ -390,6 +390,14 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     if (punct != nullptr) {
       drawX += cellWidth * punct->dxEighths / 8;
       drawY += cellWidth * punct->dyEighths / 8;
+    } else if (VerticalTextUtils::isSmallKana(cp)) {
+      // The face of a small kana belongs against the right of its cell in
+      // vertical writing and against the bottom in horizontal (JLREQ 2.1.2
+      // note 1). Fonts ship the horizontal placement, so a column of them
+      // drawn as-is reads as a row of characters leaning off the column axis.
+      // Only the x moves: the spec keeps them centred top to bottom, and the
+      // advance is untouched, so column breaks, ruby and line spacing hold.
+      drawX += cellWidth * VerticalTextUtils::SMALL_KANA_DX_EIGHTHS / 8;
     } else if (isTateChuYokoToken(word)) {
       // Tate-chu-yoko sets its run upright inside one cell, which the layout reserved
       // at a full em. Two half-width digits fill that exactly, but a lone digit covers
