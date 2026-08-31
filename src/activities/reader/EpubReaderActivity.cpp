@@ -1528,6 +1528,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginLeft) {
   const auto t0 = millis();
   const int fontId = SETTINGS.getReaderFontId();
+  const uint32_t onDemandAtRenderStart = renderer.glyphOnDemandLoads();
 
   struct PxcSlotGuard {
     ~PxcSlotGuard() { ImageBlock::releaseRenderCache(); }
@@ -1586,6 +1587,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 #endif
   renderStatusBar();
   const auto tBwRender = millis();
+  // How much of this page the BW pass had to fetch a glyph at a time. Sampled
+  // here because the grayscale passes below repeat the same draw ~20 times
+  // (two planes x ~10 strips), so whatever the BW pass paid per glyph is about
+  // to be paid again for every strip the glyph falls in.
+  const uint32_t bwOnDemandGlyphs = renderer.glyphOnDemandLoads() - onDemandAtRenderStart;
 #ifdef INPUT_DIAG
   {
     const auto vs = TextBlock::takeVerticalRenderStats();
@@ -1669,10 +1675,30 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
               tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayRender - tDisplay, tWait - tGrayRender,
               tGrayWrite - tWait, tGrayDisplay - tGrayWrite, tEnd - tGrayDisplay, tEnd - t0, msbPlaneBuf ? 2 : 1);
     } else {
-      auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+      // A page whose glyphs would not stay resident costs the BW pass one SD
+      // read per glyph, and the grayscale passes then repeat that for every
+      // strip the glyph touches: 19-27s pages were measured on a chapter of
+      // several hundred distinct kanji with the largest free block down at
+      // 24KB. Antialiasing is a preference; waiting half a minute for a page
+      // is not, so past a threshold this page goes out in plain black and
+      // white -- the same outcome the OOM path below already produces, for
+      // the same reason (the heap cannot support the pass).
+      //
+      // The threshold sits well above a healthy page (0-5 on-demand loads with
+      // the arena seated) and below the hundreds a starved one shows, so
+      // ordinary reading never trips it.
+      constexpr uint32_t AA_MAX_BW_ON_DEMAND_GLYPHS = 64;
+      const bool glyphsTooScattered = bwOnDemandGlyphs > AA_MAX_BW_ON_DEMAND_GLYPHS;
+      auto scratch =
+          glyphsTooScattered ? nullptr : makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
       renderer.waitRefreshComplete();
+      if (glyphsTooScattered) {
+        LOG_ERR("ERS", "%u glyphs loaded on demand in the BW pass; skipping AA this page", bwOnDemandGlyphs);
+      }
       if (!scratch) {
-        LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * STRIP_ROWS);
+        if (!glyphsTooScattered) {
+          LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * STRIP_ROWS);
+        }
         if (overlapRefresh || combinedGrayscaleBase) {
           // The BW refresh ran the shadow-free async path, so controller RAM's
           // differential baseline was never rebuilt. Even with AA skipped it must
