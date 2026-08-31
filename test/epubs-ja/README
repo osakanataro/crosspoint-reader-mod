@@ -242,8 +242,19 @@ Tests 11-14 came from closed PRs and issues in the sibling forks rather than
 from a fault seen here: they are cases those projects hit on real books, so
 this tree's behaviour under them is simply unknown until the book is run.
 
-Every chapter title carries its test number ("第N章 解説/本文: ..."), so the
-status bar alone says which test is on screen.
+Every chapter title carries its test number ("テストN 解説/本文: ..."), so the
+status bar alone says which test is on screen. The unit is the test, not the
+chapter: each test is a guide and a body, so numbering by chapter would put
+the same number on two consecutive rows of the chapter picker and hide the
+fact that they are a pair. (The image book keeps 第N章 -- its nine chapters
+are each their own thing, so nothing repeats there.)
+
+Test 14's body numbers its own lines, 〔1〕..〔40〕 through the long paragraph
+and 〈1〉..〈22〉 through the kanji run, and gives each line its own ruby word.
+The first cut repeated one sentence forty times: it still proved the chapter
+does not abort, but a short column or a misplaced ruby could not be located
+in the text, and every ruby sat at the same offset so whether one ever met a
+column break was left to chance.
 
 The spine is page-progression-direction=rtl and every chapter is class="vrtl",
 so the whole book takes the vertical path. The stylesheet is a few hundred
