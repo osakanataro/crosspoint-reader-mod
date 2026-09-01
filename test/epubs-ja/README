@@ -96,7 +96,7 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Thirty chapters, in guide/body pairs:
+anything else. Thirty-two chapters, in guide/body pairs:
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -146,9 +146,22 @@ anything else. Thirty chapters, in guide/body pairs:
      heart): no source font carries 2764, so a sentence built on it shows a
      replacement glyph regardless of the selector fix -- the first version
      of this chapter did exactly that and the on-device photo was misread
-     as a pass. Pass condition: the symbols in test (1) and (2) render as
-     their real glyphs rather than tofu, and the ☆/♪/♥ sentences in test
-     (3) read with no gap or box after the mark.
+     as a pass. A fourth check, added 2026-09-01, carries the JIS arrows
+     → ← ↑ ↓ ⇒ ⇔ (U+2190-21FF), a different block from the ⬅ ⬆ ⬇ above and
+     the one a sibling fork's fonts missed entirely
+     (ponto1216-ai/crosspoint-jp#14: → rendering as "?" in a book's
+     publication note, where it is ordinary JIS X 0208 punctuation). The OST
+     fonts do carry all six -- glyph bodies probed, not interval entries,
+     since interval-gap filling reports empty placeholders as present -- so
+     the interesting half here is orientation, not coverage: this tree still
+     draws arrows sideways in vertical text, and an arrow is the one symbol
+     where rotation changes the meaning rather than the look (→ turned
+     sideways points down). The arrows sit in sentences that say which way
+     they should point, so a wrong direction reads wrong rather than merely
+     looking odd. Pass condition: the symbols in tests (1) and (2) render as
+     their real glyphs rather than tofu, the arrows in test (3) point the
+     way the sentence says, and the ☆/♪/♥ sentences in test (4) read with
+     no gap or box after the mark.
   8  Supplementary-plane kanji (2026-08-23). 𠮟 U+20B9F -- the JIS X 0213 form
      of しかる, found in 6 of the 513 books -- sits above the Basic
      Multilingual Plane (4-byte UTF-8) and needed two separate fixes: the
@@ -237,9 +250,24 @@ anything else. Thirty chapters, in guide/body pairs:
      way every time (JLREQ 3.1.5 permits more than one convention, not a mix
      of them). Dialogue-heavy fiction hits this on every page. Written from
      JLREQ directly rather than carried over from another fork.
+  16 Character decoration set by a CSS class rather than by a tag. A class
+     (span + font-weight:bold) reaches the bold flag through the stylesheet,
+     a tag (<strong>) reaches it through the tag table, so the chapter pairs
+     them line by line: if only the class version fails the stylesheet path
+     is at fault, if both fail it is rendering or the font. Also the numeric
+     spelling (700), a normal that cancels a surrounding bold, italic in
+     both forms, underline, and bold+underline together. From
+     ponto1216-ai/crosspoint-jp#3, where a commercial paperback's
+     span-with-class bold did not render. Neither of that report's two
+     causes exists here -- there is no "balanced" style mode in this tree,
+     and the OST fonts ship bold alongside regular -- but reading the code
+     and seeing the screen are different things, and max-width was parsed
+     but not applied, then applied but not cached, before anyone looked.
+     Judge under gothic first, then mincho: mincho separates its weights
+     least.
 
-Tests 11-14 came from closed PRs and issues in the sibling forks rather than
-from a fault seen here: they are cases those projects hit on real books, so
+Tests 11-14 and 16 came from closed PRs and issues in the sibling forks rather
+than from a fault seen here: they are cases those projects hit on real books, so
 this tree's behaviour under them is simply unknown until the book is run.
 
 Every chapter title carries its test number ("テストN 解説/本文: ..."), so the
@@ -318,3 +346,24 @@ this book had assumed:
   because real EPUBs were believed to do that, was testing a case that does not
   occur. v5 puts them back to deflated. The 32KB inflate window is not an
   obstacle a book can be authored around; it has to be met in firmware.
+
+v10 (2026-09-01) closes a gap found by reading zrn-ns/crosspoint-jp#107, the
+sibling fork's report on inline images in vertical text. Comparing that issue's
+reproduction against chapter 5 showed the chapter was testing an easier case
+than the one commercial books actually ship.
+
+  The gaiji sources here were 48x48 and 40x40, drawn at about 37px -- a fifth
+  off, not a reduction. The issue's case, and the shape its author found in a
+  commercial book, is a 256x256 image that CSS shrinks to 1em: about a seventh
+  of the source. Nothing in this book had ever exercised a large reduction, so
+  gaiji-big.png is 256x256 and chapter 5 now places it at 1em. It carries a
+  frame, a disc up-left and a wedge lower-right, so one glance says whether the
+  edges survived the reduction and whether the orientation held.
+
+  The issue's second symptom is that the sentence breaks where the image sits,
+  leaving the rest of the column blank. This book could always show that, but
+  told the tester nothing to look for; every other item here states its pass
+  condition, so chapter 5 now states this one too.
+
+  Ruby on an image word is the gap the issue's own author records as unhandled.
+  Chapter 5 carries one so the answer is recorded rather than assumed.
