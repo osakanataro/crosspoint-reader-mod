@@ -892,6 +892,21 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
   }
 
+#ifdef INPUT_DIAG
+  // What resolveStyle() actually returned for a classed element. The rule count says
+  // the stylesheet loaded whole, and emphasis set by a class reaches the text, yet
+  // font-weight set the same way does not -- so the split is somewhere between the
+  // rule store and this struct, and only the resolved flags can say which side.
+  // Spans only: the boilerplate p/div/body classes would fill the 48-entry ring
+  // before the decorated runs got their turn.
+  if (!classAttr.empty() && strcmp(name, "span") == 0) {
+    IMG_DIAG("sty %.6s.%.14s fw=%d/%d fs=%d td=%d/%d em=%d/%d", name, classAttr.c_str(),
+             cssStyle.hasFontWeight() ? 1 : 0, static_cast<int>(cssStyle.fontWeight), cssStyle.hasFontStyle() ? 1 : 0,
+             cssStyle.hasTextDecoration() ? 1 : 0, static_cast<int>(cssStyle.textDecoration),
+             cssStyle.hasTextEmphasis() ? 1 : 0, static_cast<int>(cssStyle.textEmphasis));
+  }
+#endif
+
   // HTML dir attribute overrides CSS direction (case-insensitive per HTML spec)
   if (!dirAttr.empty()) {
     if (strcasecmp(dirAttr.c_str(), "rtl") == 0) {
