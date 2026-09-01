@@ -264,7 +264,15 @@ anything else. Thirty-two chapters, in guide/body pairs:
      and seeing the screen are different things, and max-width was parsed
      but not applied, then applied but not cached, before anyone looked.
      Judge under gothic first, then mincho: mincho separates its weights
-     least.
+     least. Result (2026-09-02): the class forms failed while the tag form
+     worked, and the cause was neither of the report's -- resolveStyle held a
+     48KB free-heap guard, inherited from when the whole stylesheet went into
+     RAM, that returned an empty style. 48KB sits inside this device's normal
+     reading range, so the same class resolved in one paragraph and not the
+     next. Guard removed; bold, the numeric spelling and the cancelling normal
+     all pass. Underline and the underline half of bold+underline still do not
+     draw: vertical rendering has no decoration-line code at all, which this
+     chapter is now the standing check for.
 
 Tests 11-14 and 16 came from closed PRs and issues in the sibling forks rather
 than from a fault seen here: they are cases those projects hit on real books, so
