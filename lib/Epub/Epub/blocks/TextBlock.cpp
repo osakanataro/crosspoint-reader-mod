@@ -354,6 +354,51 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // groups longer than in horizontal mode, not different in kind.
   const bool blockHasRuby = hasRuby();
 
+  // Decoration lines run along the column here, not across it: a side line beside the
+  // characters and a strikethrough down through them. Japanese vertical setting puts the
+  // side line to the right of the characters, which is also where ruby goes, so a block
+  // carrying ruby takes the left instead of overprinting it -- JLREQ 3.3.2 allows either
+  // side. Accumulated across tokens rather than drawn per token so a decorated run comes
+  // out as one line: consecutive cells share an x, and the run ends where the style stops.
+  const bool scanning = renderer.isFontCacheScanning();
+  struct VerticalDecorationTracker {
+    EpdFontFamily::Style style;
+    int startY = -1;
+    int endY = -1;
+    int xPos = 0;
+
+    bool active() const { return startY != -1; }
+    void reset() {
+      startY = -1;
+      endY = -1;
+      xPos = 0;
+    }
+  };
+
+  VerticalDecorationTracker verticalDecorations[] = {
+      {EpdFontFamily::UNDERLINE},
+      {EpdFontFamily::STRIKETHROUGH},
+  };
+
+  // Upright glyphs sit against the cell's left edge and the column pitch is wider than the
+  // cell, so the gap the side line wants is just past cellWidth; the strikethrough splits
+  // the cell instead.
+  const auto verticalDecorationX = [&](const EpdFontFamily::Style style, const int cellX) {
+    if ((style & EpdFontFamily::STRIKETHROUGH) != 0) return cellX + cellWidth / 2;
+    return blockHasRuby ? cellX - 3 : cellX + cellWidth + 2;
+  };
+  const auto flushVerticalDecoration = [&](VerticalDecorationTracker& line) {
+    if (line.active()) {
+      renderer.drawLine(line.xPos, line.startY, line.xPos, line.endY, 2, true);
+      line.reset();
+    }
+  };
+  const auto flushVerticalDecorations = [&]() {
+    for (auto& line : verticalDecorations) {
+      flushVerticalDecoration(line);
+    }
+  };
+
 #ifdef INPUT_DIAG
   const uint32_t vBodyStart = millis();
   vBodyCells += numWords;
@@ -362,6 +407,33 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     const char* word = wordText(i);
     const int cellX = xposArr[i] + x;
     const int cellY = yposArr[i] + y;
+
+    // Before the draw branches below, all of which continue: every token contributes its
+    // own extent down the column whichever way it is set. A sideways run reserved its
+    // width, which is what the layout stacked; everything else occupies one cell.
+    if (!scanning) {
+      const EpdFontFamily::Style style = wordStyle(i);
+      if (EpdFontFamily::hasTextDecoration(style)) {
+        const int extent = isSidewaysToken(word) ? renderer.getTextAdvanceX(fontId, word, style) : cellWidth;
+        for (auto& line : verticalDecorations) {
+          if ((style & line.style) == 0) {
+            flushVerticalDecoration(line);
+            continue;
+          }
+          const int lineX = verticalDecorationX(line.style, cellX);
+          if (line.active() && line.xPos != lineX) {
+            flushVerticalDecoration(line);
+          }
+          if (!line.active()) {
+            line.startY = cellY;
+            line.xPos = lineX;
+          }
+          line.endY = cellY + extent;
+        }
+      } else {
+        flushVerticalDecorations();
+      }
+    }
 
     // Sideways runs: the column reserved the run's *width* as its vertical extent,
     // so drawing it upright would spill across the columns to the left.
@@ -412,6 +484,7 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
 
     renderer.drawText(fontId, drawX, drawY, word, true, wordStyle(i));
   }
+  flushVerticalDecorations();
 
   // Ruby is placed in a pass of its own, and needs two things the body's pass cannot give
   // it. A group has to clear the one above -- a reading longer than what it annotates
