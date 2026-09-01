@@ -43,10 +43,6 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 // Prevents unbounded memory growth from pathological CSS files
 constexpr size_t MAX_RULES = 1500;
 
-// Minimum free heap required to apply CSS during rendering
-// If below this threshold, we skip CSS to avoid display artifacts.
-constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
-
 // Minimum free heap required to keep registering rules while parsing CSS or
 // loading the rules cache. The project builds with -fno-exceptions, so a
 // failed allocation in rulesBySelector_ aborts and reboots the device.
@@ -744,16 +740,15 @@ bool CssParser::loadFromStream(HalFile& source) {
 // Style resolution
 
 CssStyle CssParser::resolveStyle(std::string_view tagName, std::string_view classAttr) const {
-  static bool lowHeapWarningLogged = false;
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_CSS) {
-    if (!lowHeapWarningLogged) {
-      lowHeapWarningLogged = true;
-      LOG_DBG("CSS", "Warning: low heap (%u bytes) below MIN_FREE_HEAP_FOR_CSS (%u), returning empty style",
-              ESP.getFreeHeap(), static_cast<unsigned>(MIN_FREE_HEAP_FOR_CSS));
-    }
-    return CssStyle{};
-  }
-
+  // No heap guard here: nothing below allocates. result is a stack struct of enums,
+  // lengths and bitfields, find() only reads the rule map, CompositeKey never
+  // materializes its concatenation, and the class walk is over string_views. A
+  // guard that returned an empty style below 48KB free used to sit here, left from
+  // when the whole stylesheet was expanded into RAM; once chapter-scoped loading
+  // removed the allocation it only silently dropped styles, and 48KB sits in the
+  // middle of this device's 47-63KB reading range. The same class then resolved at
+  // 50,600 bytes free and came back empty at 48,492 in one chapter, which reads as
+  // "bold works in some paragraphs but not others" and changes between openings.
   CssStyle result;
 
   // 1. Apply element-level style (lowest priority). The map's hash/equal are
