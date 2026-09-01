@@ -271,8 +271,12 @@ anything else. Thirty-two chapters, in guide/body pairs:
      reading range, so the same class resolved in one paragraph and not the
      next. Guard removed; bold, the numeric spelling and the cancelling normal
      all pass. Underline and the underline half of bold+underline still do not
-     draw: vertical rendering has no decoration-line code at all, which this
-     chapter is now the standing check for.
+     draw: vertical rendering had no decoration-line code at all. Implemented
+     the same day -- the side line beside the characters, the strikethrough
+     through them -- and the chapter gained a line-through pair (tag and
+     class) to cover it, since the two lines are drawn at different
+     coordinates and one can be right while the other is not. All ten rows
+     pass except italic, which is a font limitation rather than a fault.
 
 Tests 11-14 and 16 came from closed PRs and issues in the sibling forks rather
 than from a fault seen here: they are cases those projects hit on real books, so
