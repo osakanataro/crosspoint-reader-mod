@@ -357,9 +357,10 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // Decoration lines run along the column here, not across it: a side line beside the
   // characters and a strikethrough down through them. Japanese vertical setting puts the
   // side line to the right of the characters, which is also where ruby goes, so a block
-  // carrying ruby takes the left instead of overprinting it -- JLREQ 3.3.2 allows either
-  // side. Accumulated across tokens rather than drawn per token so a decorated run comes
-  // out as one line: consecutive cells share an x, and the run ends where the style stops.
+  // carrying ruby takes the left instead of overprinting it: ruby owns the right half-cell,
+  // and JLREQ has no rule on the side a bousen takes, so the one that does not collide wins. Accumulated across tokens
+  // rather than drawn per token so a decorated run comes out as one line: consecutive cells share an x, and the run
+  // ends where the style stops.
   const bool scanning = renderer.isFontCacheScanning();
   struct VerticalDecorationTracker {
     EpdFontFamily::Style style;
