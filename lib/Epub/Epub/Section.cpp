@@ -66,7 +66,12 @@ namespace {
 //      tokens, so vertical columns hold different words than before.
 // v48: max-width / max-height are honoured for images, so a picture the author
 //      bounded now renders smaller than the full container.
-constexpr uint8_t SECTION_FILE_VERSION = 48;
+// v49: Two build-time results changed. Symbol orientation now follows UAX #50, so a
+//      codepoint that used to join a sideways Latin run is emitted as its own upright
+//      cell (and the column breaks elsewhere); and resolveStyle no longer drops the
+//      class-derived style when free heap is low, so bold / emphasis / decoration
+//      reach the tokens they were written on.
+constexpr uint8_t SECTION_FILE_VERSION = 49;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
