@@ -152,6 +152,26 @@ inline bool isTateChuYokoPunctuationPair(const char* text) {
 
 // Determine if a codepoint should be drawn upright in vertical text.
 // CJK ideographs, kana, CJK symbols, fullwidth forms, etc.
+// The symbol area's vo=U runs, straight out of UAX #50's VerticalOrientation.txt rather
+// than from judgement about which symbols "look upright" -- the blocks here interleave the
+// two values too finely to take whole (Letterlike Symbols alone is 44 upright against 36
+// rotated). Sorted and disjoint, so the scan below stops at the first range that starts
+// past the codepoint. Regenerate from the same file if a Unicode version is adopted.
+struct UprightSymbolRange {
+  uint16_t first;
+  uint16_t last;
+};
+inline constexpr UprightSymbolRange UPRIGHT_SYMBOL_RANGES[] = {
+    {0x2016, 0x2016}, {0x2020, 0x2021}, {0x2030, 0x2031}, {0x203B, 0x203C}, {0x2042, 0x2042}, {0x2047, 0x2049},
+    {0x2051, 0x2051}, {0x2065, 0x2065}, {0x20DD, 0x20E0}, {0x20E2, 0x20E4}, {0x2100, 0x2101}, {0x2103, 0x2109},
+    {0x210F, 0x210F}, {0x2113, 0x2114}, {0x2116, 0x2117}, {0x211E, 0x2123}, {0x2125, 0x2125}, {0x2127, 0x2127},
+    {0x2129, 0x2129}, {0x212E, 0x212E}, {0x2135, 0x213F}, {0x2145, 0x214A}, {0x214C, 0x214D}, {0x214F, 0x2189},
+    {0x218C, 0x218F}, {0x221E, 0x221E}, {0x2234, 0x2235}, {0x2300, 0x2307}, {0x230C, 0x231F}, {0x2324, 0x2328},
+    {0x232B, 0x232B}, {0x237D, 0x239A}, {0x23BE, 0x23CD}, {0x23CF, 0x23CF}, {0x23D1, 0x23DB}, {0x23E2, 0x2422},
+    {0x2424, 0x24FF}, {0x25A0, 0x2619}, {0x2620, 0x2767}, {0x2776, 0x2793}, {0x2B12, 0x2B2F}, {0x2B50, 0x2B59},
+    {0x2B97, 0x2B97}, {0x2BB8, 0x2BD1}, {0x2BD3, 0x2BEB}, {0x2BF0, 0x2BFF},
+};
+
 inline bool isUprightInVertical(uint32_t cp) {
   if (cp >= 0x4E00 && cp <= 0x9FFF) return true;  // CJK Unified Ideographs
   if (cp >= 0x3400 && cp <= 0x4DBF) return true;  // CJK Extension A
@@ -185,6 +205,17 @@ inline bool isUprightInVertical(uint32_t cp) {
   // edit. Added 2026-08-23 for 𠮟 U+20B9F; without this an ideograph up here
   // fell through to the sideways/rotated path meant for Latin runs.
   if (cp >= 0x20000 && cp <= 0x3FFFF) return true;
+  // Symbols. Whatever is not listed here is vo=R and keeps the rotated path, arrows
+  // included: turning → into ↓ is not a changed meaning but the same one carried into a
+  // column that reads downward. Circled numbers, Roman numerals, ℃ ℓ № and the geometric
+  // and miscellaneous symbols are the upright side, and were drawn lying down until this
+  // table went in.
+  if (cp >= 0x2000 && cp <= 0x2BFF) {
+    for (const auto& range : UPRIGHT_SYMBOL_RANGES) {
+      if (cp < range.first) return false;
+      if (cp <= range.last) return true;
+    }
+  }
   return false;
 }
 
