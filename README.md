@@ -28,6 +28,10 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
   - ~~CSSが巨大すぎてメモリクラッシュを起こす件についての対応をやる必要があるのかという問題~~
   - ~~[Setings]-[Reader]-[Text Settings]にある[Style]にて「Embedded Style」を「OFF」にするとCSSを使わないため回避できる~~
   - こんな小さな端末で著者がやりたいという複雑な表現をやって期待通りの表示になるのか？
+- 組版やレイアウトについての出典として下記を採用している
+  - 日本語組版処理の要件(JLREQ) https://www.w3.org/TR/jlreq/
+    - 特に JLREQ 3.3.2 ルビの付け方
+  - Unicode Vertical Text Layout(UAX #50) https://www.unicode.org/reports/tr50/
 - 開発に際して下記URLをClaude codeに読み込ませている(実装内容まとめで使う略語)
   - 本家 https://github.com/crosspoint-reader/crosspoint-reader
   - JP版 https://github.com/zrn-ns/crosspoint-jp
