@@ -480,6 +480,18 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
       if (advance < cellWidth) {
         drawX += (cellWidth - advance) / 2;
       }
+    } else if (cp < 0x3000) {
+      // Upright symbols that are not CJK are drawn from proportional glyphs: § © ® ± ¼ ×
+      // are a fraction of the em cell the column reserved, and left at the cell's left
+      // edge they read as leaning off the column axis -- ® showed up left of centre on the
+      // device. Same centring tate-chu-yoko gets above, for the same reason. Gated on the
+      // codepoint rather than measured unconditionally so a page of kanji, where the
+      // advance always equals the cell, does not pay a metric lookup per character on
+      // every one of the ~20 passes an antialiased page makes.
+      const int advance = renderer.getTextAdvanceX(fontId, word, wordStyle(i));
+      if (advance > 0 && advance < cellWidth) {
+        drawX += (cellWidth - advance) / 2;
+      }
     }
 
     renderer.drawText(fontId, drawX, drawY, word, true, wordStyle(i));
