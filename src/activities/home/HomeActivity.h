@@ -54,7 +54,9 @@ class HomeActivity final : public Activity {
     if (hasOpdsUrl && idx == i++) return HomeMenuItem::OPDS_BROWSER;
     if (idx == i++) return HomeMenuItem::FILE_TRANSFER;
     if (idx == i++) return HomeMenuItem::SETTINGS_MENU;
+#ifdef ENABLE_CLOCK_MODE
     if (idx == i) return HomeMenuItem::CLOCK_MODE;
+#endif
     return HomeMenuItem::NONE;
   }
   void onSelectBook(const std::string& path);

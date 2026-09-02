@@ -23,7 +23,11 @@
 #include "fontIds.h"
 
 int HomeActivity::getMenuItemCount() const {
+#ifdef ENABLE_CLOCK_MODE
   int count = 5;  // File Browser, Recents, File transfer, Settings, Clock mode
+#else
+  int count = 4;  // File Browser, Recents, File transfer, Settings
+#endif
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -311,8 +315,12 @@ void HomeActivity::render(RenderLock&&) {
 
   // Build menu items dynamically
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_MENU_RECENT_BOOKS), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE), tr(STR_START_CLOCK_MODE)};
-  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings, Recent};
+                                        tr(STR_SETTINGS_TITLE)};
+  std::vector<UIIcon> menuIcons = {Folder, Recent, Transfer, Settings};
+#ifdef ENABLE_CLOCK_MODE
+  menuItems.push_back(tr(STR_START_CLOCK_MODE));
+  menuIcons.push_back(Recent);
+#endif
 
   if (hasOpdsServers) {
     menuItems.insert(menuItems.begin() + 2, tr(STR_OPDS_BROWSER));
