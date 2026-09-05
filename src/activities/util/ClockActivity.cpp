@@ -10,6 +10,10 @@
 #include "CrossPointSettings.h"
 #include "util/ClockFace.h"
 
+#ifdef DEBUG_RENDER_WATCHDOG
+#include <esp_task_wdt.h>
+#endif
+
 namespace {
 
 // Where the drain measurement lands. Separate from /input-diag.txt: that file is
@@ -34,6 +38,15 @@ constexpr uint8_t CLEAN_REFRESH_MINUTES = 30;
 void ClockActivity::onEnter() {
   Activity::onEnter();
 
+#ifdef DEBUG_RENDER_WATCHDOG
+  // The render task is watched for the whole session (ActivityManager); this adds the main
+  // loop, and only while this screen is up. Both hangs seen here left Back dead, which is the
+  // main loop's job -- a watchdog on the render task alone would not have fired. Scoped to the
+  // clock because other screens block the main loop on purpose (web server, OPDS, font
+  // download), where a 30 s timeout would panic on healthy behaviour.
+  esp_task_wdt_add(nullptr);
+#endif
+
   startMs = millis();
   lastDrawMs = startMs;
   lastPollMs = startMs;
@@ -49,6 +62,10 @@ void ClockActivity::onEnter() {
 }
 
 void ClockActivity::onExit() {
+#ifdef DEBUG_RENDER_WATCHDOG
+  esp_task_wdt_delete(nullptr);
+#endif
+
   writeBatteryLog(/*finished=*/true);
 
   // ClockFace::render leaves the renderer in the panel's native orientation.
@@ -59,6 +76,11 @@ void ClockActivity::onExit() {
 }
 
 void ClockActivity::loop() {
+#ifdef DEBUG_RENDER_WATCHDOG
+  // Before the early returns below, so the feed covers every path through the loop.
+  esp_task_wdt_reset();
+#endif
+
   // No mappedInput.update() here. The main loop polls once per iteration just
   // before calling this, and a second poll re-samples the pins and clears the
   // edge it set -- the release would be gone before wasReleased() is asked.
@@ -68,6 +90,33 @@ void ClockActivity::loop() {
     finish();
     return;
   }
+
+#ifdef DEBUG_RENDER_WATCHDOG
+  // Self-test for the recovery path, not a test of the clock. Both real hangs left the
+  // device dead for a day, and the watchdog that was supposed to prevent that has never
+  // once been seen to fire -- on 2026-08-27 the flag was passed to a build whose tree did
+  // not implement it, and it failed silently. These two triggers make the failure happen on
+  // purpose, so "the device reboots within 30 s and names the stuck task" is something
+  // observed rather than assumed. One trigger per watched task, because they are subscribed
+  // in different places and either subscription could be the one that is missing.
+  // Both front buttons other than Back, and both side buttons, so the tester does not have to
+  // know their own remapping to run this. Right is left out: on the X3 it shares GPIO3 with the
+  // power button, and a trigger that fires on power-off would be indistinguishable from a hang.
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
+      mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    LOG_DBG("CLK", "forced hang: main task");
+    while (true) {
+      delay(1000);  // yields, so only the watchdog feed stops -- the CPU is not spun
+    }
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Up) ||
+      mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+    LOG_DBG("CLK", "forced hang: render task requested");
+    forceRenderHang = true;
+    requestUpdate();
+    return;
+  }
+#endif
 
   const unsigned long now = millis();
   if (now - lastPollMs < MINUTE_POLL_MS) return;
@@ -80,6 +129,10 @@ void ClockActivity::loop() {
     // panel takes a second or so to settle, so the new digits land just after
     // the boundary rather than exactly on it.
     if (current.minute != renderedMinute) {
+      // Breadcrumbs, not tracing: the log ring lives in RTC memory and survives a panic
+      // reboot, so the last lines before a hang say which half of the minute cycle it was
+      // in. One line per minute keeps a few cycles of history in the 16-line ring.
+      LOG_DBG("CLK", "minute turn -> %02u:%02u", current.hour, current.minute);
       renderedMinute = current.minute;
       lastDrawMs = now;
       requestUpdate();
@@ -94,6 +147,15 @@ void ClockActivity::loop() {
 }
 
 void ClockActivity::render(RenderLock&&) {
+#ifdef DEBUG_RENDER_WATCHDOG
+  if (forceRenderHang) {
+    LOG_DBG("CLK", "forced hang: render task");
+    while (true) {
+      delay(1000);
+    }
+  }
+#endif
+
   Rtc::DateTime now;
   const bool haveTime = halClock.getLocalDateTime(now, SETTINGS.clockUtcOffsetQ);
   if (haveTime) {
@@ -114,6 +176,7 @@ void ClockActivity::render(RenderLock&&) {
     paintsSinceClean = 0;
   }
 
+  LOG_DBG("CLK", "paint %02u:%02u %s%s", now.hour, now.minute, clean ? "clean" : "fast", haveTime ? "" : " (no RTC)");
   ClockFace::render(renderer, haveTime ? &now : nullptr, clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH,
                     SETTINGS.clockFormat == 1);
 }

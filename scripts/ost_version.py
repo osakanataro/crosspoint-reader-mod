@@ -113,6 +113,29 @@ def has_input_diag(env):
     return False
 
 
+def write_build_id_header(project_dir, build_id):
+    """Publish the build number to the firmware through a generated header.
+
+    A define would reach every translation unit and make each build a full
+    rebuild; only the two files that write diagnostics need the string, so it
+    goes in a header that only they include. It lives under lib/hal because
+    that path is reachable from both lib and src, which src/util is not.
+    """
+    path = os.path.join(project_dir, 'lib', 'hal', 'ostBuildId.generated.h')
+    body = f'#pragma once\n#define OST_BUILD_ID "{build_id}"\n'
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            if f.read() == body:
+                return
+    except OSError:
+        pass
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(body)
+    except OSError as e:
+        warn(f'could not write {path} ({e}); the build id will be stale')
+
+
 def copy_to_dist(project_dir, version, suffix, source):
     dist = os.path.join(project_dir, DIST_DIR)
     target = os.path.join(dist, f'crosspoint-OST-{version}{suffix}.bin')
@@ -128,6 +151,7 @@ def main(env):
     project_dir = env.subst('$PROJECT_DIR')
     version = next_version(project_dir)
     diag_at_pre = has_input_diag(env)
+    write_build_id_header(project_dir, f'{version}{"-diag" if diag_at_pre else ""}')
 
     def post_action(target, source, env):
         # Re-check against the fully folded environment and keep whichever pass

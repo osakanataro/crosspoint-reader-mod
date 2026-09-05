@@ -9,6 +9,11 @@
 #include "esp_private/esp_cpu_internal.h"
 #include "esp_private/esp_system_attr.h"
 #include "esp_private/panic_internal.h"
+#include "esp_task_wdt.h"
+// Generated per build by scripts/ost_version.py. The version macro names the commit, which
+// cannot tell two builds apart while the tree carries uncommitted changes -- and a crash
+// report read against the wrong firmware is worse than no report.
+#include "ostBuildId.generated.h"
 
 #define MAX_PANIC_STACK_DEPTH 32
 #define PANIC_CAPTURE_MAGIC 0x50414E49u
@@ -36,6 +41,40 @@ void IRAM_ATTR __wrap_panic_abort(const char* message) {
   panicCaptureMarker = PANIC_CAPTURE_MAGIC;
 
   __real_panic_abort(message);
+}
+
+// A task watchdog timeout never reaches __wrap_panic_abort: task_wdt_timeout_abort() sets
+// g_panic_abort directly instead of calling panic_abort(), so --wrap has nothing to intercept
+// and panicMessage stays empty. The backtrace wrapper below still fires, which is why a
+// watchdog reset shows a stack but no reason -- the shape seen on 2026-08-20.
+//
+// This is the weak hook the TWDT ISR calls before aborting. esp_task_wdt_print_triggered_tasks
+// walks the subscriber list and hands each name to the callback, so the reason line ends up
+// naming the task that stopped feeding -- the one thing the stack alone cannot say, since the
+// backtrace belongs to whatever task the timer interrupt happened to land on.
+struct WdtReasonSink {
+  int len;
+};
+
+static void IRAM_ATTR appendWdtReason(void* opaque, const char* msg) {
+  auto* sink = static_cast<WdtReasonSink*>(opaque);
+  if (!msg) return;
+  for (int i = 0; msg[i] && sink->len < (int)sizeof(panicMessage) - 1; i++) {
+    // The handler is fed several fragments including newlines; keep it to one line.
+    panicMessage[sink->len++] = (msg[i] == '\n' || msg[i] == '\r') ? ' ' : msg[i];
+  }
+  panicMessage[sink->len] = '\0';
+}
+
+static DRAM_ATTR const char WDT_REASON_PREFIX[] = "Task watchdog: ";
+void IRAM_ATTR esp_task_wdt_isr_user_handler(void) {
+  WdtReasonSink sink{0};
+  for (; WDT_REASON_PREFIX[sink.len] && sink.len < (int)sizeof(panicMessage) - 1; sink.len++) {
+    panicMessage[sink.len] = WDT_REASON_PREFIX[sink.len];
+  }
+  panicMessage[sink.len] = '\0';
+  esp_task_wdt_print_triggered_tasks(appendWdtReason, &sink, nullptr);
+  panicCaptureMarker = PANIC_CAPTURE_MAGIC;
 }
 
 void IRAM_ATTR __wrap_panic_print_backtrace(const void* frame, int core) {
@@ -134,7 +173,8 @@ std::string getPanicInfo(bool full) {
   } else {
     std::string info;
 
-    info += "CrossPoint version: " CROSSPOINT_VERSION;
+    info += "OST build: " OST_BUILD_ID;
+    info += "\nCrossPoint version: " CROSSPOINT_VERSION;
     info += "\n\nPanic reason: " + std::string(panicMessage);
     info += "\n\nLast logs:\n" + getLastLogs();
     info += "\n\nStack memory:\n";

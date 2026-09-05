@@ -11,6 +11,9 @@
 #include <string>
 
 #include "activities/RenderLock.h"
+// Generated per build by scripts/ost_version.py. Included only here and in HalSystem, so a new
+// build number recompiles those two files rather than the whole tree.
+#include <ostBuildId.generated.h>
 
 namespace {
 constexpr char DIAG_PATH[] = "/input-diag.txt";
@@ -442,6 +445,11 @@ void InputDiag::flush(const bool inputActive) {
 
   int len = snprintf(
       reportBuf, sizeof(reportBuf),
+      // First line, because every question asked of this file starts with which build wrote it.
+      // A diagnostic read against the wrong firmware costs more than the run it came from, and
+      // the commit alone cannot tell two builds apart while the tree has uncommitted changes.
+      "build=" OST_BUILD_ID "  version=" CROSSPOINT_VERSION
+      "\n"
       "uptime_ms=%lu\n"
       "cpu_mhz_now=%u\n"
       "cpu_mhz_min=%u\n"

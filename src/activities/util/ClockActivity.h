@@ -61,4 +61,10 @@ class ClockActivity final : public Activity {
   unsigned long startMs = 0;
   uint16_t startPercent = 0;
   uint16_t startMillivolts = 0;
+
+#ifdef DEBUG_RENDER_WATCHDOG
+  // Set by the Up trigger, read by render(): the hang has to happen inside the
+  // render task, which only runs when it is asked to paint.
+  bool forceRenderHang = false;
+#endif
 };
