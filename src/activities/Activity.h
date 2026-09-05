@@ -50,6 +50,13 @@ class Activity {
   // this to false and idles at the low-power frequency between repaints.
   virtual bool needsFullSpeed() { return preventAutoSleep(); }
   virtual bool isReaderActivity() const { return false; }
+  // True for a screen whose renders should be watched by the task watchdog in every build, not
+  // only under DEBUG_RENDER_WATCHDOG. ActivityManager::renderTaskLoop subscribes the render task
+  // around each render of such a screen, so a render that never returns reboots the device
+  // (30 s, see the constructor) instead of leaving it dead until the battery is flat. Only for
+  // screens whose renders are known to be short: a first reader render can legitimately run for
+  // seconds on SD font cache generation and would be shot by this.
+  virtual bool watchesRender() const { return false; }
   // True for the reading surfaces night mode inverts (EPUB/TXT/XTC). Resolved
   // per render by ActivityManager, so menus, overlays, and every other screen
   // keep normal polarity without managing the display flag themselves.

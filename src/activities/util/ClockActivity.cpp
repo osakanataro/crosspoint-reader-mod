@@ -4,15 +4,12 @@
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <esp_task_wdt.h>
 
 #include <cstdio>
 
 #include "CrossPointSettings.h"
 #include "util/ClockFace.h"
-
-#ifdef DEBUG_RENDER_WATCHDOG
-#include <esp_task_wdt.h>
-#endif
 
 namespace {
 
@@ -38,14 +35,13 @@ constexpr uint8_t CLEAN_REFRESH_MINUTES = 30;
 void ClockActivity::onEnter() {
   Activity::onEnter();
 
-#ifdef DEBUG_RENDER_WATCHDOG
-  // The render task is watched for the whole session (ActivityManager); this adds the main
-  // loop, and only while this screen is up. Both hangs seen here left Back dead, which is the
-  // main loop's job -- a watchdog on the render task alone would not have fired. Scoped to the
-  // clock because other screens block the main loop on purpose (web server, OPDS, font
-  // download), where a 30 s timeout would panic on healthy behaviour.
+  // Watch the main loop while this screen is up, in every build. The renders are watched by
+  // ActivityManager (watchesRender). Both hangs seen here left Back dead, which is the main
+  // loop's job -- a watchdog on the render task alone would not have fired. Scoped to the clock
+  // because other screens block the main loop on purpose (web server, OPDS, font download),
+  // where a 30 s timeout would panic on healthy behaviour. A false trigger here costs a reboot
+  // and a crash report; the hang it guards against costs the owner a day.
   esp_task_wdt_add(nullptr);
-#endif
 
   startMs = millis();
   lastDrawMs = startMs;
@@ -62,9 +58,7 @@ void ClockActivity::onEnter() {
 }
 
 void ClockActivity::onExit() {
-#ifdef DEBUG_RENDER_WATCHDOG
   esp_task_wdt_delete(nullptr);
-#endif
 
   writeBatteryLog(/*finished=*/true);
 
@@ -76,10 +70,8 @@ void ClockActivity::onExit() {
 }
 
 void ClockActivity::loop() {
-#ifdef DEBUG_RENDER_WATCHDOG
   // Before the early returns below, so the feed covers every path through the loop.
   esp_task_wdt_reset();
-#endif
 
   // No mappedInput.update() here. The main loop polls once per iteration just
   // before calling this, and a second poll re-samples the pins and clears the
@@ -91,8 +83,9 @@ void ClockActivity::loop() {
     return;
   }
 
-#ifdef DEBUG_RENDER_WATCHDOG
-  // Self-test for the recovery path, not a test of the clock. Both real hangs left the
+#if defined(DEBUG_RENDER_WATCHDOG) || defined(CLOCK_HANG_TRIGGERS)
+  // Self-test for the recovery path, not a test of the clock. CLOCK_HANG_TRIGGERS exists so
+  // the shipped watch (no DEBUG_RENDER_WATCHDOG) can be exercised on the device too. Both real hangs left the
   // device dead for a day, and the watchdog that was supposed to prevent that has never
   // once been seen to fire -- on 2026-08-27 the flag was passed to a build whose tree did
   // not implement it, and it failed silently. These two triggers make the failure happen on
@@ -147,7 +140,7 @@ void ClockActivity::loop() {
 }
 
 void ClockActivity::render(RenderLock&&) {
-#ifdef DEBUG_RENDER_WATCHDOG
+#if defined(DEBUG_RENDER_WATCHDOG) || defined(CLOCK_HANG_TRIGGERS)
   if (forceRenderHang) {
     LOG_DBG("CLK", "forced hang: render task");
     while (true) {

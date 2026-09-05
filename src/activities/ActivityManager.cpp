@@ -5,12 +5,9 @@
 #include <HalDisplay.h>
 #include <HalPowerManager.h>
 #include <Memory.h>
+#include <esp_task_wdt.h>
 
 #include <algorithm>
-
-#ifdef DEBUG_RENDER_WATCHDOG
-#include <esp_task_wdt.h>
-#endif
 
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
@@ -48,26 +45,28 @@ void ActivityManager::begin() {
   );
   assert(renderTaskHandle != nullptr && "Failed to create render task");
 
-#ifdef DEBUG_RENDER_WATCHDOG
-  // Development safety net, off in every shipped build.
-  //
   // A render that never returns leaves the device with no way back. The render task is
   // subscribed to no watchdog and the idle task is not checked either (sdkconfig.default:
   // CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0 is not set), while powering off is decided in
   // loop() -- the task the stuck render is starving. Nothing on the outside of the case
   // can interrupt it: the reset button is under the glued-down screen. The only remedy is
-  // to flatten the battery, which takes a day or more, and that cost is paid by every
-  // experiment that goes wrong.
+  // to flatten the battery, which takes a day or more.
   //
-  // Watching the render turns that into a reboot. The timeout is deliberately loose: a
-  // first render can legitimately take seconds (SD font cache generation, cover decode),
-  // and this only has to tell "slow" apart from "never".
+  // Watching a task turns that into a reboot, and the panic path leaves the stuck task's
+  // name in crash_report.txt (HalSystem: esp_task_wdt_isr_user_handler). Who is watched
+  // depends on the build: under DEBUG_RENDER_WATCHDOG every render is (renderTaskLoop);
+  // otherwise only the renders of screens that ask for it (Activity::watchesRender -- the
+  // clock, whose two hangs cost a day each) plus whatever those screens subscribe themselves.
+  // The timeout is set here for both cases and is deliberately loose: a first render can
+  // legitimately take seconds (SD font cache generation, cover decode), and this only has to
+  // tell "slow" apart from "never". The IDF default is 5 s, which a clock clean refresh
+  // (3.2 s) would sit uncomfortably close to. No task is subscribed by this call alone, so
+  // a build where nothing asks to be watched behaves exactly as before.
   esp_task_wdt_config_t wdtConfig = {};
   wdtConfig.timeout_ms = 30000;
   wdtConfig.idle_core_mask = 0;
   wdtConfig.trigger_panic = true;
   esp_task_wdt_reconfigure(&wdtConfig);
-#endif
 }
 
 void ActivityManager::renderTaskTrampoline(void* param) {
@@ -89,6 +88,16 @@ void ActivityManager::renderTaskLoop() {
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
     if (currentActivity) {
+      // Per-screen watch for builds without DEBUG_RENDER_WATCHDOG (there the subscription above
+      // already covers this). Decided while the lock is held, so currentActivity is stable; the
+      // answer is kept on the stack because render() may release the lock and the main task may
+      // then destroy the activity. Subscribed before the power lock on purpose: the clock's
+      // deadlock (2026-09-02) was inside HalPowerManager::Lock, not inside render().
+      bool watchedForScreen = false;
+#ifndef DEBUG_RENDER_WATCHDOG
+      watchedForScreen = currentActivity->watchesRender();
+      if (watchedForScreen) esp_task_wdt_add(nullptr);
+#endif
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
 #ifdef INPUT_DIAG
       // Snapshot the name onto the stack before rendering. render() receives the lock by value and
@@ -125,6 +134,7 @@ void ActivityManager::renderTaskLoop() {
         InputDiag::captureLogs(reason);
       }
 #endif
+      if (watchedForScreen) esp_task_wdt_delete(nullptr);
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;

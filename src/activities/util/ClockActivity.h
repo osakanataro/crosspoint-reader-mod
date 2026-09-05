@@ -29,6 +29,9 @@ class ClockActivity final : public Activity {
   // (full speed for anything holding off auto-sleep) exists for activities doing
   // real work between frames, which this one is not.
   bool needsFullSpeed() override { return false; }
+  // Renders here are short (fast update ~0.45 s, clean refresh ~3.2 s) and happen without any
+  // user input, which is what made this the one screen that could hang unattended.
+  bool watchesRender() const override { return true; }
 
  private:
   void writeBatteryLog(bool finished) const;
@@ -62,7 +65,7 @@ class ClockActivity final : public Activity {
   uint16_t startPercent = 0;
   uint16_t startMillivolts = 0;
 
-#ifdef DEBUG_RENDER_WATCHDOG
+#if defined(DEBUG_RENDER_WATCHDOG) || defined(CLOCK_HANG_TRIGGERS)
   // Set by the Up trigger, read by render(): the hang has to happen inside the
   // render task, which only runs when it is asked to paint.
   bool forceRenderHang = false;
