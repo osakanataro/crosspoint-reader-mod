@@ -17,14 +17,6 @@
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
-// CLOCK_MODE only reaches the home menu when ENABLE_CLOCK_MODE is defined. The screen has hung
-// the device twice (2026-08-27, 2026-09-02), and a hang there costs the owner a day: the reset
-// button is under the glued-down screen, so the way back is to flatten the battery. It is the
-// only screen that overrides needsFullSpeed() to false, which makes it the only one whose renders
-// are not preceded by user input -- so the render task raises the CPU frequency through
-// HalPowerManager::Lock while the main loop is lowering it every ~50 ms, and setCpuFrequencyMhz
-// has no mutual exclusion. That is a suspect, not a confirmed cause. ClockActivity, ClockFace and
-// goToClock() stay compiled so the investigation can turn the flag back on in platformio.local.ini.
 enum class HomeMenuItem { NONE, FILE_BROWSER, RECENTS, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU, CLOCK_MODE };
 
 /**
