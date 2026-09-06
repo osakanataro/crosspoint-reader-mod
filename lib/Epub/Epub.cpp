@@ -273,6 +273,14 @@ CssParser::ParseResult Epub::parseCssFilesImpl(const CssParser::CacheStatus exis
   constexpr size_t MAX_CSS_FILE_SIZE = 128 * 1024;  // 128KB
   // Minimum heap required before attempting CSS parsing
   constexpr size_t MIN_HEAP_FOR_CSS_PARSING = 64 * 1024;  // 64KB
+  // A chapter-scoped pass registers a handful of rules into the store's initial pools (1KB index,
+  // 4KB selector text, 16 styles) and streams the file through a 512-byte buffer, so it needs
+  // nothing like the whole-template figure. It also runs mid-book, where 64KB free is the
+  // exception: on 2026090608 the threshold skipped every stylesheet in some chapter builds and
+  // not in others, and the same illustration came out full-height or thumbnail-sized depending
+  // on which. The unfiltered pass keeps the conservative bound.
+  constexpr size_t MIN_HEAP_FOR_FILTERED_CSS_PARSING = 24 * 1024;
+  const size_t minHeapForParse = usage != nullptr ? MIN_HEAP_FOR_FILTERED_CSS_PARSING : MIN_HEAP_FOR_CSS_PARSING;
 
   if (cssFiles.empty()) {
     LOG_DBG("EBP", "No CSS files to parse, but CssParser created for inline styles");
@@ -350,11 +358,11 @@ CssParser::ParseResult Epub::parseCssFilesImpl(const CssParser::CacheStatus exis
 
     // Check heap before parsing - CSS parsing allocates heavily
     const uint32_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
+    if (freeHeap < minHeapForParse) {
       LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
-              MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+              minHeapForParse, cssPath.c_str());
       CSS_DIAG("css skip#%u heap free=%u need=%u", static_cast<unsigned>(cssIndex), freeHeap,
-               static_cast<unsigned>(MIN_HEAP_FOR_CSS_PARSING));
+               static_cast<unsigned>(minHeapForParse));
       if (parseResult == CssParser::ParseResult::Complete) {
         parseResult = CssParser::ParseResult::Partial;
       }

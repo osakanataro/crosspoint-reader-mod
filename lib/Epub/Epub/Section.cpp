@@ -60,7 +60,9 @@ namespace {
 //      longer drops class styles under low heap. (Old tree: v40-v49 on the 1.6.0rc numbering.)
 //      46 leaves upstream's own 40-45 intact and sits above the old tree's 49-free range, so a
 //      cache written by either lineage is rebuilt rather than misread.
-constexpr uint8_t SECTION_FILE_VERSION = 46;
+// v47: Chapter builds re-parse the stylesheets when the CSS cache is partial, so sections
+//      laid out by 2026090606 (image classes missing, illustrations unsized) are rebuilt.
+constexpr uint8_t SECTION_FILE_VERSION = 47;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -437,6 +439,16 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
         Storage.remove(binTmpPath().c_str());
         if (!ctx->reusedHtml) Storage.remove(ctx->tmpHtmlPath.c_str());
         return false;
+      }
+      if (cacheResult == CssParser::CacheLoadResult::Complete && scanned && ctx->cssParser->lastCacheLoadPartial()) {
+        // Upstream keeps a rule set truncated by its store limits as a partial cache so a book
+        // with a huge template still opens. For a chapter build that is not enough: the rules
+        // this chapter needs may be exactly the ones past the cut (a KADOKAWA template's image
+        // classes sit late in the file, and 2026090606 placed illustrations unsized because of
+        // it). Re-read the stylesheets with the chapter filter instead, as the old tree did
+        // whenever the unfiltered parse had not completed.
+        LOG_DBG("SCT", "CSS cache is partial; re-parsing the stylesheets for this chapter only");
+        epub->parseCssFilesFiltered(usage);
       }
       if (cacheResult == CssParser::CacheLoadResult::Invalid) {
         LOG_ERR("SCT", "Failed to load CSS from cache");

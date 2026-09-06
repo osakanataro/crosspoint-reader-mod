@@ -1265,6 +1265,7 @@ CssParser::CacheLoadResult CssParser::loadFromCache(const CssSelectorUsage* usag
   }
 
   const bool partial = (flags & CSS_CACHE_FLAG_PARTIAL) != 0;
+  lastCacheLoadPartial_ = partial;
   LOG_DBG("CSS", "Loaded %u of %u rules from %s cache%s", entryCount_, ruleCount, partial ? "partial" : "complete",
           usage != nullptr ? " (usage-filtered)" : "");
   return CacheLoadResult::Complete;

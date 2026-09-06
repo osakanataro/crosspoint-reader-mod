@@ -143,6 +143,11 @@ class CssParser {
   // Epub::parseCssFilesFiltered for templates too large to register whole.
   void setUsageFilter(const CssSelectorUsage* usage) { usageFilter_ = usage; }
 
+  // True when the last successful loadFromCache() read a cache written from a truncated parse
+  // (store limit or low heap). Such a set is fine for opening the book but not for building a
+  // chapter whose rules may sit past the cut; Section re-parses with the chapter filter then.
+  bool lastCacheLoadPartial() const { return lastCacheLoadPartial_; }
+
  private:
   enum class RuleInsertResult : uint8_t {
     Inserted,
@@ -176,6 +181,7 @@ class CssParser {
   uint16_t styleCount_ = 0;
   uint16_t styleCapacity_ = 0;
   bool ruleGrowthStopped_ = false;
+  bool lastCacheLoadPartial_ = false;
   const CssSelectorUsage* usageFilter_ = nullptr;
 
   std::string cachePath;

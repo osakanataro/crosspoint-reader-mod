@@ -1184,8 +1184,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // font-weight set the same way does not -- so the split is somewhere between the
   // rule store and this struct, and only the resolved flags can say which side.
   // Spans only: the boilerplate p/div/body classes would fill the 48-entry ring
-  // before the decorated runs got their turn.
-  if (!classAttr.empty() && strcmp(name, "span") == 0) {
+  // before the decorated runs got their turn. And only spans whose class resolved to
+  // something: a KADOKAWA/Kobo body wraps every sentence in a property-less span, and each
+  // line here is an SD-card rewrite of the ring file -- 39 of them per chapter pushed the
+  // CSS and image lines out and added seconds to the build.
+  if (!classAttr.empty() && strcmp(name, "span") == 0 &&
+      (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
+       cssStyle.hasTextEmphasis())) {
     IMG_DIAG("sty %.6s.%.14s fw=%d/%d fs=%d td=%d/%d em=%d/%d", name, classAttr.c_str(),
              cssStyle.hasFontWeight() ? 1 : 0, static_cast<int>(cssStyle.fontWeight), cssStyle.hasFontStyle() ? 1 : 0,
              cssStyle.hasTextDecoration() ? 1 : 0, static_cast<int>(cssStyle.textDecoration),
