@@ -98,7 +98,7 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Thirty-two chapters, in guide/body pairs:
+anything else. Forty-two chapters, in guide/body pairs:
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -280,6 +280,55 @@ anything else. Thirty-two chapters, in guide/body pairs:
      coordinates and one can be right while the other is not. All ten rows
      pass except italic, which is a font limitation rather than a fault.
 
+ 17  Kobo (KEPUB) position spans (2026-09-06). The corpus was re-fetched
+     and the re-survey covered 1,941 unique commercial books (878 reflowable,
+     1,063 fixed-layout; 2,256 files before identifier dedupe). Every
+     reflowable one is Kobo's KEPUB form: each text run is wrapped in
+     <span class="koboSpan" id="kobo.N.M">, ruby bases and rt contents each
+     get their own span, and so do gaiji images inside ruby. About 24% of the
+     1.6 million ruby elements carry one <rt> per base character (528 books);
+     21 books use <rp> (23,001 sites) and the parentheses inside rp are span-
+     wrapped too -- which the XHTML schema forbids, so epubcheck flags this
+     chapter's body, deliberately, the way it flags tests 5 and 6. The body
+     pairs each form with the same text written without spans: plain run
+     split mid-word, ruby, per-character ruby, rp, tcy/emphasis/bold class
+     spans wrapping a koboSpan. Pass condition: the second paragraph of each
+     pair looks identical to the first.
+ 18  text-orientation classes (2026-09-06). The EBPAJ upright / sideways
+     classes are used on single characters in 147 / 226 of the 878 books
+     (3,605 / 451 sites), and the shipped CSS writes them with the -webkit-
+     and -epub- prefixes ONLY -- no unprefixed text-orientation -- so the
+     suite's CSS does the same. This tree does not read the property yet, so
+     the chapter is expected to fail; it records which glyphs come out which
+     way (a forced-upright arrow keeps its meaning, a forced-sideways
+     fullwidth ！ rotates).
+ 19  EBPAJ indent classes (2026-09-06). 421 of 878 books put text-indent
+     classes on paragraphs and 705 put text-align classes; the common
+     negative form is the hanging indent pair text-indent:-Nem;
+     padding-top:Nem (over 10,000 sites), plus indent-1em (10,624) and the
+     margin-based start-1em (3,845). Vertical text-indent and text-align are
+     a known gap in this tree, so this too documents rather than passes:
+     six long paragraphs whose first- and second-line starts are compared
+     against an unstyled reference.
+ 20  Inline font-size (2026-09-06). 641 of 878 books change the size inside
+     a paragraph with span classes (90% 3,864 sites, 110% 2,087, 0.7em
+     1,002, 1.5em ...). Small and large runs, ruby on a resized base, and a
+     70/90/100/110/150% ladder; the pass conditions are size difference,
+     column centring, and ruby staying with its base.
+ 21  Frequency-ranked symbols (2026-09-06). From the codepoint count of the
+     878 reflowable books (rt text excluded): U+2500 ─ in 637 books /
+     317,106 uses as the dash 「──」 (UAX#50 R, must run vertical), ― ‐,
+     the 〝〟 quotation pair (6,223 paragraphs start with 〝; U+301D/301F are
+     Tr and want kinsoku treatment this tree's tables lack), “”, the upright
+     set ⁉ ‼ ♡ ♥ ※ ● ◆ ① Ⅱ, coverage of Ⓒ U+24B8 (56 books, colophons; the
+     BIZ UD source fonts lack it, Noto has it) and 逬 U+902C (4 books, same),
+     an IVS selector U+E0100 after 葛 (1 book; only VS15/16 are skipped
+     today, so a box is expected), and the digit-run shapes by frequency
+     (ASCII 2-digit 52,003 → tcy; 3-4 digit 11,701 → sideways; fullwidth
+     4-digit 14,991 → upright each). Guides of tests 8 and 9 gained one
+     sentence each with the re-survey counts (𠮟 in 30 books; 溺 11, 煉 3,
+     ⦿ 1,010 paragraph heads).
+
 Tests 11-14 and 16 came from closed PRs and issues in the sibling forks rather
 than from a fault seen here: they are cases those projects hit on real books, so
 this tree's behaviour under them is simply unknown until the book is run.
@@ -382,34 +431,70 @@ than the one commercial books actually ship.
   Ruby on an image word is the gap the issue's own author records as unhandled.
   Chapter 5 carries one so the answer is recorded rather than assumed.
 
+v11 (2026-09-06) follows the corpus re-fetch (1,941 unique books, 878
+reflowable; see test 17 of the suite for the KEPUB finding). Guides in
+chapters 7 and 9 now carry the re-survey numbers: max-* sizing in 757 of 878
+reflowable books (fixed width 8, width attribute 2, style attribute 2), svg-
+wrapped images in 408 of 878 (8,071 sites; every page of every fixed-layout
+comic), <img> illustrations in 846 books (34,008 sites), and 209,851 image
+entries with not one STORED. Three new chapters cover what the re-survey added:
+
+  10  em sizes other than 1em. The EBPAJ template's width-2em (833 sites),
+      width-1em50 (74), width-6em (62), height-3em (82), height-4em (87), on
+      128x128 (2,112 of the 2,539 gaiji images), 128x64, 64x128 and 200x108
+      sources. In vertical text width crosses columns, so a 2em-wide image
+      cannot share a column with text; the pass condition is "sized as
+      specified and not overlapping", with a dedicated column accepted.
+  11  Illustration pages as their own spine items: 9,841 such pages sit in
+      vrtl files and 6,355 in hltr files (352 books have image-only hltr
+      pages, 452 have hltr text pages such as the colophon). Four files
+      follow the guide -- hltr+img, hltr+svg, vrtl+img, hltr+text -- and the
+      checks are display, spine order (A→B→C→D→chapter 12) and, for the
+      text page, that the known "horizontal parts render vertical"
+      limitation is all that happens.
+  12  KEPUB spans around images: a gaiji inside a koboSpan, the real
+      <ruby><span><img/></span><rt><span>..</span></rt></ruby> form (912
+      sites), per-character ruby with spans, and a sentence cut into three
+      spans. Pass condition: same look as chapters 5 and 8.
+
 image-size-test.epub
 --------------------
 
 Image pixel dimensions taken from a survey of the commercial EPUBs on hand --
-954 books, 107,826 images -- rather than from round numbers someone thought
-plausible. Its own book, not folded into vertical-image-test.epub, because a
+1,941 books, 209,273 images as of 2026-09-06 (the first edition, 2026-09-03,
+had 954 books and 107,826 images) -- rather than from round numbers someone
+thought plausible. Its own book, not folded into vertical-image-test.epub, because a
 page holding a 5.87 Mpx picture has no business sitting in a suite that is
 supposed to stay openable when image handling breaks.
 
 What the survey found, and what the book reproduces:
 
-                          median        top 10%       largest
-  reflowable novels       844x1200      1120x1600     1562x2500
-  comics, current         1350x1920     1441x2048     2868x2048
-  comics, early           720x1024      844x1200      2048x1589
-  large format            1452x2064     1748x2480     1748x2480
+                       books  images    median     top 10%    longest    most px
+  reflowable novels      878   32,012  1135x1600  1440x2048  3360x1187  2868x2048
+  comics, current        895  147,605  1350x1920  1441x2048  2700x1410  1748x2480
+  comics, early          157   28,013   844x1200   844x1200   981x1200   981x1200
+  large format            11    1,643  1452x2064  1748x2480  1832x2600  1832x2600
 
-Plus one page for 3049x1300, the longest edge in the corpus. Every pair is a
-real image's own dimensions -- the most common width/height at the long-side
-value sitting at that position -- so the aspect ratios are ones that actually
-ship, not a median width paired with a median height from some other picture.
-Large format has six books behind it, which is why its top decile and its
-maximum are the same picture.
+Fourteen pages: the four columns above for the first two groups (their
+longest-edge and most-pixels images differ), three each for the other two
+(early comics get mode 710x1024 / median / max, since median and top decile
+coincide). Every pair is a real image's own dimensions -- the most common
+width/height at the long-side value sitting at that position -- so the aspect
+ratios are ones that actually ship. The reflowable median moved from 844x1200
+to 1135x1600 because the publishers the re-fetch added ship 1600- and
+2048-class frontispieces; the comic figures did not move. The summary page
+carries the 2026-09-03 numbers beside the new ones.
 
-Three numbers worth carrying: the long side is over 800px in 97.2% of images,
+Three numbers worth carrying: the long side is over 800px in 97.8% of images,
 so a device this size scales almost everything it is given; 2048 is the de
-facto ceiling, with only 1.0% above it; and 5.87 Mpx is the worst case, which
+facto ceiling, with only 1.0% above it; and 5.87 Mpx (2868x2048, now a novel's
+double-page frontispiece rather than a comic spread) is the worst case, which
 at one byte per pixel is 5.9 MB and therefore not something a C3 can hold whole.
+
+Method note: fixed-layout books are one image per page at one size, on a slow
+network share, so about twelve headers per book were read and the rest taken
+from the svg <image> width/height attributes; of 46,166 headers read, 68
+disagreed with the attributes. Reflowable books had every header read.
 
 Sizes are reproduced, file sizes deliberately are not. The pages are line art
 in grayscale PNG and compress to a fraction of what photographic content of the
@@ -437,4 +522,6 @@ only at size, which also makes it useful in other readers.
 
 Generated by test-assets/build_image_size_test.py (kept outside this repo with
 the other e-ink test assets). To add a size or a class, edit the GROUPS table
-at the top and re-run.
+at the top and re-run. The corpus scanner, its aggregate output (numbers only)
+and the patch scripts that produced the suite's tests 17-21 and the image
+book's chapters 10-12 live beside it in test-assets/corpus-survey/.
