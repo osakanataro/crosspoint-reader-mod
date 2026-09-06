@@ -39,6 +39,7 @@
 #include "images/LoadingIcon.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
+#include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
 
 GfxRenderer renderer(display);
@@ -583,6 +584,11 @@ void loop() {
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   mappedInputManager.update();
+  // Immediately after the input poll: the gap between consecutive samples is what decides whether a
+  // press can be seen at all. No-op unless built with INPUT_DIAG.
+  const bool diagInputEdge = gpio.wasAnyPressed() || gpio.wasAnyReleased();
+  const bool diagInputPending = gpio.isDebouncePending();
+  InputDiag::sample(loopStartTime, diagInputEdge, diagInputPending);
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,
@@ -753,6 +759,10 @@ void loop() {
       LOG_DBG("LOOP", "New max loop duration: %lu ms (activity: %lu ms)", maxLoopDuration, activityDuration);
     }
   }
+
+  // Last, so the SD write it may perform is outside the loop duration measured above. No-op unless
+  // built with INPUT_DIAG.
+  InputDiag::flush(diagInputEdge || diagInputPending);
 
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response

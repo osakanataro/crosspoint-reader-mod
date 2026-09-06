@@ -43,6 +43,7 @@
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
+#include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -157,6 +158,7 @@ EpubReaderActivity::~EpubReaderActivity() {
     saveProgress(origin.spineIndex, origin.pageNumber, 0);
   }
 
+  const uint32_t freeBefore = ESP.getFreeHeap();
   section.reset();
   if (pendingReadFolderMove && epub) {
     const std::string srcPath = epub->getPath();
@@ -167,9 +169,13 @@ EpubReaderActivity::~EpubReaderActivity() {
   } else {
     epub.reset();
   }
+
+  InputDiag::noteCloseHeap(freeBefore / 1024, ESP.getFreeHeap() / 1024, ESP.getMaxAllocHeap() / 1024);
 }
 
 bool EpubReaderActivity::loadBook() {
+  InputDiag::noteOpenBegin();
+  InputDiag::noteOpenStage(0, "enter");
   auto loadedEpub = makeUniqueNoThrow<Epub>(bookPath, "/.crosspoint");
   if (!loadedEpub) {
     LOG_ERR("ERS", "Failed to allocate EPUB object");
@@ -193,6 +199,7 @@ bool EpubReaderActivity::loadBook() {
     return false;
   }
   epub = std::move(loadedEpub);
+  InputDiag::noteOpenStage(1, "epub");
 
   ImageBlock::clearSessionRenderFailures();
   ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* src, const char* dest) {
@@ -373,12 +380,18 @@ void EpubReaderActivity::loop() {
       buildTickHeapGate()) {
     RenderLock lock;
     if (section->isBuilding() && buildTickHeapGate()) {
+      const auto tickStartMs = millis();
+      const uint16_t pageCountBeforeTick = section->pageCount;
       if (!section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
         LOG_ERR("ERS", "Background section build failed");
+        InputDiag::captureLogs("section-build-failed");
         section.reset();
         requestUpdate();
       } else if (section->isBuildComplete() && applyDeferredReposition()) {
         requestUpdate();
+      }
+      if (section) {
+        InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeTick, section->pageCount, millis() - tickStartMs);
       }
     }
   }
@@ -1103,6 +1116,9 @@ void EpubReaderActivity::renderBook() {
   currentPageLinks.clear();
   if (!epub) return;
 
+  buildAccumMsThisRender = 0;
+  buildChunkCountThisRender = 0;
+
   const auto showPendingSyncSaveError = [this]() {
     if (!pendingSyncSaveError) return;
     pendingSyncSaveError = false;
@@ -1110,6 +1126,9 @@ void EpubReaderActivity::renderBook() {
   };
 
   const auto showBuildError = [this]() {
+    // Snapshot the log ring before anything else: on a device with no serial console this is the
+    // only record of which check inside the section build actually failed. No-op without INPUT_DIAG.
+    InputDiag::captureLogs("section-build-failed");
     renderer.clearScreen();
     GUI.drawPopup(renderer, tr(STR_INDEX_FAILED));
     automaticPageTurnActive = false;
@@ -1146,6 +1165,8 @@ void EpubReaderActivity::renderBook() {
   buildViewportHeight = viewportHeight;
 
   const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  // getReaderFontId() inside readerRenderSpec resolves (and lazily loads) the SD reader font.
+  InputDiag::noteOpenStage(2, "font");
 
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
@@ -1234,7 +1255,14 @@ void EpubReaderActivity::renderBook() {
             if (buildPopupPending && millis() - buildStartMs >= BUILD_POPUP_DEADLINE_MS) {
               showBuildPopup(renderer, pagesUntilFullRefresh);
             }
-            if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+            const uint16_t pageCountBeforeChunk = section->pageCount;
+            const unsigned long chunkStartMs = millis();
+            const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+            const unsigned long chunkMs = millis() - chunkStartMs;
+            InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+            buildAccumMsThisRender += chunkMs;
+            buildChunkCountThisRender++;
+            if (!chunkOk) {
               LOG_ERR("ERS", "Failed during incremental section build");
               section.reset();
               buildPopupPending = false;
@@ -1297,7 +1325,14 @@ void EpubReaderActivity::renderBook() {
       return;
     }
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
-      if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+      const uint16_t pageCountBeforeChunk = section->pageCount;
+      const unsigned long chunkStartMs = millis();
+      const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+      const unsigned long chunkMs = millis() - chunkStartMs;
+      InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+      buildAccumMsThisRender += chunkMs;
+      buildChunkCountThisRender++;
+      if (!chunkOk) {
         LOG_ERR("ERS", "Failed during incremental section build");
         section.reset();
         showBuildError();
@@ -1307,7 +1342,14 @@ void EpubReaderActivity::renderBook() {
   }
   if (section->isBuilding()) {
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
-      if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+      const uint16_t pageCountBeforeChunk = section->pageCount;
+      const unsigned long chunkStartMs = millis();
+      const bool chunkOk = section->buildSomeMore(BUILD_PAGES_PER_CHUNK);
+      const unsigned long chunkMs = millis() - chunkStartMs;
+      InputDiag::noteBuildChunk(currentSpineIndex, pageCountBeforeChunk, section->pageCount, chunkMs);
+      buildAccumMsThisRender += chunkMs;
+      buildChunkCountThisRender++;
+      if (!chunkOk) {
         LOG_ERR("ERS", "Failed during incremental section build");
         section.reset();
         showBuildError();
@@ -1315,6 +1357,12 @@ void EpubReaderActivity::renderBook() {
       }
     }
   }
+
+  if (buildChunkCountThisRender > 0) {
+    InputDiag::noteBuildTotal(currentSpineIndex, buildAccumMsThisRender, buildChunkCountThisRender);
+  }
+  // Section loaded (or built far enough for the requested page).
+  InputDiag::noteOpenStage(3, "sect");
 
   if (!section->isBuilding() && section->pageCount > 0 &&
       section->currentPage >= static_cast<int>(section->pageCount)) {
@@ -1382,10 +1430,12 @@ void EpubReaderActivity::renderBook() {
     // needs that slot, then snapshot the newly rendered page below.
     discardOverlayPage();
 
+    InputDiag::noteOpenStage(4, "built");
     const auto start = millis();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     lastRenderCompleteMs = millis();
+    InputDiag::noteOpenStage(5, "page1");
   }
 
   if (currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
@@ -1557,6 +1607,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh, overlapRefresh);
   }
   const auto tDisplay = millis();
+  InputDiag::notePageRender(tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender);
 
   if (tiledGrayscale) {
     constexpr int STRIP_ROWS = 80;

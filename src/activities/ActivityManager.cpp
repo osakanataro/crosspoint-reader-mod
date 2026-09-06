@@ -26,6 +26,7 @@
 #include "util/BmpViewerActivity.h"
 #include "util/FrontlightPanelActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/InputDiag.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -58,10 +59,36 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+#ifdef INPUT_DIAG
+      // Snapshot the name onto the stack before rendering. render() receives the lock by value and
+      // may release it partway, after which the main task can pop and destroy this activity -- so
+      // reading the name after render() returns is not safe. Guarded rather than routed through the
+      // no-op InputDiag stub because the snapshot itself would otherwise cost every build a copy.
+      char renderedName[16];
+      snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
+      const unsigned long renderStart = millis();
+      InputDiag::noteRenderStart();
+#endif
       // Night mode is a global output polarity applied to every activity.
       // The sleep screen forces normal polarity itself (SleepActivity).
       display.setInverted(SETTINGS.screenInverted != 0);
       currentActivity->render(std::move(lock));
+#ifdef INPUT_DIAG
+      const unsigned long renderDurationMs = millis() - renderStart;
+      // The glyph counters (on-demand loads, arena rebuilds) come with the SD font work; 0 until then.
+      InputDiag::noteRender(renderedName, renderDurationMs, 0, 0, 0);
+      // A render this slow isn't drawing -- it's stuck somewhere upstream (SD I/O, glyph
+      // cache, allocation). The 16-line log ring is system-wide and short, so whatever ran
+      // during the stall is likely still in it right now; a routine render would evict it
+      // within a few more renders. captureLogs() keeps only the first capture, so repeat
+      // stalls this session don't overwrite the one that still has the culprit.
+      constexpr unsigned long SLOW_RENDER_CAPTURE_MS = 5000;
+      if (renderDurationMs >= SLOW_RENDER_CAPTURE_MS) {
+        char reason[48];
+        snprintf(reason, sizeof(reason), "slow-render %s %lums", renderedName, renderDurationMs);
+        InputDiag::captureLogs(reason);
+      }
+#endif
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;

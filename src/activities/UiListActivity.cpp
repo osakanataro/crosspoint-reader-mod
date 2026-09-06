@@ -8,6 +8,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/InputDiag.h"
 
 namespace fui = freeink::ui;
 
@@ -133,7 +134,12 @@ void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, c
     rowHeight = static_cast<int16_t>(hasSubtitle ? metrics.listWithSubtitleRowHeight : metrics.listRowHeight);
     props.rowHeight = rowHeight;
   }
-  activeNav().syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, listCount(), props);
+  const auto band = screen.body();
+  activeNav().syncToProps(band, rowHeight, screen.theme().listRowGap, listCount(), props);
+  // No-op unless built with INPUT_DIAG. The same arithmetic decides what the list draws and what
+  // the selection treats as on screen, so a band taller than the panel shows up as rows that can
+  // be selected but never seen.
+  InputDiag::noteListBand(band.y, band.height, rowHeight, activeNav().visibleRows, renderer.getScreenHeight());
 }
 
 void UiListActivity::drawChrome() {

@@ -10,6 +10,10 @@
 #include "esp_private/esp_cpu_internal.h"
 #include "esp_private/esp_system_attr.h"
 #include "esp_private/panic_internal.h"
+// Generated per build by scripts/ost_version.py. The version macro names the commit, which
+// cannot tell two builds apart while the tree carries uncommitted changes -- and a crash
+// report read against the wrong firmware is worse than no report.
+#include "ostBuildId.generated.h"
 #if !__riscv
 #include <xtensa_context.h>  // XtExcFrame for the stack capture below
 #endif
@@ -165,7 +169,8 @@ std::string getPanicInfo(bool full) {
   } else {
     std::string info;
 
-    info += "CrossPoint version: " CROSSPOINT_VERSION;
+    info += "OST build: " OST_BUILD_ID;
+    info += "\nCrossPoint version: " CROSSPOINT_VERSION;
     // A lockup or hardware watchdog resets without running any panic hook, so
     // the reason and stack come back empty; the reset cause is then the only
     // way to tell those apart from a true panic.
