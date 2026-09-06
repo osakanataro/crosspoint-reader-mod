@@ -140,6 +140,8 @@ class ParsedText {
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
+  // Read access to a token's text (the parser's bouten path needs each CJK token's length).
+  const std::string& wordAt(size_t index) const { return words[index]; }
   bool isEmpty() const { return words.empty(); }
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,

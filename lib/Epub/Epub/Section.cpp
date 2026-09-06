@@ -62,7 +62,9 @@ namespace {
 //      cache written by either lineage is rebuilt rather than misread.
 // v47: Chapter builds re-parse the stylesheets when the CSS cache is partial, so sections
 //      laid out by 2026090606 (image classes missing, illustrations unsized) are rebuilt.
-constexpr uint8_t SECTION_FILE_VERSION = 47;
+// v48: Horizontal bouten are attached per character token instead of the whole run on the
+//      first token, so cached horizontal pages with emphasis lay out differently.
+constexpr uint8_t SECTION_FILE_VERSION = 48;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

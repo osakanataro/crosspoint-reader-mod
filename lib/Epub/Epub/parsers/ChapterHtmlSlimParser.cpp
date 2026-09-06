@@ -578,13 +578,28 @@ void ChapterHtmlSlimParser::applyHorizontalEmphasis(const size_t wordIndex) {
   constexpr size_t SPACE_LEN = sizeof(IDEOGRAPHIC_SPACE) - 1;
   const size_t markLen = strlen(mark);
 
-  std::string marks;
-  marks.reserve((markLen + SPACE_LEN) * codepoints);
-  for (size_t i = 0; i < codepoints; i++) {
-    marks.append(mark, markLen);
-    marks.append(IDEOGRAPHIC_SPACE, SPACE_LEN);
+  // addWord splits CJK text into one token per character, so the run this flush produced is
+  // words[wordIndex .. size()). Each token gets as many marks as it has codepoints: one per kanji
+  // or kana, several for a Latin or digit token that stayed whole. Hanging the whole run's marks
+  // on the first token (the previous form) made that one character carry a ruby wider than the
+  // line, and the horizontal ruby layout then spread its neighbours across the page to fit it
+  // (seen 2026-09-06 on test_horizontal_ja.epub: 「は 一 文」 with thirteen marks above).
+  const size_t tokenEnd = currentTextBlock->size();
+  for (size_t t = wordIndex; t < tokenEnd; t++) {
+    const std::string& token = currentTextBlock->wordAt(t);
+    size_t tokenCodepoints = 0;
+    for (const char c : token) {
+      if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) tokenCodepoints++;
+    }
+    if (tokenCodepoints == 0) continue;
+    std::string marks;
+    marks.reserve((markLen + SPACE_LEN) * tokenCodepoints);
+    for (size_t i = 0; i < tokenCodepoints; i++) {
+      marks.append(mark, markLen);
+      if (i + 1 < tokenCodepoints) marks.append(IDEOGRAPHIC_SPACE, SPACE_LEN);
+    }
+    currentTextBlock->setRubyForWordAt(t, marks);
   }
-  currentTextBlock->setRubyForWordAt(wordIndex, marks);
 }
 
 // Tokenize the pending buffer into vertical cells. Emits one token per CJK/upright
