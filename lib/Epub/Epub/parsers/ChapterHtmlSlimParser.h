@@ -96,6 +96,8 @@ class ChapterHtmlSlimParser {
     bool hasSub = false, sub = false;
     bool hasEmphasis = false;
     CssTextEmphasis emphasis = CssTextEmphasis::None;
+    bool hasOrientation = false;
+    CssTextOrientation orientation = CssTextOrientation::Mixed;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
@@ -115,6 +117,13 @@ class ChapterHtmlSlimParser {
   // Active text-emphasis (bouten). Drawn as a synthetic ruby annotation, so a real
   // <rt> on the same run overwrites it -- furigana wins over bouten.
   CssTextEmphasis effectiveEmphasis = CssTextEmphasis::None;
+  // Active text-orientation / text-combine-upright (vertical layout only). Mixed is the
+  // default tokenizer behaviour; anything else routes the run through flushForcedOrientation.
+  CssTextOrientation effectiveOrientation = CssTextOrientation::Mixed;
+  // One entry per open element, outermost first, so descendant selectors (".vrtl .start-1em")
+  // can be matched against the element's ancestors. Pushed at the top of startElement and popped
+  // at the top of endElement, independent of every other branch in those handlers.
+  std::vector<CssParser::AncestorRef> ancestorStack;
   int tableDepth = 0;
   bool insideTableCell = false;
   bool tableRowStacked = false;
@@ -188,6 +197,12 @@ class ChapterHtmlSlimParser {
   static void applyVerticalAlignToEntry(StyleStackEntry& entry, const CssStyle& css);
   void pushTableTextStyleEntry(const CssStyle& cssStyle);
   static void applyTextEmphasisToEntry(StyleStackEntry& entry, const CssStyle& css);
+  static void applyTextOrientationToEntry(StyleStackEntry& entry, const CssStyle& css);
+  // Vertical run under a CSS text-orientation / text-combine-upright other than mixed. Returns
+  // false when the run should go through the ordinary tokenizer after all.
+  bool flushForcedOrientation(EpdFontFamily::Style fontStyle, CssTextOrientation orientation);
+  // Sideways token, split into column-sized pieces when it is taller than the column.
+  void addSidewaysToken(std::string token, EpdFontFamily::Style fontStyle);
   void applyHorizontalEmphasis(size_t wordIndex);
   void pushDecorationStyleEntry(CssTextDecoration defaultDecoration, const CssStyle& cssStyle);
   void emitHorizontalRule(const BlockStyle& blockStyle);

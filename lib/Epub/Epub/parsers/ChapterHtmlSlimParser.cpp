@@ -303,6 +303,13 @@ void ChapterHtmlSlimParser::applyTextEmphasisToEntry(StyleStackEntry& entry, con
   }
 }
 
+void ChapterHtmlSlimParser::applyTextOrientationToEntry(StyleStackEntry& entry, const CssStyle& css) {
+  if (css.hasTextOrientation()) {
+    entry.hasOrientation = true;
+    entry.orientation = css.textOrientation;
+  }
+}
+
 void ChapterHtmlSlimParser::applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css) {
   if (css.hasTextDecoration()) {
     entry.hasTextDecoration = true;
@@ -364,6 +371,7 @@ void ChapterHtmlSlimParser::pushDecorationStyleEntry(const CssTextDecoration def
   }
   applyDirectionToEntry(entry, cssStyle);
   applyTextEmphasisToEntry(entry, cssStyle);
+  applyTextOrientationToEntry(entry, cssStyle);
   inlineStyleStack.push_back(entry);
   updateEffectiveInlineStyle();
 }
@@ -389,6 +397,8 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   effectiveSup = false;
   effectiveSub = false;
   effectiveEmphasis = currentCssStyle.hasTextEmphasis() ? currentCssStyle.textEmphasis : CssTextEmphasis::None;
+  effectiveOrientation =
+      currentCssStyle.hasTextOrientation() ? currentCssStyle.textOrientation : CssTextOrientation::Mixed;
 
   // Apply inline style stack in order
   for (const auto& entry : inlineStyleStack) {
@@ -426,6 +436,9 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
     // Unlike line decorations, a descendant's "none" cancels an ancestor's mark.
     if (entry.hasEmphasis) {
       effectiveEmphasis = entry.emphasis;
+    }
+    if (entry.hasOrientation) {
+      effectiveOrientation = entry.orientation;
     }
   }
 
@@ -615,6 +628,25 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
   // Bouten ride the ruby path, so they need the token range this flush produces.
   const char* emphasisMark = resolveEmphasisMark(effectiveEmphasis);
   const size_t emphasisFirstToken = emphasisMark ? currentTextBlock->size() : 0;
+  // One mark per token. Vertical layout already gives every upright codepoint its own
+  // cell, so a per-token annotation lands one mark beside one character with no spacing
+  // trick needed; a coalesced Latin or tate-chu-yoko run takes a single mark over the
+  // cell it occupies. The mark is 3 UTF-8 bytes, inside the small-string buffer, so this
+  // costs no allocation per token.
+  const auto applyEmphasis = [&]() {
+    if (!emphasisMark) return;
+    const size_t tokenEnd = currentTextBlock->size();
+    for (size_t i = emphasisFirstToken; i < tokenEnd; i++) {
+      currentTextBlock->setRubyForWordAt(i, emphasisMark);
+    }
+  };
+
+  // CSS text-orientation / text-combine-upright on this run (the EBPAJ upright / sideways /
+  // tcy classes). The classifier below decides per character; these decide for the span.
+  if (effectiveOrientation != CssTextOrientation::Mixed && flushForcedOrientation(fontStyle, effectiveOrientation)) {
+    applyEmphasis();
+    return;
+  }
 
   const auto* p = reinterpret_cast<const unsigned char*>(partWordBuffer);
   const auto* end = p + partWordBufferIndex;
@@ -690,52 +722,150 @@ void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Sty
     const auto behavior =
         tateChuYoko ? VerticalTextUtils::VerticalBehavior::TateChuYoko : VerticalTextUtils::VerticalBehavior::Sideways;
 
-    // A sideways run occupies its own WIDTH as the column's vertical extent, and this
-    // loop coalesces every unbroken ASCII stretch into one token -- so a path or an
-    // identifier with no space in it ("package/metadata/manifest/spine/item/itemref")
-    // becomes a single token taller than the column. Column breaking works between
-    // tokens, so it cannot split that one, and the run is drawn straight through the
-    // status bar and off the panel. Break the run into column-sized pieces here, where
-    // the character boundaries are still known; layout then treats them as ordinary
-    // adjacent tokens. Only over-long runs are touched, so ordinary words are unchanged.
-    if (behavior == VerticalTextUtils::VerticalBehavior::Sideways && viewportHeight > 0 &&
-        renderer.getTextAdvanceX(fontId, token.c_str(), fontStyle) > viewportHeight) {
-      size_t pieceStart = 0;
-      while (pieceStart < token.size()) {
-        // Grow a piece one character at a time until the next one would overflow.
-        size_t pieceEnd = pieceStart;
-        size_t lastFitting = pieceStart;
-        while (pieceEnd < token.size()) {
-          const size_t next = pieceEnd + 1;
-          if (renderer.getTextAdvanceX(fontId, token.substr(pieceStart, next - pieceStart).c_str(), fontStyle) >
-              viewportHeight) {
-            break;
-          }
-          lastFitting = next;
-          pieceEnd = next;
-        }
-        // A single character wider than the column would loop forever; emit it anyway.
-        if (lastFitting == pieceStart) lastFitting = pieceStart + 1;
-        currentTextBlock->addVerticalToken(token.substr(pieceStart, lastFitting - pieceStart), fontStyle, behavior);
-        pieceStart = lastFitting;
-      }
+    if (behavior == VerticalTextUtils::VerticalBehavior::Sideways) {
+      addSidewaysToken(std::move(token), fontStyle);
       continue;
     }
 
     currentTextBlock->addVerticalToken(std::move(token), fontStyle, behavior);
   }
 
-  // One mark per token. Vertical layout already gives every upright codepoint its own
-  // cell, so a per-token annotation lands one mark beside one character with no spacing
-  // trick needed; a coalesced Latin or tate-chu-yoko run takes a single mark over the
-  // cell it occupies. The mark is 3 UTF-8 bytes, inside the small-string buffer, so this
-  // costs no allocation per token.
-  if (emphasisMark) {
-    const size_t tokenEnd = currentTextBlock->size();
-    for (size_t i = emphasisFirstToken; i < tokenEnd; i++) {
-      currentTextBlock->setRubyForWordAt(i, emphasisMark);
-    }
+  applyEmphasis();
+}
+
+// A sideways run occupies its own WIDTH as the column's vertical extent, and the tokenizer
+// coalesces every unbroken ASCII stretch into one token -- so a path or an identifier with
+// no space in it ("package/metadata/manifest/spine/item/itemref") becomes a single token
+// taller than the column. Column breaking works between tokens, so it cannot split that
+// one, and the run is drawn straight through the status bar and off the panel. Break the
+// run into column-sized pieces here, where the character boundaries are still known;
+// layout then treats them as ordinary adjacent tokens. Only over-long runs are touched, so
+// ordinary words are unchanged. The pieces are cut at byte boundaries, which for a Latin
+// run is the same thing as character boundaries; a forced-sideways run of CJK text (see
+// flushForcedOrientation) is cut at the character instead.
+void ChapterHtmlSlimParser::addSidewaysToken(std::string token, const EpdFontFamily::Style fontStyle) {
+  constexpr auto kSideways = VerticalTextUtils::VerticalBehavior::Sideways;
+  if (viewportHeight <= 0 || renderer.getTextAdvanceX(fontId, token.c_str(), fontStyle) <= viewportHeight) {
+    currentTextBlock->addVerticalToken(std::move(token), fontStyle, kSideways);
+    return;
   }
+  const auto nextCharEnd = [&token](const size_t from) {
+    size_t next = from + 1;
+    while (next < token.size() && (static_cast<unsigned char>(token[next]) & 0xC0) == 0x80) next++;
+    return next;
+  };
+  size_t pieceStart = 0;
+  while (pieceStart < token.size()) {
+    // Grow a piece one character at a time until the next one would overflow.
+    size_t pieceEnd = pieceStart;
+    size_t lastFitting = pieceStart;
+    while (pieceEnd < token.size()) {
+      const size_t next = nextCharEnd(pieceEnd);
+      if (renderer.getTextAdvanceX(fontId, token.substr(pieceStart, next - pieceStart).c_str(), fontStyle) >
+          viewportHeight) {
+        break;
+      }
+      lastFitting = next;
+      pieceEnd = next;
+    }
+    // A single character wider than the column would loop forever; emit it anyway.
+    if (lastFitting == pieceStart) lastFitting = nextCharEnd(pieceStart);
+    currentTextBlock->addVerticalToken(token.substr(pieceStart, lastFitting - pieceStart), fontStyle, kSideways);
+    pieceStart = lastFitting;
+  }
+}
+
+// The three non-default orientations, all of which the draw side reads back from the
+// VERTICAL_FLIP style bit (TextBlock::renderVertical derives a token's setting from its
+// text and the bit reverses that verdict), so nothing new travels through the page cache:
+//
+//   upright   every character in its own em cell, set upright. Characters that are upright
+//             anyway go the usual way (vertical forms for 、。， included); a Latin letter,
+//             a digit or an arrow gets a full cell and the flag, and is centred in it.
+//   sideways  every character turned with the column. Characters that turn anyway are
+//             coalesced into one run like ordinary Latin; an upright one (a fullwidth ！,
+//             kana in a "横倒し" span) becomes a one-character sideways token with the flag.
+//   combine   the whole run in one cell (tate-chu-yoko). Only for runs the tokenizer would
+//             have turned: 1-2 digits and !? are set that way already, and anything
+//             containing an upright character is prose the class was put on by mistake.
+//             Wider than one and a half cells cannot be squeezed in and turns as usual.
+bool ChapterHtmlSlimParser::flushForcedOrientation(const EpdFontFamily::Style fontStyle,
+                                                   const CssTextOrientation orientation) {
+  using VerticalTextUtils::VerticalBehavior;
+  const auto flipped = static_cast<EpdFontFamily::Style>(fontStyle | EpdFontFamily::VERTICAL_FLIP);
+  const auto* p = reinterpret_cast<const unsigned char*>(partWordBuffer);
+  const auto* end = p + partWordBufferIndex;
+
+  const auto isUprightByDefault = [](const uint32_t cp) {
+    return VerticalTextUtils::isUprightInVertical(cp) || VerticalTextUtils::getVerticalPunctuationOffset(cp) != nullptr;
+  };
+  // What the draw-time classifier would set upright inside one cell on its own.
+  const auto isNaturalTateChuYoko = [](const std::string& run) {
+    if (VerticalTextUtils::isTateChuYokoPunctuationPair(run.c_str())) return true;
+    if (run.empty() || run.size() > 2) return false;
+    for (const char c : run) {
+      if (c < '0' || c > '9') return false;
+    }
+    return true;
+  };
+
+  if (orientation == CssTextOrientation::Combine) {
+    for (const unsigned char* q = p; q < end;) {
+      const uint32_t cp = utf8NextCodepoint(&q);
+      if (cp == 0) break;
+      if (isUprightByDefault(cp)) return false;
+    }
+    std::string run(partWordBuffer, static_cast<size_t>(partWordBufferIndex));
+    if (isNaturalTateChuYoko(run)) return false;
+    const int cell = verticalCellWidthMemo > 0 ? verticalCellWidthMemo : renderer.getLineHeight(fontId) * 2 / 3;
+    if (renderer.getTextAdvanceX(fontId, run.c_str(), fontStyle) > cell * 3 / 2) return false;
+    currentTextBlock->addVerticalToken(std::move(run), flipped, VerticalBehavior::TateChuYoko);
+    return true;
+  }
+
+  const bool upright = orientation == CssTextOrientation::Upright;
+  std::string run;  // sideways: consecutive characters that turn anyway, kept as one token
+  const auto flushRun = [&]() {
+    if (run.empty()) return;
+    // A lone digit pair or !? would be set upright by the draw-time classifier; flag it so
+    // it turns with the rest of the span.
+    const EpdFontFamily::Style style = isNaturalTateChuYoko(run) ? flipped : fontStyle;
+    addSidewaysToken(std::move(run), style);
+    run.clear();
+  };
+  while (p < end) {
+    const unsigned char* cpStart = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+    const VerticalTextUtils::PunctuationOffset* punct = VerticalTextUtils::getVerticalPunctuationOffset(cp);
+    const bool uprightByDefault = isUprightByDefault(cp);
+    // Brackets and long marks are upright tokens that the draw side turns anyway.
+    const bool turnsByDefault = punct != nullptr ? punct->rotate : !uprightByDefault;
+    std::string token(reinterpret_cast<const char*>(cpStart), p - cpStart);
+    if (upright) {
+      if (uprightByDefault) {
+        const uint32_t formCp = VerticalTextUtils::verticalPresentationForm(cp);
+        if (formCp != 0 && fontHasVerticalForm(formCp)) {
+          token.clear();
+          utf8AppendCodepoint(formCp, token);
+        }
+        currentTextBlock->addVerticalToken(std::move(token), fontStyle, VerticalBehavior::Upright);
+      } else if (cp == ' ') {
+        currentTextBlock->addVerticalToken(std::move(token), fontStyle, VerticalBehavior::Sideways);
+      } else {
+        currentTextBlock->addVerticalToken(std::move(token), flipped, VerticalBehavior::TateChuYoko);
+      }
+      continue;
+    }
+    if (turnsByDefault) {
+      run += token;
+      continue;
+    }
+    flushRun();
+    currentTextBlock->addVerticalToken(std::move(token), flipped, VerticalBehavior::Sideways);
+  }
+  flushRun();
+  return true;
 }
 
 // Coverage-interval probe of the reading face, cached per form because the answer is
@@ -1117,6 +1247,20 @@ void ChapterHtmlSlimParser::finishTableRow() {
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  // Ancestor record for descendant selectors (".vrtl .start-1em"): every element goes on
+  // here and comes off at the top of endElement, whatever else the two handlers do with it.
+  {
+    const char* classValue = "";
+    if (atts != nullptr) {
+      for (int i = 0; atts[i]; i += 2) {
+        if (strcmp(atts[i], "class") == 0) {
+          classValue = atts[i + 1];
+          break;
+        }
+      }
+    }
+    self->ancestorStack.push_back({name, classValue});
+  }
   if (strcasecmp(name, "body") == 0) {
     // Case-insensitive to match ParagraphStreamer's tag matching (ProgressMapper). A case
     // mismatch here would leave visibleTextOffset at 0 for the whole section, so every page
@@ -1186,7 +1330,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // before tag-specific branches emit any content or metadata.
   CssStyle cssStyle;
   if (self->cssParser) {
-    cssStyle = self->cssParser->resolveStyle(name, classAttr);
+    // The element itself is the last ancestorStack entry; its ancestors are the rest.
+    cssStyle =
+        self->cssParser->resolveStyle(name, classAttr, self->ancestorStack.data(), self->ancestorStack.size() - 1);
     if (!styleAttr.empty()) {
       CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
       cssStyle.applyOver(inlineStyle);
@@ -2108,6 +2254,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     applyTextDecorationToEntry(entry, cssStyle);
     applyDirectionToEntry(entry, cssStyle);
     applyTextEmphasisToEntry(entry, cssStyle);
+    applyTextOrientationToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, ITALIC_TAGS, std::size(ITALIC_TAGS))) {
@@ -2129,6 +2276,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     applyTextDecorationToEntry(entry, cssStyle);
     applyDirectionToEntry(entry, cssStyle);
     applyTextEmphasisToEntry(entry, cssStyle);
+    applyTextOrientationToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "sup") == 0 || strcmp(name, "sub") == 0) {
@@ -2152,7 +2300,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     const bool inheritedTableTextAlign = self->tableDepth >= 1 && cssStyle.hasTextAlign();
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
         cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || inheritedTableTextAlign ||
-        cssStyle.hasTextEmphasis()) {
+        cssStyle.hasTextEmphasis() || cssStyle.hasTextOrientation()) {
       // Flush buffer before style change so preceding text gets current style
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
@@ -2177,6 +2325,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       }
       applyVerticalAlignToEntry(entry, cssStyle);
       applyTextEmphasisToEntry(entry, cssStyle);
+      applyTextOrientationToEntry(entry, cssStyle);
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
     }
@@ -2477,6 +2626,7 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (!self->ancestorStack.empty()) self->ancestorStack.pop_back();
   if (self->nonVisibleTextDepth > 0) {
     self->nonVisibleTextDepth--;
   }

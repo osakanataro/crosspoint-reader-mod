@@ -332,6 +332,17 @@ inline bool isKinsokuHead(uint32_t cp) {
   if (cp == 0xFF01 || cp == 0xFF1F) return true;                                  // ！？
   if (cp == 0xFF1A || cp == 0xFF1B) return true;                                  // ：；
   if (cp == 0x3009 || cp == 0x300B) return true;                                  // 〉》
+  // Closing quotation marks (JLREQ cl-02). 〟 heads 6,223 paragraph-final quotes in the
+  // surveyed commercial books and was missing here, so it could open a column.
+  if (cp == 0x301F || cp == 0x201D || cp == 0x2019) return true;  // 〟 ” ’
+  // Hyphens and dashes (cl-03), middle dots (cl-05), inseparable marks (cl-08) and
+  // iteration marks (cl-09): none of them may start a line either.
+  if (cp == 0x2010 || cp == 0x2013 || cp == 0x301C || cp == 0x30A0 || cp == 0xFF5E) return true;  // ‐ – 〜 ゠ ～
+  if (cp == 0x30FB || cp == 0xFF65) return true;                                                  // ・ ･
+  if (cp == 0x2025 || cp == 0x2026) return true;                                                  // ‥ …
+  if (cp >= 0x3033 && cp <= 0x3035) return true;                                                  // 〳〴〵
+  if (cp == 0x3005 || cp == 0x303B || cp == 0x309D || cp == 0x309E || cp == 0x30FD || cp == 0x30FE)
+    return true;  // 々〻ゝゞヽヾ
   // Vertical bracket forms run FE35..FE44 as open, close, open, close, so the odd
   // steps from FE35 are the closing halves (︶︸︺︼︾﹀﹂﹄).
   if (cp >= 0xFE35 && cp <= 0xFE44) return ((cp - 0xFE35) & 1) == 1;
@@ -351,6 +362,7 @@ inline bool isKinsokuTail(uint32_t cp) {
   if (cp == 0x3014 || cp == 0x3016 || cp == 0x3018 || cp == 0x301A) return true;  // 〔〖〘〚
   if (cp == 0xFF08 || cp == 0xFF3B || cp == 0xFF5B) return true;                  // （［｛
   if (cp == 0x3008 || cp == 0x300A) return true;                                  // 〈《
+  if (cp == 0x301D || cp == 0x201C || cp == 0x2018) return true;                  // 〝 “ ‘ (opening quotes)
   // Even steps from FE35 are the opening halves (︵︷︹︻︽︿﹁﹃).
   if (cp >= 0xFE35 && cp <= 0xFE44) return ((cp - 0xFE35) & 1) == 0;
   return false;

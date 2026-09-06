@@ -91,6 +91,17 @@ enum class CssTextEmphasis : uint8_t {
   OpenDoubleCircle = 10,
 };
 
+// text-orientation and text-combine-upright, folded into one value: both decide how a run
+// sits in a vertical column, and a span carries at most one of them in practice (the EBPAJ
+// template's upright / sideways / tcy classes). Only the -webkit-/-epub- prefixed spellings
+// appear in the surveyed commercial books, so those are read as well as the bare name.
+enum class CssTextOrientation : uint8_t {
+  Mixed = 0,     // the default: CJK upright, Latin turned (also text-combine-upright: none)
+  Upright = 1,   // every character upright, one cell each
+  Sideways = 2,  // every character turned with the column
+  Combine = 3,   // text-combine-upright: all -- the whole run upright inside one cell
+};
+
 // Bitmask for tracking which properties have been explicitly set
 struct CssPropertyFlags {
   uint16_t textAlign : 1;
@@ -114,6 +125,7 @@ struct CssPropertyFlags {
   uint16_t direction : 1;
   uint16_t verticalAlign : 1;
   uint16_t textEmphasis : 1;
+  uint16_t textOrientation : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -136,12 +148,14 @@ struct CssPropertyFlags {
         display(0),
         direction(0),
         verticalAlign(0),
-        textEmphasis(0) {}
+        textEmphasis(0),
+        textOrientation(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || imageMaxHeight || imageMaxWidth || display || direction || verticalAlign || textEmphasis;
+           imageWidth || imageMaxHeight || imageMaxWidth || display || direction || verticalAlign || textEmphasis ||
+           textOrientation;
   }
 
   void clearAll() {
@@ -149,11 +163,11 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = imageMaxHeight = imageMaxWidth = 0;
-    display = direction = verticalAlign = textEmphasis = 0;
+    display = direction = verticalAlign = textEmphasis = textOrientation = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..18.
+// Cache serializes defined flags as uint32_t with bit indices 0..21.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
 
@@ -184,9 +198,10 @@ struct CssStyle {
   // sizing came from max-width/max-height classes rather than fixed widths.
   CssLength imageMaxHeight;
   CssLength imageMaxWidth;
-  CssDisplay display = CssDisplay::Block;                       // display property (Block or None)
-  CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;  // vertical-align (super/sub positioning)
-  CssTextEmphasis textEmphasis = CssTextEmphasis::None;         // text-emphasis (bouten marks beside the text)
+  CssDisplay display = CssDisplay::Block;                          // display property (Block or None)
+  CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;     // vertical-align (super/sub positioning)
+  CssTextEmphasis textEmphasis = CssTextEmphasis::None;            // text-emphasis (bouten marks beside the text)
+  CssTextOrientation textOrientation = CssTextOrientation::Mixed;  // text-orientation / text-combine-upright
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -277,6 +292,10 @@ struct CssStyle {
       textEmphasis = base.textEmphasis;
       defined.textEmphasis = 1;
     }
+    if (base.hasTextOrientation()) {
+      textOrientation = base.textOrientation;
+      defined.textOrientation = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -300,6 +319,7 @@ struct CssStyle {
   [[nodiscard]] bool hasDirection() const { return defined.direction; }
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
   [[nodiscard]] bool hasTextEmphasis() const { return defined.textEmphasis; }
+  [[nodiscard]] bool hasTextOrientation() const { return defined.textOrientation; }
 
   void reset() {
     textAlign = CssTextAlign::Left;
@@ -314,6 +334,7 @@ struct CssStyle {
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     textEmphasis = CssTextEmphasis::None;
+    textOrientation = CssTextOrientation::Mixed;
     defined.clearAll();
   }
 };

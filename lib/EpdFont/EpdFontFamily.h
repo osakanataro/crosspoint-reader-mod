@@ -17,6 +17,11 @@ class EpdFontFamily {
     SUP = 16,            // superscript: glyph scaled 50%, raised ~40% of ascender
     SUB = 32,            // subscript: glyph scaled 50%, lowered ~25% of ascender
     RUBY_CONTINUE = 64,  // Group ruby follower marker (used internally by Epub layout)
+    // Vertical layout only: the token is set the opposite way from what its text implies
+    // (an ASCII letter upright, a fullwidth ！ turned, a Latin run in one tate-chu-yoko
+    // cell). Carries CSS text-orientation / text-combine-upright through the page cache
+    // without a per-word behaviour array; TextBlock::renderVertical reads it, nothing else.
+    VERTICAL_FLIP = 128,
   };
   static constexpr uint8_t TEXT_DECORATION_MASK = static_cast<uint8_t>(UNDERLINE | STRIKETHROUGH);
 

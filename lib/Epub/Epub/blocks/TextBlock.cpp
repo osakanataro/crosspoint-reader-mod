@@ -322,7 +322,7 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // blocks serialized before it did, and misses on columns holding no upright word.
   int cellWidth = vertCellWidth;
   for (uint16_t i = 0; i < numWords && cellWidth == 0; i++) {
-    if (!isSidewaysToken(wordText(i))) {
+    if ((wordStyle(i) & EpdFontFamily::VERTICAL_FLIP) == 0 && !isSidewaysToken(wordText(i))) {
       cellWidth = renderer.getTextAdvanceX(fontId, wordText(i), wordStyle(i));
     }
   }
@@ -409,13 +409,23 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     const int cellX = xposArr[i] + x;
     const int cellY = yposArr[i] + y;
 
+    // Which way the token is set. Derived from the text (Latin runs and the rotating
+    // punctuation turn, everything else stands), then reversed by the VERTICAL_FLIP bit
+    // the parser sets for CSS text-orientation / text-combine-upright.
+    const auto* p = reinterpret_cast<const unsigned char*>(word);
+    const uint32_t cp = utf8NextCodepoint(&p);
+    const VerticalTextUtils::PunctuationOffset* punct = VerticalTextUtils::getVerticalPunctuationOffset(cp);
+    const bool flipped = (wordStyle(i) & EpdFontFamily::VERTICAL_FLIP) != 0;
+    bool turned = isSidewaysToken(word) || (punct != nullptr && punct->rotate);
+    if (flipped) turned = !turned;
+
     // Before the draw branches below, all of which continue: every token contributes its
     // own extent down the column whichever way it is set. A sideways run reserved its
     // width, which is what the layout stacked; everything else occupies one cell.
     if (!scanning) {
       const EpdFontFamily::Style style = wordStyle(i);
       if (EpdFontFamily::hasTextDecoration(style)) {
-        const int extent = isSidewaysToken(word) ? renderer.getTextAdvanceX(fontId, word, style) : cellWidth;
+        const int extent = turned ? renderer.getTextAdvanceX(fontId, word, style) : cellWidth;
         for (auto& line : verticalDecorations) {
           if ((style & line.style) == 0) {
             flushVerticalDecoration(line);
@@ -437,30 +447,27 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     }
 
     // Sideways runs: the column reserved the run's *width* as its vertical extent,
-    // so drawing it upright would spill across the columns to the left.
-    if (isSidewaysToken(word)) {
+    // so drawing it upright would spill across the columns to the left. Brackets and
+    // long marks turn the same way: rotating the horizontal glyph also carries its ink
+    // to the right corner of the cell on its own, so 「 ends up opening downward at the
+    // cell top, 」 closing at the bottom, ー running along the column. The advance is
+    // unchanged, so the cell still measures one em.
+    if (turned) {
       renderer.drawTextSideways(fontId, cellX, cellY, word, cellWidth, true, wordStyle(i));
       continue;
     }
 
-    // Punctuation drawn from a horizontal-layout font is in the wrong place, or the
-    // wrong orientation, for a vertical column (see VERTICAL_PUNCTUATION).
-    const auto* p = reinterpret_cast<const unsigned char*>(word);
-    const uint32_t cp = utf8NextCodepoint(&p);
-    const VerticalTextUtils::PunctuationOffset* punct = VerticalTextUtils::getVerticalPunctuationOffset(cp);
-
-    if (punct != nullptr && punct->rotate) {
-      // Brackets and long marks turn with the column. Rotating the horizontal glyph also
-      // carries its ink to the right corner of the cell on its own: 「 ends up opening
-      // downward at the cell top, 」 closing at the bottom, ー running along the column.
-      // The advance is unchanged, so the cell still measures one em.
-      renderer.drawTextSideways(fontId, cellX, cellY, word, cellWidth, true, wordStyle(i));
-      continue;
-    }
-
+    // Punctuation drawn from a horizontal-layout font is in the wrong place for a
+    // vertical column (see VERTICAL_PUNCTUATION).
     int drawX = cellX;
     int drawY = cellY + uprightYAdjust;
-    if (punct != nullptr) {
+    if (flipped) {
+      // Set upright against its text's nature: a Latin letter or a digit given a full
+      // cell, or a run combined into one. Centre it on the cell whatever its width, so
+      // a three-digit tate-chu-yoko overhangs both sides evenly instead of one.
+      const int advance = renderer.getTextAdvanceX(fontId, word, wordStyle(i));
+      drawX += (cellWidth - advance) / 2;
+    } else if (punct != nullptr) {
       drawX += cellWidth * punct->dxEighths / 8;
       drawY += cellWidth * punct->dyEighths / 8;
     } else if (VerticalTextUtils::isSmallKana(cp)) {

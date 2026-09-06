@@ -54,6 +54,11 @@ bool CssSelectorUsage::matches(const std::string& selectorKey) const {
     return true;
   }
   const std::string_view key(selectorKey);
+  // A two-part descendant key ("<a> <b>") can match only if each part can on its own.
+  const size_t space = key.find(' ');
+  if (space != std::string_view::npos) {
+    return matches(std::string(key.substr(0, space))) && matches(std::string(key.substr(space + 1)));
+  }
   const size_t dot = key.find('.');
   if (dot == std::string_view::npos) {
     return containsTag(key);

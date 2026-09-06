@@ -785,15 +785,24 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     }
   }
 
-  // First-line indent as a leading vertical gap of one CJK cell, mirroring the spirit of
-  // resolveFirstLineIndent: only for natural-aligned paragraphs with no explicit text-indent
-  // and when paragraph spacing is not used instead. isNaturalAlign is set inside the horizontal
-  // layout path (not reached here), so recompute the condition locally.
+  // First-column indent. An explicit text-indent is honoured in both signs: the EBPAJ
+  // template's hanging indents pair text-indent:-Nem with padding-top:Nem, so the column's
+  // own top inset (applied by the page when it places the column) leaves exactly the room
+  // a negative indent takes back, and the clamp only matters for a stylesheet that set one
+  // without the other. Unlike resolveFirstLineIndent, a positive explicit indent is kept
+  // when paragraph spacing is on: in the surveyed vertical books the class sits on the
+  // paragraphs an author singled out, not on every one, so it carries meaning of its own.
+  // Without an explicit value, one CJK cell, mirroring the spirit of resolveFirstLineIndent:
+  // only for natural-aligned paragraphs and when paragraph spacing is not used instead.
+  // isNaturalAlign is set inside the horizontal layout path (not reached here), so
+  // recompute the condition locally.
   const bool naturalAlign =
       blockStyle.alignment == CssTextAlign::Justify ||
       (blockStyle.isRtl ? blockStyle.alignment == CssTextAlign::Right : blockStyle.alignment == CssTextAlign::Left);
   int verticalIndent = 0;
-  if (naturalAlign && !blockStyle.textIndentDefined && !extraParagraphSpacing && !beginsWithIdeographicSpace()) {
+  if (blockStyle.textIndentDefined) {
+    verticalIndent = std::max<int>(blockStyle.textIndent, -static_cast<int>(blockStyle.topInset()));
+  } else if (naturalAlign && !extraParagraphSpacing && !beginsWithIdeographicSpace()) {
     verticalIndent = cjkCharAdvance > 0 ? cjkCharAdvance : lineHeight;
   }
 

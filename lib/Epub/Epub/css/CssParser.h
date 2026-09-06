@@ -55,7 +55,10 @@ class CssParser {
   // v12 (this tree): the style record also carries text-emphasis and max-width / max-height
   //     (three more length/enum fields, defined bits 18-20). Upstream 1.6.0 is v11 with the
   //     shorter record, so the number has to differ or an old cache would decode shifted.
-  static constexpr uint8_t CSS_CACHE_VERSION = 12;
+  // v13 (this tree): one more enum byte (text-orientation / text-combine-upright, defined bit
+  //     21), and two-part descendant selectors (".vrtl .start-1em") are stored under a key with
+  //     a single space, which v12 never wrote.
+  static constexpr uint8_t CSS_CACHE_VERSION = 13;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -83,6 +86,20 @@ class CssParser {
   [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr) const;
 
   /**
+   * Same, with the open ancestors of the element (outermost first) so two-part descendant
+   * selectors can match. Each ancestor is its tag name and class attribute. Only ".a .b",
+   * ".a tag", ".a tag.b" and the same three with a tag as the first part are stored; the
+   * EBPAJ template every surveyed Japanese book carries writes its writing-mode-specific
+   * rules that way (".vrtl .h-indent-1em", ".hltr .start-1em"), 956 of its 1,905 rules.
+   */
+  struct AncestorRef {
+    std::string tag;
+    std::string classAttr;
+  };
+  [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr,
+                                      const AncestorRef* ancestors, size_t ancestorCount) const;
+
+  /**
    * Parse an inline style attribute string.
    * @param styleValue The value of a style="" attribute
    * @return Parsed style properties
@@ -103,6 +120,7 @@ class CssParser {
    * Clear all loaded rules
    */
   void clear() {
+    hasDescendantRules_ = false;
     entries_.reset();
     selectorPool_.reset();
     stylePool_.reset();
@@ -182,6 +200,9 @@ class CssParser {
   uint16_t styleCapacity_ = 0;
   bool ruleGrowthStopped_ = false;
   bool lastCacheLoadPartial_ = false;
+  // Set once any stored key carries a descendant combinator, so resolveStyle can skip the
+  // ancestor lookups entirely for the many stylesheets that have none.
+  bool hasDescendantRules_ = false;
   const CssSelectorUsage* usageFilter_ = nullptr;
 
   std::string cachePath;
@@ -189,11 +210,15 @@ class CssParser {
   // Internal parsing helpers
   bool restoreCacheBackupIfNeeded() const;
   void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
-  [[nodiscard]] int compareEntryToPieces(const SelectorEntry& entry, std::string_view p0, std::string_view p1,
-                                         std::string_view p2) const;
+  [[nodiscard]] int compareEntryToPieces(const SelectorEntry& entry, const std::string_view* pieces,
+                                         size_t pieceCount) const;
+  [[nodiscard]] size_t lowerBound(const std::string_view* pieces, size_t pieceCount, bool& exact) const;
   [[nodiscard]] size_t lowerBound(std::string_view p0, std::string_view p1, std::string_view p2, bool& exact) const;
   [[nodiscard]] const CssStyle* findStyle(std::string_view p0, std::string_view p1 = {},
                                           std::string_view p2 = {}) const;
+  // Descendant key: "<ancestorPart> <p0><p1><p2>", e.g. (".vrtl", "p", ".", "x") -> ".vrtl p.x".
+  [[nodiscard]] const CssStyle* findDescendantStyle(std::string_view ancestorPart, std::string_view p0,
+                                                    std::string_view p1 = {}, std::string_view p2 = {}) const;
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
   RuleInsertResult insertOrMerge(std::string_view selector, const CssStyle& style);
   PoolResult ensureEntryCapacity(size_t needed);
