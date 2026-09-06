@@ -9,6 +9,7 @@
 
 #include "Epub/BookMetadataCache.h"
 #include "Epub/css/CssParser.h"
+#include "Epub/css/CssSelectorUsage.h"
 
 class ZipFile;
 
@@ -37,7 +38,16 @@ class Epub {
   void discoverCssFilesFromZip();
   CssParser::ParseResult parseCssFiles(CssParser::CacheStatus existingCacheStatus) const;
 
+  CssParser::ParseResult parseCssFilesImpl(CssParser::CacheStatus existingCacheStatus,
+                                           const CssSelectorUsage* usage) const;
+
  public:
+  // Re-read the stylesheets keeping only the rules this chapter can use.
+  // For books whose template is too large to parse whole: the unfiltered
+  // pass exhausts the heap partway, saves no cache, and leaves the reader
+  // with no rules at all. Costs one extra pass over the CSS per chapter
+  // build, which is SD time rather than heap.
+  void parseCssFilesFiltered(const CssSelectorUsage& usage) const;
   explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
     // create a cache key based on the filepath
     cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
@@ -52,6 +62,9 @@ class Epub {
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
+  // True if the spine declares page-progression-direction="rtl" (RTL / vertical book).
+  // Used to auto-detect tategaki when the writing-mode setting is AUTO.
+  bool isPageProgressionRtl() const;
   std::string getCoverBmpPath(bool cropped = false) const;
   bool generateCoverBmp(bool cropped = false) const;
   std::string getThumbBmpPath() const;

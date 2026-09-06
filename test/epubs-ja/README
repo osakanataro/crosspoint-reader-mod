@@ -1,0 +1,440 @@
+Japanese sample EPUBs for exercising the reader by hand on a device. Kept apart
+from test/epubs so this fork's own material, with its own provenance, does not
+mix into the upstream set. Nothing here is loaded by the gtest suites; copy a
+file to an SD card and open it.
+
+Three kinds of material live here: four builds of one novel (below), two
+diagnostic suites written by hand (vertical-test-suite.epub and
+vertical-image-test.epub), and one generated from measurements
+(image-size-test.epub, last section).
+
+The four files
+--------------
+
+One book, built four ways:
+
+                         full CSS (~144 KB)      minimal CSS (~2 KB)
+  vertical, ppd=rtl      test_vertical_ja        test_vertical_ja_minicss
+  horizontal, ppd=ltr    test_horizontal_ja      test_horizontal_ja_minicss
+
+The chapter XHTML is byte-identical across a row, and across a column it differs
+by one attribute -- class="vrtl" against class="hltr" on the body element. So the
+set isolates two variables independently:
+
+  along a row     writing mode, with the stylesheet held constant
+  down a column   stylesheet size, with the writing mode held constant
+
+That makes a difference attributable. A rendering fault that appears in the
+minimal-CSS file too is in the layout engine; one that only appears with the full
+stylesheet is in CSS handling. A fault present in both writing modes is not a
+tategaki bug, whatever it looks like.
+
+The horizontal pair also serves as the regression check for vertical work: the
+vertical branch must not disturb it, and having the same text on both sides means
+a regression shows up as a difference rather than as a hunch.
+
+What the text covers
+--------------------
+
+12 chapters, 196 ruby instances, 41 of them read in Latin script. They include
+annotations long enough to overhang their base word and to overhang the head and
+foot of a column. Also list items, tilde variants (U+FF5E, U+301C, U+223C,
+U+02DC), fullwidth and halfwidth digit runs of one, two and three digits,
+fullwidth operators (＝ ＜ ＞ ≠ ≒), exclamation/question pairs, Greek letters,
+and line-break positions where kinsoku rules apply. Most of the vertical fixes on
+this branch were found with it.
+
+The last chapter is about ruby alone, and each of its paragraphs is one question:
+long marks and brackets inside a reading, readings that are a single Latin letter
+or carry a hyphen, period, apostrophe or space, readings that are only digits
+(where the body's own rule sets one and two upright and turns three), readings in
+Cyrillic and Greek, readings that mix scripts, one-character bases carrying
+readings far longer than themselves and set next to each other so they have to
+collide, monoruby that fits its base exactly against monoruby that does not, and
+a long passage seeded with annotated words so that some of them land on a column
+break -- which they do not yet survive.
+
+Provenance
+----------
+
+Text by OSAKANA TARO, published on Kakuyomu under the handle memoro and reused
+here by its author. CSS derived from the EBPAJ EPUB 3 production guide template
+set, ver. 1.1.4.
+
+The EPUBs are built from that Kakuyomu source by NovelToEpub, a PowerShell script
+at https://github.com/osakanataro/NovelToEpub, so they can be rebuilt rather than
+hand-edited -- fix the text on Kakuyomu, re-run, replace the files.
+
+Run the four from one working directory of your own, then copy the results here.
+KAKUYOMU below stands for https://kakuyomu.jp/works/2912051602969738484.
+
+  pwsh NovelToEpub.txt -Url KAKUYOMU -MaxCacheAgeHours 0.1 -OutputDir test_vertical_ja.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -MinimalCss -OutputDir test_vertical_ja_minicss.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -Horizontal -OutputDir test_horizontal_ja.epub
+  pwsh NovelToEpub.txt -Url KAKUYOMU -Horizontal -MinimalCss -OutputDir test_horizontal_ja_minicss.epub
+
+-OutputDir names the file when its value ends in .epub, and a directory otherwise.
+Naming each one is what keeps the four apart: without it every run writes the
+work's own title and the previous file is gone.
+
+Run them from the same directory, and not from this one. The episode cache is a
+.cache directory beside the output, so a shared working directory is what lets the
+four share one fetch -- and pointing them here would leave that cache in the repo,
+which .gitignore does not cover outside the root.
+
+The script caches each episode it fetches, and -MaxCacheAgeHours defaults to 0,
+which disables age-based expiry: a cached episode is reused however old it is.
+Pass -MaxCacheAgeHours 0.1 on the *first* command only, as above, so it re-checks
+Kakuyomu for revisions. The remaining three run within those six minutes and
+reuse what the first fetched, so the site is polled once rather than four times.
+
+Rebuild all four together. They are only worth what their shared text is worth,
+and the source gains chapters over time -- regenerating one alone silently breaks
+the comparison the set exists for.
+
+vertical-test-suite.epub
+------------------------
+
+Diagnostic tests merged into one book so they survive as a reusable set. Each
+test is preceded by a guide page in Japanese saying what to look at and what
+counts as a pass, so the book can be judged on the device without consulting
+anything else. Thirty-two chapters, in guide/body pairs:
+
+  1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
+     every element (package/metadata/manifest/spine/item/itemref), so this
+     book opening at all -- title 「縦書き表示検証テスト集」, author, and eight
+     TOC entries intact -- is itself the pass condition (upstream #3001,
+     prefix-independent element matching).
+  2  Paragraph alignment against auto indent. Classless paragraphs under
+     justify/left/center/right alignment, next to a text-indent:3em reference
+     that bypasses the auto CJK first-line indent and its alignment gate.
+  3  Halfwidth punctuation in vertical lines. Halfwidth kagi brackets
+     (U+FF62/63), prolonged sound mark (U+FF70) and middle dot (U+FF65)
+     against their fullwidth counterparts in the same column; the halfwidth
+     forms must rotate and center like the fullwidth ones.
+  4  Ideographic-space indentation. A leading U+3000 must survive as a
+     one-character indent; two otherwise identical paragraphs make its loss
+     visible as stars starting at the same height.
+  5  Entity references. The body file carries the real-world XHTML 1.1
+     external-DTD DOCTYPE, under which expat routes undefined entities to
+     the reader's own lookup table instead of failing; the text mixes the
+     five XML-predefined entities (expat resolves those itself, &apos;
+     included) with table-resolved ones (&hellip; &mdash; &copy; &deg;).
+     Note the #3122 fix proper (adding &apos; to that table) is NOT
+     reachable from chapter display -- expat expands &apos; before the
+     table is consulted; the table entry matters on the non-expat paths
+     (OPDS description flattening, KOReader sync matching). This chapter
+     verifies the adjacent table path. A plain <!DOCTYPE html> file with
+     &hellip; is a fatal "undefined entity" parse error by design -- the
+     first version of this test did exactly that and bricked the chapter.
+  6  Trailing junk after </html> (upstream #3134). The body file carries
+     deliberately non-XML garbage after its closing tag; the chapter
+     rendering at all is the pass condition. Unfixed parsers error out and
+     show nothing. This file is intentionally not well-formed XML, so
+     strict validators (epubcheck) will flag it -- that is the test.
+  7  Letterlike Symbols and variation selectors (2026-08-23, from a scan of
+     513 real Kakuyomu/Narou EPUBs against the generated fonts). ℃ ℓ № Å ℘
+     sat in a preset gap between "punctuation" and "symbols" -- neither
+     starts before U+2150, so the whole Letterlike Symbols block was absent
+     even though the source fonts carry it; ℃ alone appeared in 57 of the
+     513 books. ⭐ ⬛ ⬇ ⬜ ⬅ ⬆ ⌒ ⌘ are the other real corpus hits, added as
+     narrow ranges rather than their full parent blocks. The body also
+     carries literal U+FE0E/U+FE0F (VS15/VS16) right after ☆ ♪ ♥ -- these
+     are zero-width presentation-style selectors with no glyph in any font,
+     but before the parser fix they fell through to the replacement glyph
+     and drew a visible tofu box; the corpus scan found 1,288 of them across
+     38 books (up to 275 in one). The VS16 base is ♥ U+2665 (heart SUIT, in
+     JIS and every source font), deliberately not ❤ U+2764 (Dingbats heavy
+     heart): no source font carries 2764, so a sentence built on it shows a
+     replacement glyph regardless of the selector fix -- the first version
+     of this chapter did exactly that and the on-device photo was misread
+     as a pass. A fourth check, added 2026-09-01, carries the JIS arrows
+     → ← ↑ ↓ ⇒ ⇔ (U+2190-21FF), a different block from the ⬅ ⬆ ⬇ above and
+     the one a sibling fork's fonts missed entirely
+     (ponto1216-ai/crosspoint-jp#14: → rendering as "?" in a book's
+     publication note, where it is ordinary JIS X 0208 punctuation). The OST
+     fonts do carry all six -- glyph bodies probed, not interval entries,
+     since interval-gap filling reports empty placeholders as present -- so
+     the interesting half here is orientation, not coverage: this tree still
+     draws arrows sideways in vertical text, and an arrow is the one symbol
+     where rotation changes the meaning rather than the look (→ turned
+     sideways points down). The arrows sit in sentences that say which way
+     they should point, so a wrong direction reads wrong rather than merely
+     looking odd. Pass condition: the symbols in tests (1) and (2) render as
+     their real glyphs rather than tofu, the arrows in test (3) point the
+     way the sentence says, and the ☆/♪/♥ sentences in test (4) read with
+     no gap or box after the mark.
+  8  Supplementary-plane kanji (2026-08-23). 𠮟 U+20B9F -- the JIS X 0213 form
+     of しかる, found in 6 of the 513 books -- sits above the Basic
+     Multilingual Plane (4-byte UTF-8) and needed two separate fixes: the
+     font generator's presets stopped at U+FFEF, so the glyph was never a
+     rasterization candidate, and isUprightInVertical() (VerticalTextUtils.h)
+     didn't know the supplementary range either, so even a font that carried
+     it would draw it rotated -- the sideways path meant for Latin runs.
+     Pass condition: 𠮟 renders as the real kanji (not tofu) AND stands
+     upright in the column like its neighbours, not rotated like the Latin
+     "NG" two lines below it.
+  9  CJK Compatibility Ideographs and Forms (2026-08-23, from a 955-book scan
+     of commercial EPUBs -- text itself wasn't read or kept, only aggregate
+     codepoint stats and titles). 溺 U+F9EC (10 books), 蓮 U+F999 (5), 煉
+     U+F993 (3) are Compatibility-Ideograph duplicates of kanji the JIS
+     X 0213 allowlist already carries in their unified BMP form; that same
+     allowlist gates F900-FAFF, so a font can carry the glyph and the book
+     still draw tofu unless the exact duplicate codepoint is on the list.
+     ⦿ U+29BF (1010 uses in one book, as a bullet marker) and the vertical
+     presentation forms ︱/︲ U+FE31-32 (em dash) and ︽/︾ U+FE3D-3E (《》)
+     were simply absent from every interval preset. The last two also
+     needed isUprightInVertical() and kinsoku entries -- they're glyphs
+     pre-shaped for vertical text, so rotating them (the treatment their
+     horizontal originals — and 《》 get) would turn an already-vertical
+     stroke sideways. Pass condition: (1) 溺 蓮 煉 render as real kanji;
+     (2) ⦿ renders as a filled circle, not tofu; (3) ︱︱ reads as a
+     straight vertical stroke, not rotated; (4) ︽注意︾ stands upright,
+     brackets right-side-out, not flipped like 《》 would be if rotated.
+     BIZ UD's source font lacks 溺/煉/︱/︽/︾ outright (only 蓮 and ⦿);
+     that face draws whatever its existing missing-glyph fallback does for
+     those five, same as any other rare glyph it was already missing.
+
+ 11  Ideographic-space indent against the reader's own, and vertical
+     paragraph alignment. Paperback EPUBs write the first-line indent as a
+     literal U+3000; if the reader then adds its own, the line starts two
+     characters in. The same chapter checks that choosing centre/right
+     alignment does not silently switch the indent off -- vertical columns
+     are laid right to left regardless, so alignment changing only the
+     indent reads as the indent vanishing on its own. From two fixes in the
+     Yomuka fork (#21, #20) and a report against Matcha (#163).
+ 12  Inter-word spaces in vertical Latin runs. Horizontal layout adds word
+     spacing at render time; vertical layout stores one advance per cell, so
+     a dropped space turns `Do you see the boy` into one run. Runs of spaces
+     and newlines must collapse to one, and leading/trailing ones must go.
+     From the Yomuka fork (#11).
+ 13  Small kana placement in vertical text. The horizontal glyph for ぁぃゃゅょっ
+     sits low-left inside its em box; used as-is vertically the character
+     appears to sink. The rule is JLREQ 2.1.2 note 1: vertically the face
+     goes "天地中央で右寄り" -- centred top-to-bottom, shifted right. Not
+     high-right: the JP fork's report cites 3.1.4 (a different section, on
+     runs of consecutive punctuation) and its fix moves the glyph up as well
+     as right, which overshoots the spec. The pass condition here follows
+     the spec, and a glyph riding high is recorded as its own deviation. The
+     advance must not change, so column breaks, line spacing and ruby stay
+     put. From the JP fork (#98), citation corrected against JLREQ.
+ 14  Long-paragraph and mid-flush stress. An Aozora-shaped body -- no inner
+     paragraph tags, <br/> separators, several thousand CJK characters in
+     one block -- which is where three failures live: the word vector's
+     doubling reallocation aborting on a fragmented heap (JP fork #74), a
+     mid-flush emitting a visibly short final column (JP fork #53), and the
+     1024-codepoint advance table overflowing so later glyphs get a zero
+     advance and overlap (Yomuka fork #10). Ruby is sprinkled through the
+     long block so a flush boundary can land inside a group. The 1300
+     distinct kanji in the second half were each verified to have real glyph
+     extents in all three shipped SD fonts by reading the .cpfont tables --
+     a character the font lacks would draw as tofu, which is exactly what
+     the overlap being looked for also resembles.
+
+     Its guide also carries the pass conditions for ruby that overhangs its
+     base (JLREQ 3.3.8), since this chapter is where ruby meets column
+     breaks: the overhang may ride over kana, the prolonged sound mark,
+     small kana and an ideographic space by up to the ruby's own size, and
+     an implementation that refuses to overhang at all is equally
+     acceptable -- what fails either way is ruby colliding with the
+     neighbouring column. This is the open "ruby distribution across a
+     column break" item finally given a written pass condition.
+
+ 15  Consecutive punctuation, and brackets at the line head and line end.
+     Closing brackets, commas and full stops are half-width glyphs that take
+     a half-em of space beside kanji or kana to fill one em cell; when they
+     run together that space is dropped in specific places so the line does
+     not gape (JLREQ 2.5.2 and 3.1.4: 。」 and 」、 set solid with the half-em
+     after, 、「 and 」「 take the half-em between). The same chapter watches
+     the line-head/line-end rules -- no closing bracket, comma or full stop
+     alone at the head of a column, no opening bracket alone at the foot --
+     and asks only that the line-head opening bracket be treated the same
+     way every time (JLREQ 3.1.5 permits more than one convention, not a mix
+     of them). Dialogue-heavy fiction hits this on every page. Written from
+     JLREQ directly rather than carried over from another fork.
+  16 Character decoration set by a CSS class rather than by a tag. A class
+     (span + font-weight:bold) reaches the bold flag through the stylesheet,
+     a tag (<strong>) reaches it through the tag table, so the chapter pairs
+     them line by line: if only the class version fails the stylesheet path
+     is at fault, if both fail it is rendering or the font. Also the numeric
+     spelling (700), a normal that cancels a surrounding bold, italic in
+     both forms, underline, and bold+underline together. From
+     ponto1216-ai/crosspoint-jp#3, where a commercial paperback's
+     span-with-class bold did not render. Neither of that report's two
+     causes exists here -- there is no "balanced" style mode in this tree,
+     and the OST fonts ship bold alongside regular -- but reading the code
+     and seeing the screen are different things, and max-width was parsed
+     but not applied, then applied but not cached, before anyone looked.
+     Judge under gothic first, then mincho: mincho separates its weights
+     least. Result (2026-09-02): the class forms failed while the tag form
+     worked, and the cause was neither of the report's -- resolveStyle held a
+     48KB free-heap guard, inherited from when the whole stylesheet went into
+     RAM, that returned an empty style. 48KB sits inside this device's normal
+     reading range, so the same class resolved in one paragraph and not the
+     next. Guard removed; bold, the numeric spelling and the cancelling normal
+     all pass. Underline and the underline half of bold+underline still do not
+     draw: vertical rendering had no decoration-line code at all. Implemented
+     the same day -- the side line beside the characters, the strikethrough
+     through them -- and the chapter gained a line-through pair (tag and
+     class) to cover it, since the two lines are drawn at different
+     coordinates and one can be right while the other is not. All ten rows
+     pass except italic, which is a font limitation rather than a fault.
+
+Tests 11-14 and 16 came from closed PRs and issues in the sibling forks rather
+than from a fault seen here: they are cases those projects hit on real books, so
+this tree's behaviour under them is simply unknown until the book is run.
+
+Every chapter title carries its test number ("テストN 解説/本文: ..."), so the
+status bar alone says which test is on screen. The unit is the test, not the
+chapter: each test is a guide and a body, so numbering by chapter would put
+the same number on two consecutive rows of the chapter picker and hide the
+fact that they are a pair. (The image book keeps 第N章 -- its nine chapters
+are each their own thing, so nothing repeats there.)
+
+Test 14's body numbers its own lines, 〔1〕..〔40〕 through the long paragraph
+and 〈1〉..〈22〉 through the kanji run, and gives each line its own ruby word.
+The first cut repeated one sentence forty times: it still proved the chapter
+does not abort, but a short column or a misplaced ruby could not be located
+in the text, and every ruby sat at the same offset so whether one ever met a
+column break was left to chance.
+
+The spine is page-progression-direction=rtl and every chapter is class="vrtl",
+so the whole book takes the vertical path. The stylesheet is a few hundred
+bytes and minimal on purpose: the base p rule sets no text-align (test 2
+depends on that), and the chapters that need justified text carry a p-justify
+class per paragraph instead.
+
+Unlike the four novels above, this one is not generated from anywhere: the
+markup is written by hand and zipped by a throwaway Python script. To change
+it, unzip, edit, and rezip -- with the mimetype entry first and stored
+uncompressed, as EPUB requires.
+
+vertical-image-test.epub
+------------------------
+
+Images mixed into vertical text, kept as its own book so an image-path crash
+cannot take the main suite down with it. Another fork (ponto1216-ai) shipped a
+mitigation for paragraph-final inline images sinking to mid-screen in vertical
+mode; this book exists to see whether we inherit that class of bug before any
+image work starts. Guide page plus five chapters (v5 adds a second guide and two
+more chapters, below; every chapter title carries its number): a 48x48 inline image
+mid-sentence and at paragraph end, the block-illustration chapter with the same
+300x200 stripes referenced four ways (../ grayscale PNG, same-directory PNG,
+JPEG, RGB-type PNG -- an isolation ladder from when images failed and the
+suspect list was long), a near-full-page 560x760 image with text continuing
+after it, gaiji-style images sized to one character cell via CSS (img.gaiji at
+1em; check under both a gothic and a mincho font, since the sibling fork's
+detection once broke on glyph-width assumptions), and 1-bit / 4-bit PNGs. The
+PNGs are generated by a few lines of Python -- an X, stripes, a checkerboard,
+a gradient -- so they are recognizable at a glance.
+
+What the 2026-08-21 investigation with this book established (details in the
+repo-external dev log): image display on the X3 is gated by two contiguous-heap
+walls, not by paths or formats. Reading a deflated zip entry wants a 32KB
+inflate window, and PNGdec's decode struct wants ~60KB in one piece -- neither
+is available mid-build or mid-render once Japanese fonts and the vertical arena
+are resident. Build now places the images; render falls back to empty
+placeholder boxes, drawn at horizontal-model coordinates that overlap vertical
+text. The diag firmware writes the whole trail to /image-diag.txt per image.
+The known fix direction is build-time pixel-cache pregeneration (the
+ponto1216-ai fork shipped exactly that); parked for now.
+
+v5 (2026-08-28) rebuilds the second half of the book around a survey of how 955
+commercial vertical EPUBs actually write their illustrations -- markup shape and
+sizing only, no text read. Three findings, and each one contradicted something
+this book had assumed:
+
+  Sizing comes from CSS classes, never from width/height attributes or inline
+  style, and a picture is fitted with max-width/max-height rather than a fixed
+  width. Chapter 8 is that shape: max-100%, max-80%, a wide picture, three gaiji
+  variants, and one unclassed image as the control.
+
+  Over half the illustrations are not img at all but an image element wrapped in
+  svg -- 527 of the 955 books, about 70,000 sites, all writing it the same way
+  (svg at 100%/100% with a viewBox, image inside). Chapter 9 is that form, and
+  ends with the same picture as a plain img so a failure there separates "svg
+  handling" from "images at all".
+
+  Every image in every book was deflated -- not one STORED among more than
+  100,000. So v4's decision to store this book's images uncompressed, taken
+  because real EPUBs were believed to do that, was testing a case that does not
+  occur. v5 puts them back to deflated. The 32KB inflate window is not an
+  obstacle a book can be authored around; it has to be met in firmware.
+
+v10 (2026-09-01) closes a gap found by reading zrn-ns/crosspoint-jp#107, the
+sibling fork's report on inline images in vertical text. Comparing that issue's
+reproduction against chapter 5 showed the chapter was testing an easier case
+than the one commercial books actually ship.
+
+  The gaiji sources here were 48x48 and 40x40, drawn at about 37px -- a fifth
+  off, not a reduction. The issue's case, and the shape its author found in a
+  commercial book, is a 256x256 image that CSS shrinks to 1em: about a seventh
+  of the source. Nothing in this book had ever exercised a large reduction, so
+  gaiji-big.png is 256x256 and chapter 5 now places it at 1em. It carries a
+  frame, a disc up-left and a wedge lower-right, so one glance says whether the
+  edges survived the reduction and whether the orientation held.
+
+  The issue's second symptom is that the sentence breaks where the image sits,
+  leaving the rest of the column blank. This book could always show that, but
+  told the tester nothing to look for; every other item here states its pass
+  condition, so chapter 5 now states this one too.
+
+  Ruby on an image word is the gap the issue's own author records as unhandled.
+  Chapter 5 carries one so the answer is recorded rather than assumed.
+
+image-size-test.epub
+--------------------
+
+Image pixel dimensions taken from a survey of the commercial EPUBs on hand --
+954 books, 107,826 images -- rather than from round numbers someone thought
+plausible. Its own book, not folded into vertical-image-test.epub, because a
+page holding a 5.87 Mpx picture has no business sitting in a suite that is
+supposed to stay openable when image handling breaks.
+
+What the survey found, and what the book reproduces:
+
+                          median        top 10%       largest
+  reflowable novels       844x1200      1120x1600     1562x2500
+  comics, current         1350x1920     1441x2048     2868x2048
+  comics, early           720x1024      844x1200      2048x1589
+  large format            1452x2064     1748x2480     1748x2480
+
+Plus one page for 3049x1300, the longest edge in the corpus. Every pair is a
+real image's own dimensions -- the most common width/height at the long-side
+value sitting at that position -- so the aspect ratios are ones that actually
+ship, not a median width paired with a median height from some other picture.
+Large format has six books behind it, which is why its top decile and its
+maximum are the same picture.
+
+Three numbers worth carrying: the long side is over 800px in 97.2% of images,
+so a device this size scales almost everything it is given; 2048 is the de
+facto ceiling, with only 1.0% above it; and 5.87 Mpx is the worst case, which
+at one byte per pixel is 5.9 MB and therefore not something a C3 can hold whole.
+
+Sizes are reproduced, file sizes deliberately are not. The pages are line art
+in grayscale PNG and compress to a fraction of what photographic content of the
+same dimensions would; the whole book is under 600 KB. Real books ship JPEG,
+so this exercises dimension handling, not decoder throughput.
+
+Each image gets a page of its own with nothing else on it -- no caption, no
+margin, html and body at height:100% -- so how close the picture comes to the
+page edge is attributable to the reader alone. The label is drawn into the
+picture instead. The CSS constraint is max-width:100%; max-height:100%, which
+is what commercial books use.
+
+One figure, repeated at every size: an outer frame (a missing edge means
+cropping), a true circle inside a true square (an ellipse or a rectangle means
+the aspect broke), corner labels reading 左上/右上/左下/右下 (rotation and
+mirroring), rulers along the top and left edges in source pixels every 100 with
+a number every 500 (read the scale factor off them), a 1/2/4/8-px stripe ladder
+(what the downscaler does), and the size in text at the centre (where it stops
+being readable is the practical floor). Line weights and type sizes scale with
+the short edge, so the figure survives a 3x reduction.
+
+Written horizontally throughout. Vertical writing with images is
+vertical-image-test.epub's job; this book holds that variable still and looks
+only at size, which also makes it useful in other readers.
+
+Generated by test-assets/build_image_size_test.py (kept outside this repo with
+the other e-ink test assets). To add a size or a class, edit the GROUPS table
+at the top and re-run.

@@ -53,6 +53,17 @@ namespace {
 // fresh page needs the HALF ghost-cleanup and closing re-renders the page.
 bool xteinkClassPanel() { return gpio.isXteinkDevice() || BoardConfig::isX4Pro() || BoardConfig::isX4Classic(); }
 
+// Tategaki (vertical writing) auto-detection: no explicit writing-mode setting exists yet,
+// so a book lays out vertically only when its spine declares page-progression-direction="rtl"
+// AND its language is CJK (Japanese/Chinese) — the shape of a typical vertical EPUB.
+bool bookIsVertical(const Epub* epub) {
+  if (epub == nullptr || !epub->isPageProgressionRtl()) {
+    return false;
+  }
+  const std::string& lang = epub->getLanguage();
+  return lang.rfind("ja", 0) == 0 || lang.rfind("jp", 0) == 0 || lang.rfind("zh", 0) == 0;
+}
+
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 constexpr size_t initialBookmarkCacheCapacity = 16;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
@@ -406,7 +417,8 @@ void EpubReaderActivity::loop() {
       !partialRebuildStartFailed &&
       section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
     RenderLock lock;
-    const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+    ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+    buildSpec.isVertical = bookIsVertical(epub.get());
     if (!section->startBuild(buildSpec)) {
       partialRebuildStartFailed = true;
       LOG_ERR("ERS", "Failed to start deferred partial extension build");
@@ -455,7 +467,12 @@ void EpubReaderActivity::loop() {
     pendingReadFolderMove = false;
   }
 
-  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput);
+  // Page-progression-direction, not bookIsVertical(): the controls have to follow the
+  // page order the spine declares, which is right-to-left for a horizontal Arabic book
+  // just as much as for a vertical Japanese one.
+  const bool rtlPages = epub != nullptr && epub->isPageProgressionRtl();
+
+  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput, rtlPages);
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
@@ -657,7 +674,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput, rtlPages);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
@@ -1218,7 +1235,8 @@ void EpubReaderActivity::renderBook() {
   buildViewportWidth = viewportWidth;
   buildViewportHeight = viewportHeight;
 
-  const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  renderSpec.isVertical = bookIsVertical(epub.get());
   // getReaderFontId() inside readerRenderSpec resolves (and lazily loads) the SD reader font.
   InputDiag::noteOpenStage(2, "font");
 
@@ -1526,7 +1544,6 @@ void EpubReaderActivity::renderBook() {
     // needs that slot, then snapshot the newly rendered page below.
     discardOverlayPage();
 
-    InputDiag::noteOpenStage(4, "built");
     const auto start = millis();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
@@ -1641,6 +1658,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginLeft) {
   const auto t0 = millis();
   const int fontId = SETTINGS.getReaderFontId();
+  const uint32_t onDemandAtRenderStart = renderer.glyphOnDemandLoads();
 
   struct PxcSlotGuard {
     ~PxcSlotGuard() { ImageBlock::releaseRenderCache(); }
@@ -1688,16 +1706,46 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     renderer.clearScreen();
   }
 
+#ifdef INPUT_DIAG
+  // Discard what the scan pass accumulated: it runs the same loops with drawing suppressed, so
+  // leaving it in would report it alongside the pass that actually puts pixels down.
+  (void)TextBlock::takeVerticalRenderStats();
+#endif
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+#ifdef INPUT_DIAG
+  const auto tBlocks = millis();
+#endif
   renderStatusBar();
   const auto tBwRender = millis();
+  // How much of this page the BW pass had to fetch a glyph at a time. Sampled
+  // here because the grayscale passes below repeat the same draw ~20 times
+  // (two planes x ~10 strips), so whatever the BW pass paid per glyph is about
+  // to be paid again for every strip the glyph falls in.
+  const uint32_t bwOnDemandGlyphs = renderer.glyphOnDemandLoads() - onDemandAtRenderStart;
+#ifdef INPUT_DIAG
+  {
+    const auto vs = TextBlock::takeVerticalRenderStats();
+    InputDiag::noteVerticalRender(vs.bodyMs, vs.bodyCells, vs.rubyMeasureMs, vs.rubyDrawMs, vs.rubyGroups);
+    InputDiag::notePageDrawParts(tBlocks - tPrewarm, tBwRender - tBlocks);
+  }
+#endif
 
   if (pageHasImages) {
     // Image pages use one base refresh before the grayscale pass. FAST leaves
     // the panel receptive to the gray waveform; pending cleanup still honors
     // the scheduled/manual HALF refresh.
     renderer.displayBuffer(cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
-    pagesUntilFullRefresh = 1;
+    // Same cadence bookkeeping as displayWithRefreshCycle: a HALF that just ran
+    // restarts the interval, anything else counts down toward the next one.
+    // Arming the next page unconditionally here instead kept every illustrated
+    // page in the HALF waveform -- the arm outlived the refresh that satisfied
+    // it, so the counter never reached the configured interval and a run of
+    // image pages paid 3.2s each.
+    if (cleanImageBasePending) {
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    } else {
+      pagesUntilFullRefresh--;
+    }
   } else if (combinedGrayscaleBase) {
     // Stash the base without activating; displayGrayBuffer() below commits
     // base + grays as one waveform.
@@ -1764,10 +1812,30 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
               tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayRender - tDisplay, tWait - tGrayRender,
               tGrayWrite - tWait, tGrayDisplay - tGrayWrite, tEnd - tGrayDisplay, tEnd - t0, msbPlaneBuf ? 2 : 1);
     } else {
-      auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+      // A page whose glyphs would not stay resident costs the BW pass one SD
+      // read per glyph, and the grayscale passes then repeat that for every
+      // strip the glyph touches: 19-27s pages were measured on a chapter of
+      // several hundred distinct kanji with the largest free block down at
+      // 24KB. Antialiasing is a preference; waiting half a minute for a page
+      // is not, so past a threshold this page goes out in plain black and
+      // white -- the same outcome the OOM path below already produces, for
+      // the same reason (the heap cannot support the pass).
+      //
+      // The threshold sits well above a healthy page (0-5 on-demand loads with
+      // the arena seated) and below the hundreds a starved one shows, so
+      // ordinary reading never trips it.
+      constexpr uint32_t AA_MAX_BW_ON_DEMAND_GLYPHS = 64;
+      const bool glyphsTooScattered = bwOnDemandGlyphs > AA_MAX_BW_ON_DEMAND_GLYPHS;
+      auto scratch =
+          glyphsTooScattered ? nullptr : makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
       renderer.waitRefreshComplete();
+      if (glyphsTooScattered) {
+        LOG_ERR("ERS", "%u glyphs loaded on demand in the BW pass; skipping AA this page", bwOnDemandGlyphs);
+      }
       if (!scratch) {
-        LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * STRIP_ROWS);
+        if (!glyphsTooScattered) {
+          LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * STRIP_ROWS);
+        }
         if (overlapRefresh || combinedGrayscaleBase) {
           // The BW refresh ran the shadow-free async path, so controller RAM's
           // differential baseline was never rebuilt. Even with AA skipped it must
@@ -1778,6 +1846,15 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.cleanupGrayscaleWithFrameBuffer();
         }
       } else {
+#ifdef INPUT_DIAG
+        // The two plane loops below are the same work twice, yet the first has
+        // measured ~30x the second (2192ms vs 72ms on an image page). Whatever
+        // the first pass pays, the second finds already warm -- so bracket both
+        // separately: glyphs fetched one at a time, and the .pxc traffic split
+        // into RAM-slot hits versus draws that went back to the card.
+        (void)ImageBlock::takeCacheRenderStats();
+        const uint32_t onDemandBeforeLsb = renderer.glyphOnDemandLoads();
+#endif
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
         for (int y = 0; y < gh; y += STRIP_ROWS) {
           const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
@@ -1788,6 +1865,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
         }
         const auto tGrayLsb = millis();
+#ifdef INPUT_DIAG
+        const auto lsbImg = ImageBlock::takeCacheRenderStats();
+        const uint32_t lsbOnDemand = renderer.glyphOnDemandLoads() - onDemandBeforeLsb;
+#endif
 
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
         for (int y = 0; y < gh; y += STRIP_ROWS) {
@@ -1799,6 +1880,20 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
         }
         const auto tGrayMsb = millis();
+#ifdef INPUT_DIAG
+        {
+          const auto msbImg = ImageBlock::takeCacheRenderStats();
+          const uint32_t msbOnDemand = renderer.glyphOnDemandLoads() - onDemandBeforeLsb - lsbOnDemand;
+          LOG_DBG("ERS",
+                  "AA split: lsb=%lums glyphs=%u img_slot=%u/%u stream=%u sd=%lums | "
+                  "msb=%lums glyphs=%u img_slot=%u/%u stream=%u sd=%lums",
+                  tGrayLsb - tDisplay, lsbOnDemand, lsbImg.slotHits, lsbImg.slotLoads, lsbImg.streamDraws, lsbImg.sdMs,
+                  tGrayMsb - tGrayLsb, msbOnDemand, msbImg.slotHits, msbImg.slotLoads, msbImg.streamDraws, msbImg.sdMs);
+          InputDiag::noteGrayscaleSplit(tGrayLsb - tDisplay, lsbOnDemand, lsbImg.sdMs,
+                                        lsbImg.slotLoads + lsbImg.streamDraws, tGrayMsb - tGrayLsb, msbOnDemand,
+                                        msbImg.sdMs, msbImg.slotLoads + msbImg.streamDraws);
+        }
+#endif
 
         renderer.setRenderMode(GfxRenderer::BW);
         renderer.displayGrayBuffer();

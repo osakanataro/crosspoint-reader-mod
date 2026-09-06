@@ -12,6 +12,8 @@
 #include <cstring>
 #include <string_view>
 
+#include "CssSelectorUsage.h"
+
 namespace {
 
 // Stack-allocated string buffer to avoid heap reallocations during parsing
@@ -44,10 +46,6 @@ constexpr size_t READ_BUFFER_SIZE = 512;
 constexpr size_t MAX_RULES = 1500;
 constexpr size_t SELECTOR_POOL_CAP = 32 * 1024;
 constexpr size_t MAX_UNIQUE_STYLES = 256;
-
-// Minimum free heap required to apply CSS during rendering
-// If below this threshold, we skip CSS to avoid display artifacts.
-constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
 
 // Maximum length for a single selector string
 // Prevents parsing of extremely long or malformed selectors
@@ -138,14 +136,15 @@ std::string_view stripTrailingImportant(std::string_view value) {
 }
 
 constexpr std::array STYLE_LENGTH_FIELDS = {
-    &CssStyle::textIndent,   &CssStyle::marginTop,   &CssStyle::marginBottom,  &CssStyle::marginLeft,
-    &CssStyle::marginRight,  &CssStyle::paddingTop,  &CssStyle::paddingBottom, &CssStyle::paddingLeft,
-    &CssStyle::paddingRight, &CssStyle::imageHeight, &CssStyle::imageWidth,
+    &CssStyle::textIndent,    &CssStyle::marginTop,   &CssStyle::marginBottom,  &CssStyle::marginLeft,
+    &CssStyle::marginRight,   &CssStyle::paddingTop,  &CssStyle::paddingBottom, &CssStyle::paddingLeft,
+    &CssStyle::paddingRight,  &CssStyle::imageHeight, &CssStyle::imageWidth,    &CssStyle::imageMaxHeight,
+    &CssStyle::imageMaxWidth,
 };
 constexpr size_t STYLE_LENGTH_FIELD_COUNT = STYLE_LENGTH_FIELDS.size();
 constexpr size_t STYLE_WIRE_BYTES =
-    5 + STYLE_LENGTH_FIELD_COUNT * (sizeof(decltype(CssLength::value)) + 1) + 2 + sizeof(uint32_t);
-constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 18) - 1;
+    5 + STYLE_LENGTH_FIELD_COUNT * (sizeof(decltype(CssLength::value)) + 1) + 3 + sizeof(uint32_t);
+constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 21) - 1;
 
 void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   size_t offset = 0;
@@ -165,6 +164,7 @@ void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   }
   out[offset++] = static_cast<uint8_t>(style.display);
   out[offset++] = static_cast<uint8_t>(style.verticalAlign);
+  out[offset++] = static_cast<uint8_t>(style.textEmphasis);
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -185,6 +185,9 @@ void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   if (style.defined.display) definedBits |= 1 << 15;
   if (style.defined.direction) definedBits |= 1 << 16;
   if (style.defined.verticalAlign) definedBits |= 1 << 17;
+  if (style.defined.textEmphasis) definedBits |= 1 << 18;
+  if (style.defined.imageMaxHeight) definedBits |= 1 << 19;
+  if (style.defined.imageMaxWidth) definedBits |= 1 << 20;
   memcpy(out + offset, &definedBits, sizeof(definedBits));
 }
 
@@ -222,11 +225,14 @@ bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
 
   const uint8_t display = in[offset++];
   const uint8_t verticalAlign = in[offset++];
-  if (display > static_cast<uint8_t>(CssDisplay::None) || verticalAlign > static_cast<uint8_t>(CssVerticalAlign::Sub)) {
+  const uint8_t textEmphasis = in[offset++];
+  if (display > static_cast<uint8_t>(CssDisplay::None) || verticalAlign > static_cast<uint8_t>(CssVerticalAlign::Sub) ||
+      textEmphasis > static_cast<uint8_t>(CssTextEmphasis::OpenDoubleCircle)) {
     return false;
   }
   style.display = static_cast<CssDisplay>(display);
   style.verticalAlign = static_cast<CssVerticalAlign>(verticalAlign);
+  style.textEmphasis = static_cast<CssTextEmphasis>(textEmphasis);
 
   uint32_t definedBits = 0;
   memcpy(&definedBits, in + offset, sizeof(definedBits));
@@ -249,6 +255,9 @@ bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
   style.defined.display = (definedBits & 1 << 15) != 0;
   style.defined.direction = (definedBits & 1 << 16) != 0;
   style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
+  style.defined.textEmphasis = (definedBits & 1 << 18) != 0;
+  style.defined.imageMaxHeight = (definedBits & 1 << 19) != 0;
+  style.defined.imageMaxWidth = (definedBits & 1 << 20) != 0;
   return true;
 }
 
@@ -480,6 +489,56 @@ CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
   return explicitNone ? CssTextDecoration::None : result;
 }
 
+CssTextEmphasis CssParser::interpretTextEmphasis(std::string_view val) {
+  // Shorthand grammar is "<fill> || <shape>" in either order, with the colour of the
+  // text-emphasis shorthand ignored here. An omitted fill is "filled" and an omitted
+  // shape is "sesame", matching what a bare "text-emphasis: dot" or ": open" means.
+  bool none = false;
+  bool open = false;
+  bool haveShape = false;
+  CssTextEmphasis shape = CssTextEmphasis::FilledSesame;
+  forEachDelimitedToken(stripTrailingImportant(val), isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      none = true;
+    } else if (iequalsAscii(token, "open")) {
+      open = true;
+    } else if (iequalsAscii(token, "filled")) {
+      open = false;
+    } else if (iequalsAscii(token, "sesame")) {
+      shape = CssTextEmphasis::FilledSesame;
+      haveShape = true;
+    } else if (iequalsAscii(token, "double-circle")) {
+      shape = CssTextEmphasis::FilledDoubleCircle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "circle")) {
+      shape = CssTextEmphasis::FilledCircle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "triangle")) {
+      shape = CssTextEmphasis::FilledTriangle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "dot")) {
+      shape = CssTextEmphasis::FilledDot;
+      haveShape = true;
+    }
+  });
+
+  if (none) return CssTextEmphasis::None;
+  if (!haveShape) shape = CssTextEmphasis::FilledSesame;
+  if (!open) return shape;
+  switch (shape) {
+    case CssTextEmphasis::FilledDoubleCircle:
+      return CssTextEmphasis::OpenDoubleCircle;
+    case CssTextEmphasis::FilledCircle:
+      return CssTextEmphasis::OpenCircle;
+    case CssTextEmphasis::FilledTriangle:
+      return CssTextEmphasis::OpenTriangle;
+    case CssTextEmphasis::FilledDot:
+      return CssTextEmphasis::OpenDot;
+    default:
+      return CssTextEmphasis::OpenSesame;
+  }
+}
+
 CssLength CssParser::interpretLength(std::string_view val) {
   CssLength result;
   tryInterpretLength(val, result);
@@ -609,6 +668,18 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.imageWidth = len;
       style.defined.imageWidth = 1;
     }
+  } else if (iequalsAscii(name, "max-height")) {
+    CssLength len;
+    if (tryInterpretLength(value, len)) {
+      style.imageMaxHeight = len;
+      style.defined.imageMaxHeight = 1;
+    }
+  } else if (iequalsAscii(name, "max-width")) {
+    CssLength len;
+    if (tryInterpretLength(value, len)) {
+      style.imageMaxWidth = len;
+      style.defined.imageMaxWidth = 1;
+    }
   } else if (iequalsAscii(name, "display")) {
     style.display = iequalsAscii(value, "none") ? CssDisplay::None : CssDisplay::Block;
     style.defined.display = 1;
@@ -628,6 +699,11 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
       style.verticalAlign = CssVerticalAlign::Sub;
       style.defined.verticalAlign = 1;
     }
+  } else if (iequalsAscii(name, "text-emphasis-style") || iequalsAscii(name, "text-emphasis") ||
+             iequalsAscii(name, "-epub-text-emphasis-style") || iequalsAscii(name, "-epub-text-emphasis") ||
+             iequalsAscii(name, "-webkit-text-emphasis-style") || iequalsAscii(name, "-webkit-text-emphasis")) {
+    style.textEmphasis = interpretTextEmphasis(value);
+    style.defined.textEmphasis = 1;
   }
 }
 
@@ -679,6 +755,9 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         // Single-pass scan via find_first_of instead of eight sequential find() calls.
         constexpr std::string_view kUnsupportedSelectorChars = "+>[:#~* ";
         if (sel.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos) return;
+
+        // A chapter-scoped parse keeps only what that chapter can reference (Epub::parseCssFilesFiltered).
+        if (usageFilter_ != nullptr && !usageFilter_->matches(std::string(sel))) return;
 
         if (ruleGrowthStopped_) {
           // Continue the cascade for stored selectors without retrying failed
@@ -860,16 +939,10 @@ CssParser::ParseResult CssParser::loadFromStream(HalFile& source) {
 // Style resolution
 
 CssStyle CssParser::resolveStyle(std::string_view tagName, std::string_view classAttr) const {
-  static bool lowHeapWarningLogged = false;
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_CSS) {
-    if (!lowHeapWarningLogged) {
-      lowHeapWarningLogged = true;
-      LOG_DBG("CSS", "Warning: low heap (%u bytes) below MIN_FREE_HEAP_FOR_CSS (%u), returning empty style",
-              ESP.getFreeHeap(), static_cast<unsigned>(MIN_FREE_HEAP_FOR_CSS));
-    }
-    return CssStyle{};
-  }
-
+  // No heap guard here: nothing below allocates. result is a stack struct of enums, lengths and
+  // bitfields and findStyle() only reads the bounded store. A guard that returned an empty style
+  // below 48KB free used to sit here; it only silently dropped styles, and 48KB sits in the middle
+  // of the X3's 47-63KB reading range, which read as "bold works in some paragraphs but not others".
   CssStyle result;
 
   // 1. Apply element-level style (lowest priority).
@@ -1072,7 +1145,7 @@ bool CssParser::saveToCache(const bool complete) const {
   return true;
 }
 
-CssParser::CacheLoadResult CssParser::loadFromCache() {
+CssParser::CacheLoadResult CssParser::loadFromCache(const CssSelectorUsage* usage) {
   if (cachePath.empty()) {
     return CacheLoadResult::Invalid;
   }
@@ -1164,6 +1237,12 @@ CssParser::CacheLoadResult CssParser::loadFromCache() {
       return CacheLoadResult::Invalid;
     }
 
+    // Skip rules that can never match the scanned chapter; generic publisher templates register
+    // 1000+ rules of which a chapter uses a handful, and the bytes have already been consumed.
+    if (usage != nullptr && !usage->matches(std::string(selectorBuffer.get(), selectorLen))) {
+      continue;
+    }
+
     const RuleInsertResult insertResult = insertOrMerge(std::string_view(selectorBuffer.get(), selectorLen), style);
     if (insertResult == RuleInsertResult::OutOfMemory) {
       clear();
@@ -1186,6 +1265,7 @@ CssParser::CacheLoadResult CssParser::loadFromCache() {
   }
 
   const bool partial = (flags & CSS_CACHE_FLAG_PARTIAL) != 0;
-  LOG_DBG("CSS", "Loaded %u rules from %s cache", ruleCount, partial ? "partial" : "complete");
+  LOG_DBG("CSS", "Loaded %u of %u rules from %s cache%s", entryCount_, ruleCount, partial ? "partial" : "complete",
+          usage != nullptr ? " (usage-filtered)" : "");
   return CacheLoadResult::Complete;
 }

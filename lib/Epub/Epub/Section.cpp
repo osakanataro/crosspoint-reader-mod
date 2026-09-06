@@ -8,6 +8,7 @@
 #include <Serialization.h>
 
 #include "Epub/css/CssParser.h"
+#include "Epub/css/CssSelectorUsage.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
@@ -49,7 +50,17 @@ namespace {
 // v43: Paragraph base direction excludes direction changes from inline elements.
 // v44: Persist internal-link rectangles with each page for touch navigation.
 // v45: Internal EPUB links preserve CSS superscript/subscript positioning.
-constexpr uint8_t SECTION_FILE_VERSION = 45;
+// v46: This tree's vertical writing (tategaki) set, re-based onto upstream 1.6.0 as one step:
+//      header carries isVertical + verticalCharSpacing as cache-key fields; vertical TextBlocks
+//      serialize an isVertical flag, a per-word ypos array and the full-width cell advance;
+//      vertical sections substitute 、。， with Vertical Forms (U+FE10-FE12) when the face has
+//      them; images join the column flow; a paragraph opening with an ideographic space gets no
+//      extra first-line indent; over-long Latin runs are split into column-sized tokens;
+//      max-width / max-height bound images; symbol orientation follows UAX #50; resolveStyle no
+//      longer drops class styles under low heap. (Old tree: v40-v49 on the 1.6.0rc numbering.)
+//      46 leaves upstream's own 40-45 intact and sits above the old tree's 49-free range, so a
+//      cache written by either lineage is rebuilt rather than misread.
+constexpr uint8_t SECTION_FILE_VERSION = 46;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -69,8 +80,8 @@ constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;
 constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 28);
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
-                                 sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+                                 sizeof(uint8_t) + sizeof(bool) + sizeof(bool) + sizeof(uint8_t) + sizeof(uint32_t) +
+                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -117,7 +128,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                                    sizeof(spec.extraParagraphSpacing) + sizeof(spec.paragraphAlignment) +
                                    sizeof(spec.viewportWidth) + sizeof(spec.viewportHeight) + sizeof(pageCount) +
                                    sizeof(spec.hyphenationEnabled) + sizeof(spec.embeddedStyle) +
-                                   sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) + sizeof(uint32_t) +
+                                   sizeof(spec.imageRendering) + sizeof(spec.focusReadingEnabled) +
+                                   sizeof(spec.isVertical) + sizeof(spec.verticalCharSpacing) + sizeof(uint32_t) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
@@ -133,6 +145,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.embeddedStyle);
   serialization::writePod(file, spec.imageRendering);
   serialization::writePod(file, spec.focusReadingEnabled);
+  serialization::writePod(file, spec.isVertical);
+  serialization::writePod(file, spec.verticalCharSpacing);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -169,6 +183,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     bool fileEmbeddedStyle;
     uint8_t fileImageRendering;
     bool fileFocusReadingEnabled;
+    bool fileIsVertical;
+    uint8_t fileVerticalCharSpacing;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -179,12 +195,15 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, fileEmbeddedStyle);
     serialization::readPod(file, fileImageRendering);
     serialization::readPod(file, fileFocusReadingEnabled);
+    serialization::readPod(file, fileIsVertical);
+    serialization::readPod(file, fileVerticalCharSpacing);
 
     if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing || spec.paragraphAlignment != fileParagraphAlignment ||
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
-        spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled) {
+        spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
+        spec.isVertical != fileIsVertical || spec.verticalCharSpacing != fileVerticalCharSpacing) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       clearCache();
@@ -401,7 +420,16 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   if (spec.embeddedStyle) {
     ctx->cssParser = epub->getCssParser();
     if (ctx->cssParser) {
-      const CssParser::CacheLoadResult cacheResult = ctx->cssParser->loadFromCache();
+      // Load only the cached rules this chapter can actually reference.
+      // Generic publisher stylesheets (the EBPAJ/Kadokawa templates most
+      // Japanese EPUBs carry) register 1000+ rules of which a chapter uses a
+      // handful; loading them all costs tens of KB of heap right when section
+      // building needs it most (measured: a 144KB/1865-rule template ran a
+      // 99KB-free build to exhaustion). If the scan fails, fall back to
+      // loading everything.
+      CssSelectorUsage usage;
+      const bool scanned = usage.scanHtmlFile(ctx->parsePath);
+      const CssParser::CacheLoadResult cacheResult = ctx->cssParser->loadFromCache(scanned ? &usage : nullptr);
       if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
         LOG_ERR("SCT", "Insufficient heap to hydrate CSS; section build deferred");
         ctx->cssParser->clear();
@@ -412,6 +440,13 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       }
       if (cacheResult == CssParser::CacheLoadResult::Invalid) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
+        // No usable cache means the book-open parse never completed -- the template
+        // was large enough to exhaust the heap partway. Re-read the stylesheets now,
+        // keeping only this chapter's rules: the same filter, applied early enough
+        // that the heap never fills.
+        if (scanned) {
+          epub->parseCssFilesFiltered(usage);
+        }
       }
     }
   }
@@ -433,11 +468,14 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   // live in the BuildContext (which outlives the parser). The page-complete callback
   // captures the BuildContext pointer to append to its in-RAM LUT; build_ owns the
   // context for the parser's whole lifetime.
+  // Vertical layout reads the inter-cell spacing off the renderer during column layout.
+  renderer.setVerticalCharSpacing(spec.verticalCharSpacing);
+
   BuildContext* ctxPtr = ctx.get();
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
       spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
-      spec.focusReadingEnabled,
+      spec.focusReadingEnabled, spec.isVertical,
       [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
                      const uint32_t visibleTextOffset) {
         ctxPtr->lut.push_back(

@@ -1,6 +1,7 @@
 #include "ImageBlock.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -12,6 +13,19 @@
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PngStreamDecoder.h"
+
+#if INPUT_DIAG
+#include "../../../../src/util/InputDiag.h"
+#define IMG_DIAG(fmt, ...)                                        \
+  do {                                                            \
+    char imgDiagBuf[72];                                          \
+    snprintf(imgDiagBuf, sizeof(imgDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(imgDiagBuf);                        \
+  } while (0)
+#else
+#define IMG_DIAG(fmt, ...)
+#endif
 
 // Cache file format:
 // - uint16_t width
@@ -116,6 +130,14 @@ uint64_t pxcSlotHash = 0;
 uint16_t pxcSlotWidth = 0;
 uint16_t pxcSlotHeight = 0;
 
+#ifdef INPUT_DIAG
+// Accumulated across the images of one pass; drained by takeCacheRenderStats().
+uint32_t imgSlotHits = 0;
+uint32_t imgSlotLoads = 0;
+uint32_t imgStreamDraws = 0;
+uint32_t imgSdMs = 0;
+#endif
+
 void releasePxcSlot() {
   for (auto& chunk : pxcChunks) chunk.reset();
   pxcSlotHash = 0;
@@ -194,9 +216,15 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   const uint64_t cacheHash = imagePathHash(cachePath);
   if (pxcSlotHash == cacheHash && pxcSlotWidth != 0) {
     renderRowsFromPxcSlot(renderer, x, y);
+#ifdef INPUT_DIAG
+    imgSlotHits++;
+#endif
     return true;
   }
 
+#ifdef INPUT_DIAG
+  const uint32_t sdStart = millis();
+#endif
   HalFile cacheFile;
   if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
     return false;
@@ -225,6 +253,10 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   // images take the streaming path below, unchanged from pre-cache behavior.
   if (pxcSlotHash == 0 && loadPxcSlot(cacheHash, cacheFile, cachedWidth, cachedHeight, bytesPerRow)) {
     renderRowsFromPxcSlot(renderer, x, y);
+#ifdef INPUT_DIAG
+    imgSlotLoads++;
+    imgSdMs += millis() - sdStart;
+#endif
     LOG_DBG("IMG", "Cache render complete (payload now in RAM)");
     return true;
   }
@@ -288,13 +320,19 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   }
 
   free(readBuffer);
+#ifdef INPUT_DIAG
+  imgStreamDraws++;
+  imgSdMs += millis() - sdStart;
+#endif
   LOG_DBG("IMG", "Cache render complete");
   return true;
 }
 
 }  // namespace
 
-bool ImageBlock::hasValidCache() const {
+std::string ImageBlock::cachePathFor(const std::string& imagePath) { return getCachePath(imagePath); }
+
+bool ImageBlock::hasValidCacheFor(const std::string& imagePath, const int width, const int height) {
   const auto cachePath = getCachePath(imagePath);
   HalFile cacheFile;
   if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
@@ -305,11 +343,24 @@ bool ImageBlock::hasValidCache() const {
   return readValidCacheHeader(cacheFile, width, height, cachedWidth, cachedHeight);
 }
 
+bool ImageBlock::hasValidCache() const { return hasValidCacheFor(imagePath, width, height); }
+
 bool ImageBlock::needsDecode() const { return !imageFailedThisSession(imagePath) && !hasValidCache(); }
 
 void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
 
 void ImageBlock::releaseRenderCache() { releasePxcSlot(); }
+
+#ifdef INPUT_DIAG
+ImageBlock::CacheRenderStats ImageBlock::takeCacheRenderStats() {
+  const CacheRenderStats stats{imgSlotHits, imgSlotLoads, imgStreamDraws, imgSdMs};
+  imgSlotHits = 0;
+  imgSlotLoads = 0;
+  imgStreamDraws = 0;
+  imgSdMs = 0;
+  return stats;
+}
+#endif
 
 void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int y) const {
   renderer.fillRect(x, y, width, height, true);
@@ -336,6 +387,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight) {
     LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
             screenHeight);
+    IMG_DIAG("dropped: pos (%d,%d) %dx%d scr %dx%d", x, y, width, height, screenWidth, screenHeight);
     return;
   }
 
@@ -361,12 +413,31 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     return;  // Successfully rendered from cache
   }
 
+  // Neither the 32KB inflate window nor the PNG decoder's ~62KB object fits
+  // the typical mid-read heap (16-30KB largest block), which is what left
+  // build-time pregeneration misses as permanently empty boxes: the lazy path
+  // below failed on every visit. Handing back the font caches recovers ~70KB
+  // contiguous (measured via close_heap), the work below then succeeds once,
+  // writes the .pxc, and never runs again for this image. Cost: the rest of
+  // this render loads glyphs on demand and the next page re-warms -- paid once
+  // per image whose build missed.
+  constexpr uint32_t LAZY_DECODE_MIN_MAX_ALLOC = 68 * 1024;
+  if (ESP.getMaxAllocHeap() < LAZY_DECODE_MIN_MAX_ALLOC) {
+    if (auto* fcm = renderer.getFontCacheManager()) {
+      fcm->releaseSdFontCaches();
+    }
+    IMG_DIAG("lazy decode: released caches max=%u", ESP.getMaxAllocHeap());
+  }
+
   // The build only header-probed the image for dimensions; pull the actual
   // file out of the book now, on first visit to the page.
   if (!srcPath.empty() && extractFn && !Storage.exists(imagePath.c_str())) {
     LOG_DBG("IMG", "Lazy-extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
     if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) {
       LOG_ERR("IMG", "Lazy extraction failed: %s", srcPath.c_str());
+      IMG_DIAG("lazyx FAIL %s", srcPath.size() > 24 ? srcPath.c_str() + srcPath.size() - 24 : srcPath.c_str());
+    } else {
+      IMG_DIAG("lazyx ok %s", srcPath.size() > 24 ? srcPath.c_str() + srcPath.size() - 24 : srcPath.c_str());
     }
   }
 
@@ -375,6 +446,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
+    IMG_DIAG("placeholder: no file");
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -386,6 +458,18 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
+    return;
+  }
+
+  // Streamed PNG path first: its inflate state is two separate heap blocks of
+  // 11KB and 32KB, both available even under the measured 45KB largest-block
+  // ceiling that makes PNGdec's single ~62KB object impossible mid-read. On
+  // success the .pxc exists and the cache render above takes over -- for this
+  // pass and every future one.
+  if (FsHelpers::hasPngExtension(imagePath) && PngStreamDecoder::decodeToCache(imagePath, cachePath, width, height) &&
+      renderFromCache(renderer, cachePath, x, y, width, height)) {
+    renderer.preserveImagePolarity(x, y, width, height);
+    IMG_DIAG("lazy stream ok %dx%d max=%u", width, height, ESP.getMaxAllocHeap());
     return;
   }
 
@@ -415,6 +499,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
+    IMG_DIAG("placeholder: decode FAIL");
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;

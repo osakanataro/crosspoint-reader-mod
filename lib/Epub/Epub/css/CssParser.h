@@ -9,6 +9,8 @@
 
 #include "CssStyle.h"
 
+class CssSelectorUsage;
+
 /**
  * Lightweight CSS parser for EPUB stylesheets
  *
@@ -50,7 +52,10 @@ class CssParser {
   };
 
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 11;
+  // v12 (this tree): the style record also carries text-emphasis and max-width / max-height
+  //     (three more length/enum fields, defined bits 18-20). Upstream 1.6.0 is v11 with the
+  //     shorter record, so the number has to differ or an old cache would decode shifted.
+  static constexpr uint8_t CSS_CACHE_VERSION = 12;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -131,7 +136,12 @@ class CssParser {
    * Clears any existing rules before loading.
    * @return Complete when loaded, LowMemory when it should be retried, otherwise Invalid
    */
-  CacheLoadResult loadFromCache();
+  // usage: keep only rules whose selector can match the scanned chapter (nullptr = all).
+  CacheLoadResult loadFromCache(const CssSelectorUsage* usage = nullptr);
+
+  // While set, processRuleBlockWithStyle drops selectors the chapter cannot reference. Used by
+  // Epub::parseCssFilesFiltered for templates too large to register whole.
+  void setUsageFilter(const CssSelectorUsage* usage) { usageFilter_ = usage; }
 
  private:
   enum class RuleInsertResult : uint8_t {
@@ -166,6 +176,7 @@ class CssParser {
   uint16_t styleCount_ = 0;
   uint16_t styleCapacity_ = 0;
   bool ruleGrowthStopped_ = false;
+  const CssSelectorUsage* usageFilter_ = nullptr;
 
   std::string cachePath;
 
@@ -191,6 +202,7 @@ class CssParser {
   static CssFontStyle interpretFontStyle(std::string_view val);
   static CssFontWeight interpretFontWeight(std::string_view val);
   static CssTextDecoration interpretDecoration(std::string_view val);
+  static CssTextEmphasis interpretTextEmphasis(std::string_view val);
   static CssLength interpretLength(std::string_view val);
   /** Returns true only when a numeric length was parsed (e.g. 2em, 50%). False for auto/inherit/initial. */
   static bool tryInterpretLength(std::string_view val, CssLength& out);

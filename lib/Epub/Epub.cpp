@@ -14,6 +14,20 @@
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
 
+#if INPUT_DIAG
+#include "../../../src/util/InputDiag.h"
+// CSS loading writes to the image log: an unstyled book shows up first as
+// pictures at the wrong size, so the two questions get read together.
+#define CSS_DIAG(fmt, ...)                                        \
+  do {                                                            \
+    char cssDiagBuf[72];                                          \
+    snprintf(cssDiagBuf, sizeof(cssDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(cssDiagBuf);                        \
+  } while (0)
+#else
+#define CSS_DIAG(fmt, ...)
+#endif
+
 bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   const auto containerPath = "META-INF/container.xml";
   size_t containerSize;
@@ -128,6 +142,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   }
 
   bookMetadata.textReferenceHref = opfParser.textReferenceHref;
+  bookMetadata.pageProgressionRtl = opfParser.pageProgressionRtl;
 
   if (!opfParser.tocNcxPath.empty()) {
     tocNcxItem = opfParser.tocNcxPath;
@@ -239,6 +254,20 @@ void Epub::discoverCssFilesFromZip() {
 }
 
 CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existingCacheStatus) const {
+  return parseCssFilesImpl(existingCacheStatus, nullptr);
+}
+
+// Re-read the stylesheets keeping only the rules one chapter can reference. For templates too
+// large to register whole (the EBPAJ/Kadokawa stylesheets most Japanese EPUBs carry) the
+// unfiltered pass stops partway and the cache is partial or absent; this pass costs one more
+// walk over the CSS per chapter build, which is SD time rather than heap. Its rules stay
+// resident for the section build and are never written to the cache.
+void Epub::parseCssFilesFiltered(const CssSelectorUsage& usage) const {
+  parseCssFilesImpl(CssParser::CacheStatus::Missing, &usage);
+}
+
+CssParser::ParseResult Epub::parseCssFilesImpl(const CssParser::CacheStatus existingCacheStatus,
+                                               const CssSelectorUsage* usage) const {
   // Maximum CSS file size we'll attempt to parse (uncompressed)
   // Larger files risk memory exhaustion on ESP32
   constexpr size_t MAX_CSS_FILE_SIZE = 128 * 1024;  // 128KB
@@ -253,6 +282,7 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
 
   const bool hasPartialCache = existingCacheStatus == CssParser::CacheStatus::Partial;
   cssParser->clear();
+  cssParser->setUsageFilter(usage);
 
   // Some converters emit one byte-identical stylesheet per chapter (100+ .css
   // entries), and each parse costs a zip locate plus an SD extract round-trip.
@@ -323,6 +353,8 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
     if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
       LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
               MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+      CSS_DIAG("css skip#%u heap free=%u need=%u", static_cast<unsigned>(cssIndex), freeHeap,
+               static_cast<unsigned>(MIN_HEAP_FOR_CSS_PARSING));
       if (parseResult == CssParser::ParseResult::Complete) {
         parseResult = CssParser::ParseResult::Partial;
       }
@@ -335,6 +367,7 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
       if (cssFileSize > MAX_CSS_FILE_SIZE) {
         LOG_ERR("EBP", "CSS file too large (%zu bytes > %zu max), skipping: %s", cssFileSize, MAX_CSS_FILE_SIZE,
                 cssPath.c_str());
+        CSS_DIAG("css skip#%u size=%u", static_cast<unsigned>(cssIndex), static_cast<unsigned>(cssFileSize));
         if (parseResult == CssParser::ParseResult::Complete) {
           parseResult = CssParser::ParseResult::Partial;
         }
@@ -368,7 +401,14 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
       parseResult = CssParser::ParseResult::Error;
       continue;
     }
+    const size_t rulesBefore = cssParser->ruleCount();
     const CssParser::ParseResult streamResult = cssParser->loadFromStream(tempCssFile);
+    if (streamResult != CssParser::ParseResult::Complete) {
+      CSS_DIAG("css trunc#%u at %u rules", static_cast<unsigned>(cssIndex),
+               static_cast<unsigned>(cssParser->ruleCount()));
+    }
+    CSS_DIAG("css file#%u +%u rules", static_cast<unsigned>(cssIndex),
+             static_cast<unsigned>(cssParser->ruleCount() - rulesBefore));
     // Explicitly close() file before calling Storage.remove()
     tempCssFile.close();
     Storage.remove(tmpCssPath.c_str());
@@ -377,6 +417,15 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
     } else if (streamResult == CssParser::ParseResult::Partial && parseResult == CssParser::ParseResult::Complete) {
       parseResult = CssParser::ParseResult::Partial;
     }
+  }
+
+  cssParser->setUsageFilter(nullptr);
+  CSS_DIAG("css done rules=%u result=%d filtered=%d", static_cast<unsigned>(cssParser->ruleCount()),
+           static_cast<int>(parseResult), usage != nullptr ? 1 : 0);
+  if (usage != nullptr) {
+    // Chapter-scoped rules: leave them resident for the section build that asked, and never
+    // persist them -- a later chapter reading them back would silently lose everything it needs.
+    return parseResult;
   }
 
   if (parseResult == CssParser::ParseResult::Error) {
@@ -1020,4 +1069,11 @@ int Epub::resolveHrefToSpineIndex(const std::string& href) const {
     if (spineFilename == targetFilename) return i;
   }
   return -1;
+}
+
+bool Epub::isPageProgressionRtl() const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
+    return false;
+  }
+  return bookMetadataCache->coreMetadata.pageProgressionRtl;
 }
