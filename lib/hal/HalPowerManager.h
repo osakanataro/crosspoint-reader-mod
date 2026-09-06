@@ -22,7 +22,7 @@ class HalPowerManager {
 
   enum LockMode { None, NormalSpeed };
   LockMode currentLockMode = None;
-  SemaphoreHandle_t modeMutex = nullptr;  // Protect access to currentLockMode
+  SemaphoreHandle_t modeMutex = nullptr;  // Protects currentLockMode and serializes CPU frequency changes
 
  public:
 #if BOARD_HAS_PSRAM
@@ -44,6 +44,12 @@ class HalPowerManager {
 
   // Get battery percentage (range 0-100)
   uint16_t getBatteryPercentage() const;
+
+  // Pack voltage in millivolts, straight from the gauge with no caching or
+  // smoothing. Percentage moves in whole points and can sit still for a long
+  // time; millivolts is what makes a drain measurable over an hour rather than
+  // a day. 0 when the board has no gauge.
+  uint16_t getBatteryMillivolts() const;
 
   // RAII helper class to manage power saving locks
   // Usage: create an instance of Lock in a scope to disable power saving, for example when running a task that needs
