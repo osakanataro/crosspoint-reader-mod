@@ -82,6 +82,9 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     if (sdFont->isOverflowGlyph(glyph)) {
       return sdFont->getOverflowBitmap(glyph);  // may be nullptr for zero-width glyphs
     }
+    // Prewarmed SD glyph: the mini bitmap is chunked (non-contiguous), so there is
+    // no fontData->bitmap base to index. Resolve via the per-style chunk table.
+    return sdFont->miniGlyphBitmap(fontData->glyphMissCtx, glyph->dataOffset);
   }
   return &fontData->bitmap[glyph->dataOffset];
 }
@@ -178,6 +181,42 @@ void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   if (!result.second) {
     LOG_ERR("GFX", "Font ID %d already registered, ignoring duplicate", fontId);
   }
+}
+
+uint32_t GfxRenderer::glyphOnDemandLoads() const {
+  uint32_t loads = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) loads += font->overflowLoads();
+  }
+  return loads;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuilds() const {
+  uint32_t rebuilds = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) rebuilds += font->miniRebuilds();
+  }
+  return rebuilds;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuildMs() const {
+  uint32_t ms = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) ms += font->miniRebuildMs();
+  }
+  return ms;
+}
+
+uint32_t GfxRenderer::glyphPrewarmEntryFails() const {
+  uint32_t fails = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) fails += font->prewarmEntryFails();
+  }
+  return fails;
 }
 
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {

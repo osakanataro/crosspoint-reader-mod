@@ -109,6 +109,9 @@ void ActivityManager::renderTaskLoop() {
       char renderedName[16];
       snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
       const unsigned long renderStart = millis();
+      const uint32_t onDemandStart = renderer.glyphOnDemandLoads();
+      const uint32_t rebuildStart = renderer.glyphMiniRebuilds();
+      const uint32_t rebuildMsStart = renderer.glyphMiniRebuildMs();
       InputDiag::noteRenderStart();
 #endif
       // Night mode is a global output polarity applied to every activity.
@@ -117,8 +120,9 @@ void ActivityManager::renderTaskLoop() {
       currentActivity->render(std::move(lock));
 #ifdef INPUT_DIAG
       const unsigned long renderDurationMs = millis() - renderStart;
-      // The glyph counters (on-demand loads, arena rebuilds) come with the SD font work; 0 until then.
-      InputDiag::noteRender(renderedName, renderDurationMs, 0, 0, 0);
+      InputDiag::noteRender(renderedName, renderDurationMs, renderer.glyphOnDemandLoads() - onDemandStart,
+                            renderer.glyphMiniRebuilds() - rebuildStart,
+                            renderer.glyphMiniRebuildMs() - rebuildMsStart);
       // A render this slow isn't drawing -- it's stuck somewhere upstream (SD I/O, glyph
       // cache, allocation). The 16-line log ring is system-wide and short, so whatever ran
       // during the stall is likely still in it right now; a routine render would evict it

@@ -169,8 +169,14 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manage
 }
 
 void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
+  const bool wasScanning = manager_->scanMode_ == ScanMode::Scanning;
   manager_->scanMode_ = ScanMode::None;
   if (manager_->scanCodepointCount_ == 0) return;
+
+  if (wasScanning) {
+    manager_->lastScanBytes_ = 0;
+    manager_->lastScanFonts_ = 0;
+  }
 
   std::sort(manager_->scanCodepoints_, manager_->scanCodepoints_ + manager_->scanCodepointCount_);
 
@@ -197,6 +203,10 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
 
     const uint8_t fontSlot = static_cast<uint8_t>(group) / 4;
     const uint8_t style = static_cast<uint8_t>(group) & 0x03;
+    if (wasScanning) {
+      manager_->lastScanBytes_ += static_cast<uint32_t>(output - utf8Text);
+      manager_->lastScanFonts_++;
+    }
     manager_->prewarmCache(manager_->scanFontIds_[fontSlot], utf8Text, 1 << style);
   }
 
