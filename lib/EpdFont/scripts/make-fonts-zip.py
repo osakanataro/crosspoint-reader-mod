@@ -111,20 +111,28 @@ def describe_family(fam: dict, sources: Path, fallback_dir: Path, present: list)
 
 def build_notice(families: list, sources: Path, fallback_dir: Path, tree: Path, archive: str) -> str:
     own = [f["name"] for f in families if f.get("license")]
+    if own:
+        lic_ja = ("各書体のライセンスは下記の書体ごとの項に記したとおりで、この変換物も書体ごとに同じ条件で配布します。"
+                  "後詰めに使う Noto Sans／Noto Sans Math は SIL Open Font License 1.1（同梱の OFL-1.1.txt）です。")
+        lic_en = ("Each family's licence is stated in its own entry below and its conversion is distributed under "
+                  "the same terms; the Noto Sans / Noto Sans Math fallbacks are under the SIL Open Font License 1.1 "
+                  "(OFL-1.1.txt in this folder).")
+    else:
+        lic_ja = "元フォントはすべて SIL Open Font License 1.1（同梱の OFL-1.1.txt）で公開されており、この変換物も同じ条件で配布します。"
+        lic_en = ("Every source is published under the SIL Open Font License 1.1 (OFL-1.1.txt in this folder) "
+                  "and this archive is distributed under the same terms.")
     head = f"""OST版 CrossPoint Reader SD カード用フォント / OST-edition SD-card fonts
 archive: {archive}   generated: {datetime.date.today().isoformat()}
 
 このアーカイブの .cpfont は、下記の元フォントから CrossPoint Reader 用の点画像形式に
 変換したものです（収録範囲は JIS X 0213 などの符号位置リストで絞り、太字は元フォントの
-太字から生成。字形の変更はしていません）。元フォントはすべて SIL Open Font License 1.1
-（同梱の OFL-1.1.txt）で公開されており、この変換物も同じ条件で配布します。
+太字から生成。字形の変更はしていません）。{lic_ja}
 著作権は各元フォントの著作権者にあります。
 
 The .cpfont files here are bitmap conversions of the source fonts listed below for
 CrossPoint Reader (glyphs subset by code-point lists such as JIS X 0213; bold from the
-sources' own bold faces; glyph shapes unchanged). Every source is published under the
-SIL Open Font License 1.1 (OFL-1.1.txt in this folder) and this archive is distributed
-under the same terms. Copyright remains with the respective copyright holders.
+sources' own bold faces; glyph shapes unchanged). {lic_en}
+Copyright remains with the respective copyright holders.
 
 生成元 / built by: lib/EpdFont/scripts/build-sd-fonts.py + make-fonts-zip.py
 (https://github.com/osakanataro/crosspoint-reader-mod, branch feat/japanese-sd-fonts)
