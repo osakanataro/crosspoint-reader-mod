@@ -231,7 +231,7 @@ bool EpubReaderActivity::loadBook() {
   epub = std::move(loadedEpub);
   InputDiag::noteOpenStage(1, "epub");
 
-  ImageBlock::clearSessionRenderFailures();
+  ImageBlock::clearRenderFailures();
   ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* src, const char* dest) {
     return static_cast<Epub*>(ctx)->extractItemToFile(src, dest);
   });
@@ -1657,6 +1657,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginRight, const int orientedMarginBottom,
                                         const int orientedMarginLeft) {
   const auto t0 = millis();
+  // Upstream #3412: an image that failed to decode is remembered only for this page's
+  // render passes, not for the rest of the session -- on the X3 a decode can fail on a
+  // transient heap dip, and the picture used to stay a placeholder until the book was closed.
+  ImageBlock::clearRenderFailures();
   const int fontId = SETTINGS.getReaderFontId();
   const uint32_t onDemandAtRenderStart = renderer.glyphOnDemandLoads();
 

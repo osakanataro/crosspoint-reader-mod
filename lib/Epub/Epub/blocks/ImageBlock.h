@@ -26,7 +26,7 @@ class ImageBlock final : public Block {
   static std::string cachePathFor(const std::string& imagePath);
   static bool hasValidCacheFor(const std::string& imagePath, int width, int height);
   void renderPlaceholder(GfxRenderer& renderer, int x, int y) const;
-  static void clearSessionRenderFailures();
+  static void clearRenderFailures();
 
   // A page render draws its image up to ~13 times (BW double-refresh plus every
   // grayscale band pass), and each draw streams the whole .pxc off SD. The

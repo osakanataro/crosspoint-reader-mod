@@ -479,6 +479,18 @@ entries with not one STORED. Three new chapters cover what the re-survey added:
       sites), per-character ruby with spans, and a sentence cut into three
       spans. Pass condition: same look as chapters 5 and 8.
 
+v12 (2026-09-08) adds chapter 13, twelve numbered 480x360 pictures on
+consecutive pages (a big seven-segment number, a different hatch per
+picture so a repeat is visible even when the number is not). It exists for
+the upstream #3412 pick: an illustration whose decode failed on a transient
+heap dip used to stay a placeholder until the book was closed; the failure
+record is now cleared after every page render. Pass conditions: all twelve
+in order; a placeholder page comes back after going back one page and
+forward again (repeated placeholders mean the heap really is short --
+/image-diag.txt has the trail); the text paragraphs after pictures 4 and 8
+and at the end render with no missing glyphs; the first open of the chapter
+takes 10-20 s to build the pixel caches and the second open does not.
+
 image-size-test.epub
 --------------------
 
