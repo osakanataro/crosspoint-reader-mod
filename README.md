@@ -149,6 +149,28 @@ CJK版だけは freeink-sdk 自体も自前でforkしていて、SSD1677パネ�
 
 ----
 
+### 配布フォントの出典と同梱文書（2026-09-08）
+
+SDカード用フォント `fonts-YYYYMMDD<n>.zip` の3書体は、`feat/japanese-sd-fonts` ブランチの `lib/EpdFont/scripts/sd-fonts.yaml`
+に書いた取得元から元フォントを取り、JIS X 0213 などの符号位置リストで収録範囲を絞って点画像形式（.cpfont）に変換したもの。
+太字は元フォントの太字から作り、字形は変えていない。元フォントはすべて SIL Open Font License 1.1。
+
+| zip内の書体 | 元フォント（取得元） | 2026-08-12 取得時の版 | 著作権表示 |
+|---|---|---|---|
+| BIZUDGothic | BIZ UDGothic Regular／Bold — github.com/googlefonts/morisawa-biz-ud-gothic（main） | 1.051 | 2022 The BIZ UDGothic Project Authors（モリサワ） |
+| BIZUDMincho | BIZ UDMincho Regular／Bold — github.com/googlefonts/morisawa-biz-ud-mincho（main） | 1.06 | 2022 The BIZ UDMincho Project Authors |
+| NotoSansJP | Noto Sans CJK JP Regular／Bold（OTF）— github.com/notofonts/noto-cjk（main） | 2.004 | 2014–2021 Adobe |
+| 後詰め（共通） | Noto Sans Math — github.com/notofonts/notofonts.github.io（main）、Noto Sans — 本家同梱 `builtinFonts/source/NotoSans` | 3.000／— | Google LLC／The Noto Project Authors |
+
+後詰めは元フォントに無い字（∼ ≈ などの記号）だけを補う。取得元は版を固定していないので、作り直すと元フォントの版が
+上がっている可能性がある（NOTICE.txt に取得時の版を記録する）。
+
+**2026-09-08 から、配布 zip に `fonts/NOTICE.txt`（上の表に当たる出典・版・著作権表示・後詰め・変換内容）と
+`fonts/OFL-1.1.txt`（ライセンス本文）を同梱する**（ユーザー指示）。OFL は変換物を配る際もライセンス本文と著作権表示を
+添えることを求めているため。生成は同ブランチの `lib/EpdFont/scripts/make-fonts-zip.py` で、元フォントの名前表から
+版・著作権・Reserved Font Name の有無を読んで書き出す（4つの元フォントのいずれも Reserved Font Name は宣言していない）。
+最初の同梱版は `fonts-202609080.zip`（フォント本体は `fonts-202608240.zip` と1バイトも変わらない）。
+
 ### 段階と進み具合（ユーザー指定の順序）:
 
 | 段階 | 内容 | 状態 |
