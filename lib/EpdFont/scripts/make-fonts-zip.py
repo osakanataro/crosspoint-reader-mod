@@ -63,14 +63,21 @@ def describe_family(fam: dict, sources: Path, fallback_dir: Path, present: list)
     out += [f"    {p}" for p in present]
     out.append("  source fonts (converted from):")
     for style, spec in fam.get("styles", {}).items():
-        url = spec["url"] if isinstance(spec, dict) else spec
-        info = name_table(source_file(sources, name, spec))
-        out.append(f"    {style:<7} {url}")
+        if isinstance(spec, dict) and "path" in spec:
+            origin = spec.get("source", spec["path"])
+            info = name_table(SCRIPT_DIR.parent / spec["path"])
+        else:
+            origin = spec["url"] if isinstance(spec, dict) else spec
+            info = name_table(source_file(sources, name, spec))
+        out.append(f"    {style:<7} {origin}")
         if info:
             out.append(f"            version: {info['version']}")
             out.append(f"            copyright: {info['copyright']}")
-            out.append(f"            licence: {'SIL OFL 1.1' if info['ofl'] else 'see font'}"
-                       f"{' (declares a Reserved Font Name -- check before naming derived files)' if info['reserved'] else ' (no Reserved Font Name declared)'}")
+            if fam.get("license"):
+                out.append(f"            licence: {fam['license']['name']} (see {Path(fam['license']['file']).name})")
+            else:
+                out.append(f"            licence: {'SIL OFL 1.1' if info['ofl'] else 'see font'}"
+                           f"{' (declares a Reserved Font Name -- check before naming derived files)' if info['reserved'] else ' (no Reserved Font Name declared)'}")
         else:
             out.append("            (source file not on hand; version not recorded)")
     fb = []
@@ -88,6 +95,13 @@ def describe_family(fam: dict, sources: Path, fallback_dir: Path, present: list)
     if fb:
         out.append("  fallback fonts (only for code points the source lacks):")
         out += fb
+    if fam.get("license"):
+        lic = fam["license"]
+        out.append(f"  licence of this family: {lic['name']} -- NOT the OFL; the full text is in "
+                   f"{Path(lic['file']).name} in this folder, and this derived font is distributed under it.")
+        out.append(f"  derived-font name: '{name}' deliberately does not contain the original's name (art. 3.1(1)).")
+        out.append("  how to replace with the original (art. 3.1(2)):")
+        out.append(f"    {lic['replace']}")
     lists = fam.get("codepoints_file", [])
     if lists:
         out.append("  code points kept: " + ", ".join(Path(p).name for p in lists)
@@ -95,9 +109,10 @@ def describe_family(fam: dict, sources: Path, fallback_dir: Path, present: list)
     return "\n".join(out)
 
 
-def build_notice(families: list, sources: Path, fallback_dir: Path, tree: Path, stamp: str) -> str:
+def build_notice(families: list, sources: Path, fallback_dir: Path, tree: Path, archive: str) -> str:
+    own = [f["name"] for f in families if f.get("license")]
     head = f"""OST版 CrossPoint Reader SD カード用フォント / OST-edition SD-card fonts
-archive: fonts-{stamp}.zip   generated: {datetime.date.today().isoformat()}
+archive: {archive}   generated: {datetime.date.today().isoformat()}
 
 このアーカイブの .cpfont は、下記の元フォントから CrossPoint Reader 用の点画像形式に
 変換したものです（収録範囲は JIS X 0213 などの符号位置リストで絞り、太字は元フォントの
@@ -114,6 +129,9 @@ under the same terms. Copyright remains with the respective copyright holders.
 生成元 / built by: lib/EpdFont/scripts/build-sd-fonts.py + make-fonts-zip.py
 (https://github.com/osakanataro/crosspoint-reader-mod, branch feat/japanese-sd-fonts)
 """
+    if own:
+        head += (f"\n注意 / NOTE: {', '.join(own)} は OFL ではなく、各書体の項に記した別のライセンスで配布します。"
+                 f" / {', '.join(own)} are NOT under the OFL; see each family's entry for its own licence.\n")
     blocks = []
     for fam in families:
         present = sorted(p.name for p in (tree / fam["name"]).glob("*.cpfont"))
@@ -140,6 +158,7 @@ def main():
     ap.add_argument("--sources", type=Path, default=DEFAULT_SOURCES, help="downloaded source fonts")
     ap.add_argument("--fallback-dir", type=Path, default=DEFAULT_FALLBACK)
     ap.add_argument("--families", nargs="*", help="subset of families to pack (default: all present)")
+    ap.add_argument("--name", default="fonts", help="archive name prefix: <name>-YYYYMMDD<n>.zip (default fonts)")
     args = ap.parse_args()
 
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
@@ -150,15 +169,19 @@ def main():
         sys.exit(f"no family directories found under {args.fonts_dir}")
 
     stamp = f"{args.date}{args.serial}"
-    out = args.out_dir / f"fonts-{stamp}.zip"
-    notice = build_notice(families, args.sources, args.fallback_dir, args.fonts_dir, stamp)
+    out = args.out_dir / f"{args.name}-{stamp}.zip"
+    notice = build_notice(families, args.sources, args.fallback_dir, args.fonts_dir, out.name)
     licence = ofl_text(args.fallback_dir)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for fam in families:
             for p in sorted((args.fonts_dir / fam["name"]).glob("*.cpfont")):
                 z.write(p, f"fonts/{fam['name']}/{p.name}")
         z.writestr("fonts/NOTICE.txt", notice)
+        # The OFL always travels: the Noto Sans / Noto Sans Math fallbacks are OFL even when
+        # the family's own licence is something else.
         z.writestr("fonts/OFL-1.1.txt", licence)
+        for lic in {fam["license"]["file"] for fam in families if fam.get("license")}:
+            z.write(SCRIPT_DIR / lic, f"fonts/{Path(lic).name}")
     print(f"wrote {out} ({out.stat().st_size // 1024} KB, {len(families)} families)")
     print(notice)
 

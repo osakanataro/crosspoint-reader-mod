@@ -318,3 +318,49 @@ families:
     styles:
       regular:    {url: "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"}
       bold:       {url: "https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"}
+
+  # ---- IPAex 明朝 / ゴシック (internal evaluation only, 2026-09-08) --------------------
+  # Not part of the public fonts-YYYYMMDD<n>.zip. The IPA Font License v1.0 (not OFL)
+  # governs these: a derived program may not carry "IPA" in its name (art. 3.1(1)), must
+  # come with a way to replace it by the original (3.1(2)) and stays under the same licence
+  # (3.1(3)). Hence the family names below, the `license:` block that make-fonts-zip.py
+  # writes into NOTICE.txt, and the separate fonts-ipa-*.zip that only goes to the
+  # claudeworks exchange repo. Sources: extract ipaexm00401.zip / ipaexg00401.zip from
+  # https://moji.or.jp/ipafont/ipaex00401/ into scripts/downloaded_fonts/<Family>/ (the
+  # official download is a zip, which the url: fetcher cannot unpack). Regular only --
+  # IPAex ships no bold; the reader falls back to regular for bold runs.
+  - name: ExMincho
+    description: "IPAex Mincho 004.01 (JIS X 0213:2004), internal evaluation"
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols,cjk-ext-supplementary
+    codepoints_file:
+      - codepoints/japanese_jis0213.txt
+      - codepoints/jis0208_greek_cyrillic.txt
+      - codepoints/japanese_supplementary_kanji.txt
+      - codepoints/japanese_compat_kanji.txt
+    extra_fallbacks:
+      - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
+    sizes: [8, 10, 12, 14, 16, 18]
+    styles:
+      regular:    {path: "scripts/downloaded_fonts/ExMincho/ipaexm.ttf", source: "https://moji.or.jp/ipafont/ipaex00401/ (ipaexm00401.zip, IPAexMincho 004.01)"}
+    license:
+      name: "IPA Font License Agreement v1.0"
+      file: "licenses/IPA_Font_License_Agreement_v1.0.txt"
+      replace: "元のフォント（IPAex明朝 004.01、ipaexm00401.zip）は https://moji.or.jp/ipafont/ipaex00401/ から入手できます。この派生フォントを元のフォントに置き換えるには、SD カードの fonts/ExMincho/ を削除し、元の TTF を別の環境で使ってください（端末は TTF を直接読めません）。/ The original (IPAexMincho 004.01, ipaexm00401.zip) is available at https://moji.or.jp/ipafont/ipaex00401/; to replace this derived font with it, delete fonts/ExMincho/ from the SD card and use the original TTF elsewhere (the reader cannot load TTF)."
+
+  - name: ExGothic
+    description: "IPAex Gothic 004.01 (JIS X 0213:2004), internal evaluation"
+    intervals: ascii,latin1,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols,cjk-ext-supplementary
+    codepoints_file:
+      - codepoints/japanese_jis0213.txt
+      - codepoints/jis0208_greek_cyrillic.txt
+      - codepoints/japanese_supplementary_kanji.txt
+      - codepoints/japanese_compat_kanji.txt
+    extra_fallbacks:
+      - {url: "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
+    sizes: [8, 10, 12, 14, 16, 18]
+    styles:
+      regular:    {path: "scripts/downloaded_fonts/ExGothic/ipaexg.ttf", source: "https://moji.or.jp/ipafont/ipaex00401/ (ipaexg00401.zip, IPAexGothic 004.01)"}
+    license:
+      name: "IPA Font License Agreement v1.0"
+      file: "licenses/IPA_Font_License_Agreement_v1.0.txt"
+      replace: "元のフォント（IPAexゴシック 004.01、ipaexg00401.zip）は https://moji.or.jp/ipafont/ipaex00401/ から入手できます。この派生フォントを元のフォントに置き換えるには、SD カードの fonts/ExGothic/ を削除し、元の TTF を別の環境で使ってください（端末は TTF を直接読めません）。/ The original (IPAexGothic 004.01, ipaexg00401.zip) is available at https://moji.or.jp/ipafont/ipaex00401/; to replace this derived font with it, delete fonts/ExGothic/ from the SD card and use the original TTF elsewhere (the reader cannot load TTF)."
