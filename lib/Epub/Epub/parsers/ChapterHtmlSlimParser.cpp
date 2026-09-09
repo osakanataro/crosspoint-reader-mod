@@ -1765,6 +1765,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // fragments do not coalesce). Every failure path below simply leaves
                 // the old lazy render-time extract/decode as the fallback.
                 if (!ImageBlock::hasValidCacheFor(cachedImagePath, displayWidth, displayHeight)) {
+                  const unsigned long pregenStartMs = millis();
                   // The popup draws and refreshes the panel, so it must be on screen
                   // before the framebuffer is lent below.
                   if (self->popupFn && !self->imagePopupFired) {
@@ -1813,8 +1814,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                       GfxRenderer::FrameBufferLoan decodeLoan(self->renderer);
                       cached = PngStreamDecoder::decodeToCache(
                           cachedImagePath, ImageBlock::cachePathFor(cachedImagePath), displayWidth, displayHeight);
-                      IMG_DIAG("pregen stream %s %dx%d max=%u", cached ? "ok" : "FAIL", displayWidth, displayHeight,
-                               ESP.getMaxAllocHeap());
+                      IMG_DIAG("pregen stream %s %dx%d max=%u ms=%lu", cached ? "ok" : "FAIL", displayWidth,
+                               displayHeight, ESP.getMaxAllocHeap(), millis() - pregenStartMs);
                     }
                     if (!cached) {
                       // PNGdec/JPEGDEC fallback (JPEG always; PNG only for the forms
@@ -1839,8 +1840,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                       ImageToFramebufferDecoder* pregenDecoder = ImageDecoderFactory::getDecoder(cachedImagePath);
                       cached =
                           pregenDecoder && pregenDecoder->decodeToFramebuffer(cachedImagePath, self->renderer, pregen);
-                      IMG_DIAG("pregen decode %s %dx%d max=%u", cached ? "ok" : "FAIL", displayWidth, displayHeight,
-                               ESP.getMaxAllocHeap());
+                      IMG_DIAG("pregen decode %s %dx%d max=%u ms=%lu", cached ? "ok" : "FAIL", displayWidth,
+                               displayHeight, ESP.getMaxAllocHeap(), millis() - pregenStartMs);
                     }
                   }
                 }

@@ -63,6 +63,7 @@ int16_t listVisibleRowCount = 0;
 int16_t listScreenHeight = 0;
 
 uint32_t renderMaxMs = 0;
+uint32_t renderMaxAtMs = 0;  // uptime when render_max was set, to line it up with the other logs
 uint32_t renderLastMs = 0;
 uint32_t renderCount = 0;
 // Which activity produced renderMaxMs. render_log's 12-entry ring rolls the culprit
@@ -158,6 +159,7 @@ uint32_t vertRubyGroups = 0;
 // loops, so a lopsided pair means the first pass warmed something -- these say
 // what: glyphs fetched one at a time, or .pxc draws that went back to the card.
 uint32_t aaWorstLsbMs = 0;
+uint32_t aaWorstAtMs = 0;
 uint32_t aaWorstLsbGlyphs = 0;
 uint32_t aaWorstLsbSdMs = 0;
 uint32_t aaWorstLsbSdDraws = 0;
@@ -251,6 +253,7 @@ void InputDiag::noteRender(const char* activityName, const unsigned long duratio
   renderLastMs = static_cast<uint32_t>(durationMs);
   if (renderLastMs > renderMaxMs) {
     renderMaxMs = renderLastMs;
+    renderMaxAtMs = static_cast<uint32_t>(millis());
     snprintf(renderMaxName, sizeof(renderMaxName), "%s", activityName ? activityName : "?");
   }
   renderCount++;
@@ -389,6 +392,7 @@ void InputDiag::noteGrayscaleSplit(const unsigned long lsbMs, const unsigned lon
                                    const unsigned long msbSdMs, const unsigned long msbSdDraws) {
   if (static_cast<uint32_t>(lsbMs) <= aaWorstLsbMs) return;
   aaWorstLsbMs = static_cast<uint32_t>(lsbMs);
+  aaWorstAtMs = static_cast<uint32_t>(millis());
   aaWorstLsbGlyphs = static_cast<uint32_t>(lsbGlyphs);
   aaWorstLsbSdMs = static_cast<uint32_t>(lsbSdMs);
   aaWorstLsbSdDraws = static_cast<uint32_t>(lsbSdDraws);
@@ -506,7 +510,7 @@ void InputDiag::flush(const bool inputActive) {
       "debounce_episodes=%u\n"
       "committed_edges=%u\n"
       "render_last_ms=%u\n"
-      "render_max_ms=%u (%s)\n"
+      "render_max_ms=%u (%s) at=%u\n"
       "render_count=%u\n"
       "heap_free=%u\n"
       "heap_min_free=%u\n"
@@ -516,7 +520,7 @@ void InputDiag::flush(const bool inputActive) {
       "page_display_ms=%u (max %u)\n"
       "page_blocks_ms=%u\n"
       "page_statusbar_ms=%u\n"
-      "aa_worst_lsb_ms=%u glyphs=%u sd_ms=%u sd_draws=%u\n"
+      "aa_worst_lsb_ms=%u glyphs=%u sd_ms=%u sd_draws=%u at=%u\n"
       "aa_worst_msb_ms=%u glyphs=%u sd_ms=%u sd_draws=%u\n"
       "vert_body_ms=%u cells=%u\n"
       "vert_ruby_measure_ms=%u\n"
@@ -533,18 +537,18 @@ void InputDiag::flush(const bool inputActive) {
       "ui_prewarm_heap_max=%d\n"
       "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
       now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower, debounceEpisodes,
-      committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderCount, ESP.getFreeHeap(), ESP.getMinFreeHeap(),
-      ESP.getMaxAllocHeap(), pageRenderPrewarmMs, pageRenderPrewarmMaxMs, pageRenderDrawMs, pageRenderDrawMaxMs,
-      pageRenderDisplayMs, pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, aaWorstLsbMs, aaWorstLsbGlyphs,
-      aaWorstLsbSdMs, aaWorstLsbSdDraws, aaWorstMsbMs, aaWorstMsbGlyphs, aaWorstMsbSdMs, aaWorstMsbSdDraws, vertBodyMs,
-      vertBodyCells, vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
-      buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
-      buildTotalMaxChunkCount, lookaheadStarts, lookaheadCompletions, lookaheadTicks, lookaheadPages, lookaheadTotalMs,
-      lookaheadChunkMaxMs, lookaheadChunkMaxSpineIndex, lookaheadChunkMaxMhz, lookaheadReleases, miniFreeTotal,
-      miniFreeBuf, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax,
-      onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes,
-      scanLastFonts, scanZeroCount, prewarmEntryFailsTotal, uiPrewarmHeapMax, listBandY, listBandHeight,
-      listRowHeightPx, listVisibleRowCount, listScreenHeight);
+      committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderMaxAtMs, renderCount, ESP.getFreeHeap(),
+      ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs, pageRenderPrewarmMaxMs, pageRenderDrawMs,
+      pageRenderDrawMaxMs, pageRenderDisplayMs, pageRenderDisplayMaxMs, pageBlocksMs, pageStatusBarMs, aaWorstLsbMs,
+      aaWorstLsbGlyphs, aaWorstLsbSdMs, aaWorstLsbSdDraws, aaWorstAtMs, aaWorstMsbMs, aaWorstMsbGlyphs, aaWorstMsbSdMs,
+      aaWorstMsbSdDraws, vertBodyMs, vertBodyCells, vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs,
+      buildChunkMaxSpineIndex, buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs,
+      buildTotalMaxSpineIndex, buildTotalMaxChunkCount, lookaheadStarts, lookaheadCompletions, lookaheadTicks,
+      lookaheadPages, lookaheadTotalMs, lookaheadChunkMaxMs, lookaheadChunkMaxSpineIndex, lookaheadChunkMaxMhz,
+      lookaheadReleases, miniFreeTotal, miniFreeBuf, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast,
+      onDemandGlyphsMax, onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax, miniRebuildsMaxName,
+      miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount, prewarmEntryFailsTotal, uiPrewarmHeapMax,
+      listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
