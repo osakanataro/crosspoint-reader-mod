@@ -10,6 +10,9 @@
 
 #include <climits>
 #include <cstring>
+
+#include "../InlineImageToken.h"
+#include "ImageBlock.h"
 #ifdef INPUT_DIAG
 #include <Arduino.h>
 #endif
@@ -322,6 +325,7 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   // blocks serialized before it did, and misses on columns holding no upright word.
   int cellWidth = vertCellWidth;
   for (uint16_t i = 0; i < numWords && cellWidth == 0; i++) {
+    if (InlineImageToken::is(wordText(i))) continue;
     if ((wordStyle(i) & EpdFontFamily::VERTICAL_FLIP) == 0 && !isSidewaysToken(wordText(i))) {
       cellWidth = renderer.getTextAdvanceX(fontId, wordText(i), wordStyle(i));
     }
@@ -337,6 +341,12 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   const int lineBox = ascender - renderer.getFontDescenderSize(fontId);
   const int uprightYAdjust = (cellWidth - lineBox) / 2;
 
+  // Extent of word i down the column: an inline image's height, else the glyph advance.
+  const auto wordAdvance = [&](const uint16_t i) {
+    const int img = InlineImageToken::advance(wordText(i));
+    return img > 0 ? img : renderer.getTextAdvanceX(fontId, wordText(i), wordStyle(i));
+  };
+
   // A vertical block is one column, so its own stacking positions give the column's
   // extent: ruby is clamped to it below.
   int columnTop = 0;
@@ -344,7 +354,7 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   if (blockHasRubyExtent()) {
     columnTop = yposArr[0] + y;
     const uint16_t lastWord = numWords - 1;
-    columnEnd = yposArr[lastWord] + y + renderer.getTextAdvanceX(fontId, wordText(lastWord), wordStyle(lastWord));
+    columnEnd = yposArr[lastWord] + y + wordAdvance(lastWord);
   }
 
   // Ruby sits to the right of the words it annotates, the vertical counterpart of
@@ -408,6 +418,22 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     const char* word = wordText(i);
     const int cellX = xposArr[i] + x;
     const int cellY = yposArr[i] + y;
+
+    if (InlineImageToken::is(word)) {
+      // A character-sized image in the flow: centred on the cell like an upright glyph, drawn
+      // through ImageBlock so it comes from the same .pxc cache the page images use (and is
+      // skipped during the font-cache scan like they are). The renderer is only const here
+      // because the text path never mutates it; the image cache state does.
+      flushVerticalDecorations();
+      InlineImageToken::Spec spec;
+      if (!scanning && InlineImageToken::decode(word, spec)) {
+        ImageBlock image(spec.imagePath, spec.srcPath, spec.width, spec.height);
+        int drawX = cellX + (cellWidth - spec.width) / 2;
+        if (drawX < 0) drawX = 0;
+        image.render(const_cast<GfxRenderer&>(renderer), drawX, cellY);
+      }
+      continue;
+    }
 
     // Which way the token is set. Derived from the text (Latin runs and the rotating
     // punctuation turn, everything else stands), then reversed by the VERTICAL_FLIP bit
@@ -567,7 +593,7 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
       // than re-summing advances -- ypos carries the inter-cell spacing too.
       const int groupTop = yposArr[i] + y;
       const uint16_t lastWord = i + groupWords - 1;
-      const int lastAdvance = renderer.getTextAdvanceX(fontId, wordText(lastWord), wordStyle(lastWord));
+      const int lastAdvance = wordAdvance(lastWord);
       const int groupSpan = (yposArr[lastWord] + y + lastAdvance) - groupTop;
 
       const bool rubySideways = isSidewaysRuby(rubyTexts[i].c_str());

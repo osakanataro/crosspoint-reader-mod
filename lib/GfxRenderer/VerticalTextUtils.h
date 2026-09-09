@@ -15,6 +15,7 @@ enum class VerticalBehavior : uint8_t {
   Upright,      // CJK ideographs, kana - draw normally, advance downward
   Sideways,     // Latin letters, 3+ digit numbers - rotate 90 CW
   TateChuYoko,  // 1-2 digit numbers - horizontal-in-vertical
+  InlineImage,  // character-sized image token (InlineImageToken.h) - advances by its height
 };
 
 // Punctuation offset for vertical text (ratio of character size, in 1/8 units).

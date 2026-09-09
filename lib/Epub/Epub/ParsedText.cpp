@@ -12,6 +12,7 @@
 #include <limits>
 #include <vector>
 
+#include "InlineImageToken.h"
 #include "TokenBoundary.h"
 #include "hyphenation/HyphenationCommon.h"
 #include "hyphenation/Hyphenator.h"
@@ -773,6 +774,12 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     const auto vb =
         (i < wordVerticalBehaviors.size()) ? wordVerticalBehaviors[i] : VerticalTextUtils::VerticalBehavior::Upright;
     uint16_t baseHeight;
+    if (vb == VerticalTextUtils::VerticalBehavior::InlineImage || InlineImageToken::is(words[i].c_str())) {
+      const int adv = InlineImageToken::advance(words[i].c_str());
+      baseHeight = static_cast<uint16_t>(adv > 0 ? adv : cjkCharAdvance);
+      wordHeights.push_back(static_cast<uint16_t>(baseHeight + cjkSpacing));
+      continue;
+    }
     if (vb == VerticalTextUtils::VerticalBehavior::TateChuYoko) {
       baseHeight = static_cast<uint16_t>(cjkCharAdvance);
     } else {  // Upright and Sideways both advance by the glyph's own width

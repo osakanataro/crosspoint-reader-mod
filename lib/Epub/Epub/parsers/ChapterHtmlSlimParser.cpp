@@ -16,6 +16,7 @@
 #include <new>
 
 #include "../../../../src/fontIds.h"
+#include "../InlineImageToken.h"
 #if INPUT_DIAG
 #include "../../../../src/util/InputDiag.h"
 // Tail of the src attribute, so /image-diag.txt lines identify the image without
@@ -1848,6 +1849,24 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 if (self->partWordBufferIndex > 0) {
                   self->flushPartWordBuffer();
                 }
+
+                // Vertical text: a character-sized image (a gaiji at 1em, a 3-4em glyph image)
+                // stays in the flow as one token of its own height, in the cell its author put
+                // it in -- also as a ruby base, since the ruby span counts words. Anything
+                // wider than the column pitch would overlap its neighbours and still gets a
+                // column of its own below; so does anything taller than half a column.
+                if (self->isVertical && self->currentTextBlock && displayWidth > 0 && displayHeight > 0) {
+                  const int columnPitch = self->renderer.getLineHeight(self->fontId, self->lineCompression);
+                  if (displayWidth <= columnPitch && displayHeight <= self->viewportHeight / 2) {
+                    self->currentTextBlock->addVerticalToken(
+                        InlineImageToken::encode(displayWidth, displayHeight, cachedImagePath, resolvedPath),
+                        EpdFontFamily::REGULAR, VerticalTextUtils::VerticalBehavior::InlineImage);
+                    IMG_DIAG("inline %dx%d pitch=%d", displayWidth, displayHeight, columnPitch);
+                    self->depth += 1;
+                    return;
+                  }
+                }
+
                 if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
                   const BlockStyle parentBlockStyle = self->currentTextBlock->getBlockStyle();
                   self->startNewTextBlock(parentBlockStyle);
