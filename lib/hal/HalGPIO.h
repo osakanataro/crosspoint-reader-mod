@@ -72,6 +72,8 @@ class HalGPIO {
   // Button input methods
   void update();
   bool isPressed(uint8_t buttonIndex) const;
+  // Any button held at the last update() (committed level, not a raw sample).
+  bool isAnyPressed() const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;
   bool wasReleased(uint8_t buttonIndex) const;

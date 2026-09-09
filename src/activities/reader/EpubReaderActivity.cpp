@@ -6,6 +6,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalFrontlight.h>
+#include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -389,7 +390,11 @@ void EpubReaderActivity::loop() {
   }
 
   constexpr unsigned long IDLE_PREWARM_DEBOUNCE_MS = 400;
-  if (section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
+  // Same input guard as the lookahead: the prewarm blocks the loop for up to ~0.7 s and the
+  // ladder buttons are not sampled meanwhile.
+  const bool inputInFlight = mappedInput.isAnyPressed() || mappedInput.isDebouncePending() ||
+                             mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased();
+  if (!inputInFlight && section && !section->isBuilding() && !RenderLock::peek() && renderer.hasFrameBuffer() &&
       lastRenderCompleteMs != 0 && millis() - lastRenderCompleteMs > IDLE_PREWARM_DEBOUNCE_MS &&
       ESP.getFreeHeap() > RENDER_MIN_FREE_HEAP && ESP.getMaxAllocHeap() > BACKGROUND_BUILD_MIN_MAX_ALLOC &&
       (idlePrewarmSpine != currentSpineIndex || idlePrewarmPage != section->currentPage)) {
@@ -406,6 +411,7 @@ void EpubReaderActivity::loop() {
             auto scope = fcm->createPrewarmScope();
             p->render(renderer, SETTINGS.getReaderFontId(), 0, 0);
             scope.endScanAndPrewarm();
+            pageFontCacheResident = true;
             LOG_DBG("ERS", "Idle prewarm: page %d in %lums", nextPage, millis() - t0);
           }
         }
@@ -448,6 +454,8 @@ void EpubReaderActivity::loop() {
       }
     }
   }
+
+  tickLookaheadBuild();
 
   const bool atEndOfBook = currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
   clearEndOfBookOptionsIfNeeded();
@@ -1166,8 +1174,140 @@ void EpubReaderActivity::onReturnFromEndOfBook() {
 }
 
 bool EpubReaderActivity::skipLoopDelay() {
+  // A lookahead in progress counts too: the main loop then keeps the CPU at full clock and
+  // skips its idle delay between ticks, as it does for the current chapter's own build.
+  if (lookaheadSection) return true;
   return section && section->isBuilding() && !buildHeapPaused &&
          (section->isPartial() || static_cast<int>(section->pageCount) < section->currentPage + BUILD_WINDOW_AHEAD);
+}
+
+void EpubReaderActivity::dropLookahead(const char* why) {
+  if (!lookaheadSection) return;
+  // ~Section suspends an unfinished build into a partial file (only pages actually laid
+  // out), so nothing done so far is lost; a finished build was already committed.
+  LOG_DBG("ERS", "Lookahead for spine %d dropped (%s): %u pages%s", lookaheadSpineIndex, why,
+          lookaheadSection->pageCount, lookaheadSection->isBuildComplete() ? ", complete" : "");
+  lookaheadSection.reset();
+  lookaheadSpineIndex = -1;
+  // The subset now holds the next chapter's metadata; a page prewarm over it would load
+  // bitmaps for all of it. Drop it and let the idle prewarm rebuild one for the next page.
+  releaseFontCachesForLookahead(why);
+  idlePrewarmSpine = -1;
+}
+
+void EpubReaderActivity::releaseFontCachesForLookahead(const char* why) {
+  auto* fcm = renderer.getFontCacheManager();
+  if (!fcm) return;
+  fcm->releaseSdFontCaches();
+  pageFontCacheResident = false;
+  InputDiag::noteLookaheadRelease();
+  LOG_DBG("ERS", "Lookahead: font caches released (%s), free=%u", why, ESP.getFreeHeap());
+}
+
+// Build the next chapter's section cache while the reader idles. One page per call, so a
+// button press waits at most one page's layout; the current chapter's own background build,
+// the deferred partial extension and the idle prewarm all take precedence (this only runs
+// when none of them is active). Heap gates are stricter than the current chapter's, since
+// the page being read must stay renderable -- including its anti-aliasing passes -- with the
+// parser of another chapter resident. A start that needs the chapter inflated borrows the
+// framebuffer for the 32KB window like the foreground build does, then redraws the current
+// page into it: the panel keeps showing the page throughout, and the controller's baseline
+// is re-seeded the way it is after any foreground build.
+void EpubReaderActivity::tickLookaheadBuild() {
+  if (!epub || !section || !renderer.hasFrameBuffer() || buildViewportWidth == 0) return;
+  if (RenderLock::peek() || section->isBuilding() || section->isPartial()) return;
+  if (lastRenderCompleteMs == 0 || millis() - lastRenderCompleteMs < LOOKAHEAD_IDLE_DEBOUNCE_MS) return;
+  // A press in flight: let the loop keep sampling until it commits and the page turn renders.
+  if (mappedInput.isAnyPressed() || mappedInput.isDebouncePending() || mappedInput.wasAnyPressed() ||
+      mappedInput.wasAnyReleased()) {
+    return;
+  }
+
+  const int nextSpine = currentSpineIndex + 1;
+  if (lookaheadSection && lookaheadSpineIndex != nextSpine) dropLookahead("moved away");
+  if (lookaheadSettledForSpine == currentSpineIndex) return;
+  if (nextSpine >= epub->getSpineItemsCount()) {
+    lookaheadSettledForSpine = currentSpineIndex;
+    return;
+  }
+  if (ESP.getFreeHeap() < LOOKAHEAD_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < LOOKAHEAD_MIN_MAX_ALLOC) {
+    // Not enough room for the parser to sit beside the page being read. Give up on this
+    // chapter rather than keep a started build resident (and the loop at full clock) waiting
+    // for heap that may not come back until the next crossing.
+    if (lookaheadSection) {
+      dropLookahead("heap");
+      lookaheadSettledForSpine = currentSpineIndex;
+    }
+    return;
+  }
+
+  // The main loop downclocks the CPU to LOW_POWER_FREQ (10 MHz on the X3) three seconds after
+  // the last button press, i.e. exactly when this idle work runs. The 2026090902 diag build
+  // showed one lookahead page taking 17.6 s at that clock. Hold full speed for the tick, as
+  // the render path does.
+  HalPowerManager::Lock powerLock;
+  RenderLock lock;
+  ReaderRenderSpec spec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+  spec.isVertical = bookIsVertical(epub.get());
+
+  if (!lookaheadSection) {
+    auto candidate = std::unique_ptr<Section>(new (std::nothrow) Section(epub, nextSpine, renderer));
+    if (!candidate) return;
+    if (candidate->loadSectionFile(spec) && !candidate->isPartial()) {
+      LOG_DBG("ERS", "Lookahead: spine %d already cached (%u pages)", nextSpine, candidate->pageCount);
+      lookaheadSettledForSpine = currentSpineIndex;
+      return;
+    }
+    const auto t0 = millis();
+    if (pageFontCacheResident) releaseFontCachesForLookahead("start");
+    bool started;
+    if (candidate->hasHtmlCache()) {
+      started = candidate->startBuild(spec);
+    } else {
+      // The inflate wants its window in one piece; a mid-book heap rarely has it. Lend the
+      // framebuffer as the foreground build does, then put the current page back.
+      {
+        GfxRenderer::FrameBufferLoan loan(renderer);
+        started = candidate->startBuild(spec);
+      }
+      if (const auto page = section->loadPage(section->currentPage)) {
+        renderer.setRenderMode(GfxRenderer::BW);
+        renderer.clearScreen();
+        page->render(renderer, SETTINGS.getReaderFontId(), lastRenderMarginLeft, lastRenderMarginTop);
+        renderStatusBar();
+      }
+    }
+    if (!started) {
+      LOG_ERR("ERS", "Lookahead: could not start build for spine %d", nextSpine);
+      lookaheadSettledForSpine = currentSpineIndex;  // do not hammer the same failure every loop
+      return;
+    }
+    LOG_DBG("ERS", "Lookahead: build started for spine %d in %lums", nextSpine, millis() - t0);
+    InputDiag::noteLookaheadStart();
+    lookaheadSection = std::move(candidate);
+    lookaheadSpineIndex = nextSpine;
+    return;  // the first page waits for the next idle tick, keeping this one short
+  }
+
+  if (pageFontCacheResident) releaseFontCachesForLookahead("layout");
+  const auto tickStartMs = millis();
+  const uint16_t before = lookaheadSection->pageCount;
+  if (!lookaheadSection->buildSomeMore(LOOKAHEAD_PAGES_PER_TICK, LOOKAHEAD_TICK_BUDGET_MS)) {
+    // Section abandons a failing build itself (and clears its partial, since the parse error
+    // would recur); the foreground build at the crossing will report it properly if it recurs.
+    LOG_ERR("ERS", "Lookahead: build failed for spine %d", nextSpine);
+    dropLookahead("failed");
+    lookaheadSettledForSpine = currentSpineIndex;
+    return;
+  }
+  const bool complete = lookaheadSection->isBuildComplete();
+  InputDiag::noteLookaheadChunk(nextSpine, static_cast<uint16_t>(lookaheadSection->pageCount - before),
+                                millis() - tickStartMs, complete);
+  if (complete) {
+    LOG_DBG("ERS", "Lookahead: spine %d built ahead (%u pages)", nextSpine, lookaheadSection->pageCount);
+    dropLookahead("complete");
+    lookaheadSettledForSpine = currentSpineIndex;
+  }
 }
 
 void EpubReaderActivity::renderBook() {
@@ -1241,6 +1381,10 @@ void EpubReaderActivity::renderBook() {
   InputDiag::noteOpenStage(2, "font");
 
   if (!section) {
+    // The lookahead may hold this very spine (a forward crossing) or a now-irrelevant one
+    // (a jump). Either way it must go first: its destructor commits what it built, so the
+    // load below finds a finished cache or a partial to resume from, never a stale tmp.
+    if (lookaheadSection) dropLookahead(lookaheadSpineIndex == currentSpineIndex ? "crossing" : "navigation");
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
     LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
@@ -1545,9 +1689,12 @@ void EpubReaderActivity::renderBook() {
     discardOverlayPage();
 
     const auto start = millis();
+    lastRenderMarginLeft = orientedMarginLeft;
+    lastRenderMarginTop = orientedMarginTop;
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     lastRenderCompleteMs = millis();
+    pageFontCacheResident = true;
     InputDiag::noteOpenStage(5, "page1");
   }
 

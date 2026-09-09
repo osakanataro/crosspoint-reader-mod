@@ -46,6 +46,41 @@ class EpubReaderActivity final : public ReaderActivity {
   bool currentPageBookmarked = false;
   int idlePrewarmSpine = -1;
   int idlePrewarmPage = -1;
+  // Lookahead build of the NEXT spine's section cache while the reader idles (2026-09-09).
+  // A chapter crossing used to pay the whole layout build (4.6 s of a 7.4 s first page on
+  // the X3); with the cache already on the card it loads like any other chapter. Reuses
+  // Section's incremental build -- a page per tick under the same heap gates as the
+  // current chapter's background build -- and the object is dropped (its destructor
+  // persists a partial) as soon as the reader leaves the chapter it was queued behind.
+  // lookaheadSettledForSpine remembers the currentSpineIndex whose successor is done
+  // (built, already cached, or given up) so the check is not repeated every loop.
+  std::unique_ptr<Section> lookaheadSection = nullptr;
+  int lookaheadSpineIndex = -1;
+  int lookaheadSettledForSpine = -1;
+  // Margins the last page was rendered with; the lookahead redraws the current page
+  // into the framebuffer after lending it for the next chapter's inflate.
+  int lastRenderMarginLeft = 0;
+  int lastRenderMarginTop = 0;
+  static constexpr unsigned long LOOKAHEAD_IDLE_DEBOUNCE_MS = 1500;
+  static constexpr size_t LOOKAHEAD_MIN_FREE_HEAP = 40 * 1024;
+  static constexpr size_t LOOKAHEAD_MIN_MAX_ALLOC = 20 * 1024;
+  static constexpr int LOOKAHEAD_PAGES_PER_TICK = 1;
+  // The X3/X4 buttons are a resistor ladder polled from the main loop, and a press only
+  // commits after two samples agree (5 ms debounce). While a tick runs nothing is sampled, so
+  // a press shorter than the tick is lost outright -- the 2026090903 diag build (one page per
+  // tick, up to 0.5 s) dropped a page turn that way. Bound a tick to a few parse steps instead.
+  static constexpr unsigned long LOOKAHEAD_TICK_BUDGET_MS = 25;
+  // True once a page render (or the idle prewarm) has left the SD font's resident subset
+  // full of bitmaps. The lookahead's layout asks that subset for glyph metadata; SdCardFont
+  // keeps a full subset full, so those requests would union the next chapter's glyphs in
+  // WITH bitmaps -- 2026090906-diag grew the arena by ~20KB, a later page's prewarm then
+  // got a budget too small for its own glyphs and drew 945 of them through the 8-slot
+  // overflow ring (25 s). So the lookahead drops the subset before it starts laying out and
+  // again when it stops, and re-arms the idle prewarm to rebuild a page-sized one.
+  bool pageFontCacheResident = false;
+  void releaseFontCachesForLookahead(const char* why);
+  void tickLookaheadBuild();
+  void dropLookahead(const char* why);
   // Per-render section-build accounting for INPUT_DIAG. A single chunk can look cheap
   // (BUILD_PAGES_PER_CHUNK pages, sub-second) while the loop around it still iterates dozens
   // of times to reach a distant target -- noteBuildChunk's per-chunk max misses that; this

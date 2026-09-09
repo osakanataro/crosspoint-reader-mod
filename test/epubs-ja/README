@@ -98,7 +98,8 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Forty-two chapters, in guide/body pairs:
+anything else. Forty-six chapters, in guide/body pairs (test 22 has three
+bodies):
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
      every element (package/metadata/manifest/spine/item/itemref), so this
@@ -350,6 +351,23 @@ anything else. Forty-two chapters, in guide/body pairs:
      4-digit 14,991 → upright each). Guides of tests 8 and 9 gained one
      sentence each with the re-survey counts (𠮟 in 30 books; 溺 11, 煉 3,
      ⦿ 1,010 paragraph heads).
+ 22  Chapter crossing and the idle next-chapter prebuild (2026-09-09). Since
+     2026-09-09 the reader, 1.5 s after a page is shown with no button down,
+     lays out the next spine item a slice at a time into its section cache,
+     so the crossing only loads. One guide and three bodies: A is short
+     (five paragraphs and a sixth saying "wait here"), B is long (60
+     numbered paragraphs, about 13,000 characters, 40-odd pages at 18pt),
+     C is B's twin. The protocol is in the guide: idle 10 s on A's last
+     page, one press, B's first page in about a second; open C from the TOC
+     for the foreground-build control (never by paging out of B, since
+     idling in B prebuilds C); one press after a long idle must always
+     register (the 2026090903-diag build lost presses because a lookahead
+     slice ran up to 0.5 s while the ADC-ladder buttons went unsampled,
+     hence the 25 ms slice budget from 0906); B's paragraphs B一..B六十
+     must run unbroken into C一; the screen must not change while idling.
+     Every paragraph is a rotation of fourteen sentences about the
+     mechanism itself, one with ruby. Section caches persist on the SD
+     card, so a re-run needs the cache cleared first.
 
 Tests 11-14 and 16 came from closed PRs and issues in the sibling forks rather
 than from a fault seen here: they are cases those projects hit on real books, so

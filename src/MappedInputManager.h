@@ -51,6 +51,11 @@ class MappedInputManager {
   bool wasLongPressed(Button button, unsigned long thresholdMs) const;
   bool consumeSuppressedRelease() const;
   bool isPressed(Button button) const;
+  // Raw input state for work that shares the main loop with button polling (the reader's idle
+  // lookahead build): any button held, or a sample still inside the debounce window. Each says "the user is pressing
+  // something; do not block the loop now".
+  bool isAnyPressed() const;
+  bool isDebouncePending() const;
   bool hasTouch() const;
   bool wasScreenTapped(int& x, int& y) const;
   bool wasScreenTouchDown(int& x, int& y) const;

@@ -22,6 +22,21 @@
 class SdCardFont {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
+
+  // Diagnostics: the last few times a resident mini subset was freed, with the return address
+  // of the caller (resolve with addr2line against the build's .elf), so a page whose
+  // grayscale passes went to the overflow ring can be traced to whoever dropped the subset
+  // after the BW pass. Static and always on; four 16-byte entries.
+  struct MiniFreeEvent {
+    uint32_t caller = 0;
+    uint32_t ms = 0;
+    uint32_t freeHeap = 0;
+    uint16_t glyphs = 0;
+    uint8_t style = 0;
+    bool metadataOnly = false;
+  };
+  static constexpr uint8_t MINI_FREE_EVENTS = 4;
+  static const MiniFreeEvent* miniFreeEvents(uint32_t& total);
   static constexpr uint8_t MAX_STYLES = 4;
 
   SdCardFont() = default;

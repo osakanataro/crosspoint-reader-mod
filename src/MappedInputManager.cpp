@@ -350,6 +350,10 @@ bool MappedInputManager::isPressed(const Button button) const { return mapButton
 
 bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
 
+bool MappedInputManager::isAnyPressed() const { return gpio.isAnyPressed(); }
+
+bool MappedInputManager::isDebouncePending() const { return gpio.isDebouncePending(); }
+
 bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); }
 
 unsigned long MappedInputManager::getHeldTime() const {

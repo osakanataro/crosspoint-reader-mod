@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <SdCardFont.h>
 
 #include <cstdio>
 #include <cstring>
@@ -108,7 +109,7 @@ uint8_t renderLogNext = 0;
 // calls flush(), so there is no second writer.
 // Sized with headroom: the report already filled 1279 of a 1280-byte buffer, which truncated the
 // trailing legend and would have silently dropped whatever line was added next.
-char reportBuf[1792];
+char reportBuf[2304];
 
 // Last and worst page-render phase split.
 // What the last page scope's scan handed to the prewarm, and how often prewarm()
@@ -182,6 +183,18 @@ uint16_t buildChunkMaxPageAfter = 0;
 uint32_t buildTotalMaxMs = 0;
 int buildTotalMaxSpineIndex = -1;
 int buildTotalMaxChunkCount = 0;
+
+// Next-chapter lookahead build (EpubReaderActivity::tickLookaheadBuild): kept apart from the
+// foreground build counters so a slow idle tick and a slow chapter crossing stay tellable.
+uint32_t lookaheadStarts = 0;
+uint32_t lookaheadCompletions = 0;
+uint32_t lookaheadTicks = 0;
+uint32_t lookaheadReleases = 0;
+uint32_t lookaheadPages = 0;
+uint32_t lookaheadTotalMs = 0;
+uint32_t lookaheadChunkMaxMs = 0;
+int lookaheadChunkMaxSpineIndex = -1;
+uint32_t lookaheadChunkMaxMhz = 0;
 }  // namespace
 
 void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, const bool debouncePending) {
@@ -401,6 +414,23 @@ void InputDiag::noteBuildTotal(const int spineIndex, const unsigned long totalMs
   buildTotalMaxChunkCount = chunkCount;
 }
 
+void InputDiag::noteLookaheadStart() { lookaheadStarts++; }
+
+void InputDiag::noteLookaheadRelease() { lookaheadReleases++; }
+
+void InputDiag::noteLookaheadChunk(const int spineIndex, const uint16_t pagesBuilt, const unsigned long durationMs,
+                                   const bool completed) {
+  lookaheadTicks++;
+  lookaheadPages += pagesBuilt;
+  lookaheadTotalMs += static_cast<uint32_t>(durationMs);
+  if (completed) lookaheadCompletions++;
+  if (static_cast<uint32_t>(durationMs) > lookaheadChunkMaxMs) {
+    lookaheadChunkMaxMs = static_cast<uint32_t>(durationMs);
+    lookaheadChunkMaxSpineIndex = spineIndex;
+    lookaheadChunkMaxMhz = getCpuFrequencyMhz();
+  }
+}
+
 void InputDiag::noteUiPrewarmFailure() {
   uiPrewarmFailCount++;
   const uint32_t maxAlloc = ESP.getMaxAllocHeap();
@@ -443,6 +473,23 @@ void InputDiag::flush(const bool inputActive) {
     Storage.rename(DIAG_PATH, "/input-diag.prev.txt");
   }
 
+  // Newest first: caller@ms free=KB g=glyphs s=style m=metadataOnly.
+  char miniFreeBuf[4 * 48] = "";
+  uint32_t miniFreeTotal = 0;
+  {
+    const auto* ev = SdCardFont::miniFreeEvents(miniFreeTotal);
+    size_t off = 0;
+    const uint32_t shown = miniFreeTotal < SdCardFont::MINI_FREE_EVENTS ? miniFreeTotal : SdCardFont::MINI_FREE_EVENTS;
+    for (uint32_t i = 0; i < shown && off < sizeof(miniFreeBuf); i++) {
+      const auto& e = ev[(miniFreeTotal - 1 - i) % SdCardFont::MINI_FREE_EVENTS];
+      const int n =
+          snprintf(miniFreeBuf + off, sizeof(miniFreeBuf) - off, "%s0x%08x@%u free=%uK g=%u s=%u m=%d", i ? " | " : "",
+                   e.caller, e.ms, e.freeHeap / 1024, e.glyphs, e.style, e.metadataOnly ? 1 : 0);
+      if (n <= 0) break;
+      off += static_cast<size_t>(n);
+    }
+  }
+
   int len = snprintf(
       reportBuf, sizeof(reportBuf),
       // First line, because every question asked of this file starts with which build wrote it.
@@ -476,6 +523,9 @@ void InputDiag::flush(const bool inputActive) {
       "vert_ruby_draw_ms=%u groups=%u\n"
       "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
       "build_total_max_ms=%u spine=%d chunks=%d\n"
+      "lookahead=starts %u done %u ticks %u pages %u total_ms %u chunk_max_ms %u (spine %d at %u MHz) font_releases "
+      "%u\n"
+      "mini_free=%u last=%s\n"
       "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
       "glyph_ondemand_last=%u max=%u (%s)\n"
       "glyph_rebuild_last=%u max=%u (%s) total_ms=%u\n"
@@ -489,7 +539,9 @@ void InputDiag::flush(const bool inputActive) {
       aaWorstLsbSdMs, aaWorstLsbSdDraws, aaWorstMsbMs, aaWorstMsbGlyphs, aaWorstMsbSdMs, aaWorstMsbSdDraws, vertBodyMs,
       vertBodyCells, vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs, buildChunkMaxSpineIndex,
       buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs, buildTotalMaxSpineIndex,
-      buildTotalMaxChunkCount, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax,
+      buildTotalMaxChunkCount, lookaheadStarts, lookaheadCompletions, lookaheadTicks, lookaheadPages, lookaheadTotalMs,
+      lookaheadChunkMaxMs, lookaheadChunkMaxSpineIndex, lookaheadChunkMaxMhz, lookaheadReleases, miniFreeTotal,
+      miniFreeBuf, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax,
       onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes,
       scanLastFonts, scanZeroCount, prewarmEntryFailsTotal, uiPrewarmHeapMax, listBandY, listBandHeight,
       listRowHeightPx, listVisibleRowCount, listScreenHeight);

@@ -119,7 +119,27 @@ SdCardFont::~SdCardFont() { freeAll(); }
 
 // --- Per-style free/cleanup ---
 
+namespace {
+SdCardFont::MiniFreeEvent miniFreeEvents[SdCardFont::MINI_FREE_EVENTS];
+uint32_t miniFreeEventTotal = 0;
+}  // namespace
+
+const SdCardFont::MiniFreeEvent* SdCardFont::miniFreeEvents(uint32_t& total) {
+  total = miniFreeEventTotal;
+  return ::miniFreeEvents;
+}
+
 void SdCardFont::freeStyleMiniData(PerStyle& s) {
+  if (s.miniGlyphCount > 0) {
+    auto& ev = ::miniFreeEvents[miniFreeEventTotal % MINI_FREE_EVENTS];
+    ev.caller = reinterpret_cast<uint32_t>(__builtin_return_address(0));
+    ev.ms = millis();
+    ev.freeHeap = ESP.getFreeHeap();
+    ev.glyphs = static_cast<uint16_t>(s.miniGlyphCount);
+    ev.style = static_cast<uint8_t>(&s - styles_);
+    ev.metadataOnly = s.miniMetadataOnly;
+    miniFreeEventTotal++;
+  }
   delete[] s.miniIntervals;
   s.miniIntervals = nullptr;
   delete[] s.miniGlyphs;
@@ -1029,7 +1049,11 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       freeStyleMiniData(s);
     }
   }
-  if (s.miniGlyphCount > 0 && s.miniIntervalCount > 0) {
+  // A metadata-only resident (left by layout: section build, lookahead) is not worth
+  // carrying into a bitmap request: the union would load bitmaps for a chapter's worth of
+  // glyphs the page never draws, up to MAX_PAGE_GLYPHS, and the arena stays that size until
+  // the hysteresis lets go. Rebuild request-only; the next layout pass re-derives metadata.
+  if (s.miniGlyphCount > 0 && s.miniIntervalCount > 0 && !(s.miniMetadataOnly && !metadataOnly)) {
     const uint32_t unionMax = s.miniGlyphCount + cpCount;
     unionCps.reset(new (std::nothrow) uint32_t[unionMax]);
     if (unionCps) {

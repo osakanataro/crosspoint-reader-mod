@@ -150,6 +150,13 @@ bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
 bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
 
+bool HalGPIO::isAnyPressed() const {
+  for (uint8_t i = 0; i < 8; i++) {
+    if (inputMgr.isPressed(i)) return true;
+  }
+  return false;
+}
+
 bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }
 
 bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }

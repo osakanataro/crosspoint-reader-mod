@@ -116,6 +116,13 @@ class InputDiag {
   // that shape entirely, so this pins the worst render-level total separately.
   static void noteBuildTotal(int spineIndex, unsigned long totalMs, int chunkCount);
 
+  // Idle next-chapter build: one startBuild, and one buildSomeMore() tick with the pages it
+  // produced. Reported with the CPU clock the slowest tick ran at, since a tick that lands
+  // after the idle downclock would run at a fraction of the speed and look like a bad page.
+  static void noteLookaheadStart();
+  static void noteLookaheadChunk(int spineIndex, uint16_t pagesBuilt, unsigned long durationMs, bool completed);
+  static void noteLookaheadRelease();
+
   // One UI glyph prewarm that reported failure (see UiGlyphPrewarm). Records the count and the
   // tightest max-alloc seen at such a failure, so a slow list screen can be attributed to the
   // prewarm not landing rather than to the drawing itself.
@@ -157,6 +164,9 @@ class InputDiag {
                                  unsigned long, unsigned long, unsigned long) {}
   static void noteBuildChunk(int, uint16_t, uint16_t, unsigned long) {}
   static void noteBuildTotal(int, unsigned long, int) {}
+  static void noteLookaheadStart() {}
+  static void noteLookaheadChunk(int, uint16_t, unsigned long, bool) {}
+  static void noteLookaheadRelease() {}
   static void noteUiPrewarmFailure() {}
   static void noteImageEvent(const char*) {}
   static void captureLogs(const char*) {}
