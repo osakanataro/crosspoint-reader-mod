@@ -51,7 +51,7 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
   - Yomuka版 https://github.com/ponto1216-ai/crosspoint-jp
   - 抹茶版 https://github.com/eszter007/matcha-reader
   - freeink-sdk https://github.com/Free-Ink/freeink-sdk
-  - 以下の3つは日本語縦書きには直接関係しない実装で、UIなどの機能面の参考として読む（2026/09/09 追加）
+  - 以下の3つは日本語縦書きには直接関係しない実装で、UIなどの機能面の参考として読む（2026/09/09 追加。同日、3つとも縦書き・ルビ・禁則・text-orientation などの実装が無いことをソースと履歴で確認済み）
     - Papyrix版 https://github.com/bigbag/papyrix-reader
     - Inx版 https://github.com/obijuankenobiii/inx
     - witchhunt版 https://github.com/jpirnay/witchhunt-reader
