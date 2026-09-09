@@ -1443,8 +1443,9 @@ void EpubReaderActivity::renderBook() {
             showPopup = !section->findAnchor(pendingAnchor).has_value() && spineBytes > BUILD_POPUP_BYTE_THRESHOLD;
           } else {
             const bool targetAvailable = target < static_cast<int>(section->pageCount);
-            showPopup = !targetAvailable && ((spineBytes > BUILD_POPUP_BYTE_THRESHOLD && willInflate) ||
-                                             target > BUILD_POPUP_PAGE_THRESHOLD);
+            showPopup =
+                !targetAvailable && (spineBytes > BUILD_POPUP_BYTE_THRESHOLD || target > BUILD_POPUP_PAGE_THRESHOLD);
+            (void)willInflate;
           }
           if (showPopup) {
             GUI.drawPopup(renderer, tr(STR_INDEXING));
@@ -2006,8 +2007,16 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         (void)ImageBlock::takeCacheRenderStats();
         const uint32_t onDemandBeforeLsb = renderer.glyphOnDemandLoads();
 #endif
+        // A press latched by the background sampler ends the antialiasing early: the page
+        // is already on the panel in black and white, and the reader would rather have the
+        // next page than the grays on this one. Checked per strip (~50-100 ms).
+        bool aaAborted = false;
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
         for (int y = 0; y < gh; y += STRIP_ROWS) {
+          if (mappedInput.hasPendingInput()) {
+            aaAborted = true;
+            break;
+          }
           const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
           renderer.beginStripTarget(scratch.get(), y, rows);
           renderer.clearScreen(0x00);
@@ -2022,7 +2031,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 #endif
 
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-        for (int y = 0; y < gh; y += STRIP_ROWS) {
+        for (int y = 0; y < gh && !aaAborted; y += STRIP_ROWS) {
+          if (mappedInput.hasPendingInput()) {
+            aaAborted = true;
+            break;
+          }
           const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
           renderer.beginStripTarget(scratch.get(), y, rows);
           renderer.clearScreen(0x00);
@@ -2047,7 +2060,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 #endif
 
         renderer.setRenderMode(GfxRenderer::BW);
-        renderer.displayGrayBuffer();
+        if (aaAborted) {
+          // Planes may be half written in controller RAM; the cleanup below re-seeds it from
+          // the intact BW framebuffer, the same way it does after a completed gray update.
+          LOG_DBG("ERS", "AA cut short by a button press");
+          InputDiag::noteAaAborted();
+        } else {
+          renderer.displayGrayBuffer();
+        }
         const auto tGrayDisplay = millis();
 
         renderer.cleanupGrayscaleWithFrameBuffer();

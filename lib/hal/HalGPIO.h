@@ -46,6 +46,22 @@ class HalGPIO {
   bool lastUsbConnected = false;
   bool usbStateChanged = false;
 
+  // Background button sampling for the stretches where the main loop cannot poll (a page
+  // render with its grayscale passes, a chapter build). The X3/X4 buttons are a resistor
+  // ladder with no interrupt, and InputManager commits a press only after two samples agree,
+  // so a press inside a multi-second block used to vanish. While active, a small task samples
+  // every 5 ms and latches the edges; the next update() on the main loop hands them out as
+  // if they had just happened, and hasLatchedInput() lets long work stop early.
+  TaskHandle_t samplerTask_ = nullptr;
+  SemaphoreHandle_t inputMutex_ = nullptr;  // serialises inputMgr.update() between the two tasks
+  volatile bool samplingActive_ = false;
+  volatile uint8_t latchedPressed_ = 0;
+  volatile uint8_t latchedReleased_ = 0;
+  uint8_t pendingPressed_ = 0;  // latched edges handed out by the current update()
+  uint8_t pendingReleased_ = 0;
+  static void samplerTaskEntry(void* arg);
+  void sampleOnce();
+
  public:
   enum class DeviceType : uint8_t { X4, X3 };
 
@@ -71,6 +87,12 @@ class HalGPIO {
 
   // Button input methods
   void update();
+  // See samplerTask_. Cheap to call when already in that state.
+  void startBackgroundSampling();
+  void stopBackgroundSampling();
+  // A press or release latched by the sampler since the last update() -- work that runs while
+  // the main loop is blocked can poll this at its own boundaries and yield.
+  bool hasLatchedInput() const { return (latchedPressed_ | latchedReleased_) != 0; }
   bool isPressed(uint8_t buttonIndex) const;
   // Any button held at the last update() (committed level, not a raw sample).
   bool isAnyPressed() const;

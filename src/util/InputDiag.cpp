@@ -192,6 +192,7 @@ uint32_t lookaheadStarts = 0;
 uint32_t lookaheadCompletions = 0;
 uint32_t lookaheadTicks = 0;
 uint32_t lookaheadReleases = 0;
+uint32_t aaAborts = 0;
 uint32_t lookaheadPages = 0;
 uint32_t lookaheadTotalMs = 0;
 uint32_t lookaheadChunkMaxMs = 0;
@@ -422,6 +423,8 @@ void InputDiag::noteLookaheadStart() { lookaheadStarts++; }
 
 void InputDiag::noteLookaheadRelease() { lookaheadReleases++; }
 
+void InputDiag::noteAaAborted() { aaAborts++; }
+
 void InputDiag::noteLookaheadChunk(const int spineIndex, const uint16_t pagesBuilt, const unsigned long durationMs,
                                    const bool completed) {
   lookaheadTicks++;
@@ -530,6 +533,7 @@ void InputDiag::flush(const bool inputActive) {
       "lookahead=starts %u done %u ticks %u pages %u total_ms %u chunk_max_ms %u (spine %d at %u MHz) font_releases "
       "%u\n"
       "mini_free=%u last=%s\n"
+      "aa_aborts=%u\n"
       "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
       "glyph_ondemand_last=%u max=%u (%s)\n"
       "glyph_rebuild_last=%u max=%u (%s) total_ms=%u\n"
@@ -545,10 +549,10 @@ void InputDiag::flush(const bool inputActive) {
       buildChunkMaxSpineIndex, buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs,
       buildTotalMaxSpineIndex, buildTotalMaxChunkCount, lookaheadStarts, lookaheadCompletions, lookaheadTicks,
       lookaheadPages, lookaheadTotalMs, lookaheadChunkMaxMs, lookaheadChunkMaxSpineIndex, lookaheadChunkMaxMhz,
-      lookaheadReleases, miniFreeTotal, miniFreeBuf, uiPrewarmFailCount, uiPrewarmFailMinAlloc, onDemandGlyphsLast,
-      onDemandGlyphsMax, onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax, miniRebuildsMaxName,
-      miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount, prewarmEntryFailsTotal, uiPrewarmHeapMax,
-      listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
+      lookaheadReleases, miniFreeTotal, miniFreeBuf, aaAborts, uiPrewarmFailCount, uiPrewarmFailMinAlloc,
+      onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax,
+      miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount, prewarmEntryFailsTotal,
+      uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }

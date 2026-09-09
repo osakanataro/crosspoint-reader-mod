@@ -122,6 +122,8 @@ class InputDiag {
   static void noteLookaheadStart();
   static void noteLookaheadChunk(int spineIndex, uint16_t pagesBuilt, unsigned long durationMs, bool completed);
   static void noteLookaheadRelease();
+  // Grayscale pass cut short because a press was latched during the render.
+  static void noteAaAborted();
 
   // One UI glyph prewarm that reported failure (see UiGlyphPrewarm). Records the count and the
   // tightest max-alloc seen at such a failure, so a slow list screen can be attributed to the
@@ -167,6 +169,7 @@ class InputDiag {
   static void noteLookaheadStart() {}
   static void noteLookaheadChunk(int, uint16_t, unsigned long, bool) {}
   static void noteLookaheadRelease() {}
+  static void noteAaAborted() {}
   static void noteUiPrewarmFailure() {}
   static void noteImageEvent(const char*) {}
   static void captureLogs(const char*) {}

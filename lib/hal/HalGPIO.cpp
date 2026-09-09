@@ -140,10 +140,66 @@ void HalGPIO::begin() {
 }
 
 void HalGPIO::update() {
-  inputMgr.update();
+  if (inputMutex_) xSemaphoreTake(inputMutex_, portMAX_DELAY);
+  // While the sampler owns the hardware poll, the main loop only collects what it latched;
+  // polling here as well would double-count the debounce timing.
+  if (!samplingActive_) inputMgr.update();
+  pendingPressed_ = latchedPressed_;
+  pendingReleased_ = latchedReleased_;
+  latchedPressed_ = 0;
+  latchedReleased_ = 0;
+  if (inputMutex_) xSemaphoreGive(inputMutex_);
   const bool connected = isUsbConnected();
   usbStateChanged = (connected != lastUsbConnected);
   lastUsbConnected = connected;
+}
+
+void HalGPIO::sampleOnce() {
+  xSemaphoreTake(inputMutex_, portMAX_DELAY);
+  inputMgr.update();
+  uint8_t pressed = 0;
+  uint8_t released = 0;
+  for (uint8_t i = 0; i < 8; i++) {
+    if (inputMgr.wasPressed(i)) pressed |= static_cast<uint8_t>(1u << i);
+    if (inputMgr.wasReleased(i)) released |= static_cast<uint8_t>(1u << i);
+  }
+  latchedPressed_ |= pressed;
+  latchedReleased_ |= released;
+  xSemaphoreGive(inputMutex_);
+}
+
+void HalGPIO::samplerTaskEntry(void* arg) {
+  auto* self = static_cast<HalGPIO*>(arg);
+  for (;;) {
+    if (!self->samplingActive_) {
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+      continue;
+    }
+    self->sampleOnce();
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+
+void HalGPIO::startBackgroundSampling() {
+  if (samplingActive_) return;
+  if (!inputMutex_) inputMutex_ = xSemaphoreCreateMutex();
+  if (!samplerTask_) {
+    // Above the Arduino loop task (priority 1) so a busy render cannot starve it; the work per
+    // tick is two ADC reads, well under a millisecond.
+    if (xTaskCreate(samplerTaskEntry, "btnsample", 3072, this, 2, &samplerTask_) != pdPASS) {
+      samplerTask_ = nullptr;
+      return;
+    }
+  }
+  samplingActive_ = true;
+  xTaskNotifyGive(samplerTask_);
+}
+
+void HalGPIO::stopBackgroundSampling() {
+  if (!samplingActive_) return;
+  samplingActive_ = false;
+  // The task may be inside sampleOnce(); the mutex in update() waits for it, so nothing else
+  // is needed here.
 }
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
@@ -157,15 +213,19 @@ bool HalGPIO::isAnyPressed() const {
   return false;
 }
 
-bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }
+bool HalGPIO::wasPressed(uint8_t buttonIndex) const {
+  return inputMgr.wasPressed(buttonIndex) || (pendingPressed_ & (1u << buttonIndex)) != 0;
+}
 
-bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
+bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed() || pendingPressed_ != 0; }
 
-bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleased(buttonIndex); }
+bool HalGPIO::wasReleased(uint8_t buttonIndex) const {
+  return inputMgr.wasReleased(buttonIndex) || (pendingReleased_ & (1u << buttonIndex)) != 0;
+}
 
 bool HalGPIO::isDebouncePending() const { return inputMgr.isDebouncePending(); }
 
-bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
+bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased() || pendingReleased_ != 0; }
 
 unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
 

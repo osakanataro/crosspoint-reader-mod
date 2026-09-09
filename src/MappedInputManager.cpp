@@ -354,6 +354,12 @@ bool MappedInputManager::isAnyPressed() const { return gpio.isAnyPressed(); }
 
 bool MappedInputManager::isDebouncePending() const { return gpio.isDebouncePending(); }
 
+void MappedInputManager::beginBackgroundSampling() const { gpio.startBackgroundSampling(); }
+
+void MappedInputManager::endBackgroundSampling() const { gpio.stopBackgroundSampling(); }
+
+bool MappedInputManager::hasPendingInput() const { return gpio.hasLatchedInput(); }
+
 bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); }
 
 unsigned long MappedInputManager::getHeldTime() const {

@@ -117,7 +117,10 @@ void ActivityManager::renderTaskLoop() {
       // Night mode is a global output polarity applied to every activity.
       // The sleep screen forces normal polarity itself (SleepActivity).
       display.setInverted(SETTINGS.screenInverted != 0);
+      // Buttons keep being sampled while this blocks; edges surface at the next loop poll.
+      mappedInput.beginBackgroundSampling();
       currentActivity->render(std::move(lock));
+      mappedInput.endBackgroundSampling();
 #ifdef INPUT_DIAG
       const unsigned long renderDurationMs = millis() - renderStart;
       InputDiag::noteRender(renderedName, renderDurationMs, renderer.glyphOnDemandLoads() - onDemandStart,

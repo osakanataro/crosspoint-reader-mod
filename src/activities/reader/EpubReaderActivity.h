@@ -146,7 +146,7 @@ class EpubReaderActivity final : public ReaderActivity {
   int lastSavedPage = -1;
   int lastSavedPageCount = -1;
 
-  static constexpr int BUILD_PAGES_PER_CHUNK = 8;
+  static constexpr int BUILD_PAGES_PER_CHUNK = 4;
   static constexpr int BACKGROUND_BUILD_PAGES_PER_TICK = 2;
   static constexpr size_t BACKGROUND_BUILD_MIN_FREE_HEAP = 32 * 1024;
   static constexpr size_t BACKGROUND_BUILD_MIN_MAX_ALLOC = 16 * 1024;
@@ -155,9 +155,11 @@ class EpubReaderActivity final : public ReaderActivity {
   static constexpr size_t RENDER_MIN_FREE_HEAP = 24 * 1024;
   static constexpr int BUILD_WINDOW_AHEAD = 5;
   static constexpr int PARTIAL_REBUILD_START_MARGIN = 15;
-  static constexpr int BUILD_POPUP_PAGE_THRESHOLD = 20;
-  static constexpr size_t BUILD_POPUP_BYTE_THRESHOLD = 96 * 1024;
-  static constexpr unsigned long BUILD_POPUP_DEADLINE_MS = 1000;
+  // 2026-09-10: lowered (20 pages / 96KB+inflate / 1 s) so a 1-3 s chapter build shows the
+  // popup too; the chunk is 4 pages so the deadline is checked often enough to matter.
+  static constexpr int BUILD_POPUP_PAGE_THRESHOLD = 10;
+  static constexpr size_t BUILD_POPUP_BYTE_THRESHOLD = 32 * 1024;
+  static constexpr unsigned long BUILD_POPUP_DEADLINE_MS = 500;
   bool buildPopupPending = false;
   void showBuildPopup(GfxRenderer& renderer, int& pagesUntilFullRefresh);
   bool applyDeferredReposition();

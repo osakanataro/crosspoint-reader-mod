@@ -56,6 +56,10 @@ class MappedInputManager {
   // something; do not block the loop now".
   bool isAnyPressed() const;
   bool isDebouncePending() const;
+  // Background sampling across a blocking stretch (see HalGPIO::startBackgroundSampling).
+  void beginBackgroundSampling() const;
+  void endBackgroundSampling() const;
+  bool hasPendingInput() const;
   bool hasTouch() const;
   bool wasScreenTapped(int& x, int& y) const;
   bool wasScreenTouchDown(int& x, int& y) const;
