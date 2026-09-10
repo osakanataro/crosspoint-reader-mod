@@ -4,6 +4,8 @@
 #include <Logging.h>
 #include <Utf8.h>
 
+#include "../../src/util/InputDiag.h"
+
 #ifdef DEBUG_RENDER_WATCHDOG
 #include <esp_task_wdt.h>
 #endif
@@ -94,7 +96,15 @@ const char* asCStr(const std::string& s) { return s.c_str(); }
 const char* asCStr(const char* s) { return s; }
 
 // resetStyleMiniData retention bounds (see the PerStyle comment in the header).
-constexpr size_t MINI_RETAIN_MIN_FREE_HEAP = 40 * 1024;
+// The floor is what the render path itself needs beside the arena (the grayscale strip
+// scratch and the page's own allocations), not a reserve for the heavy consumers: the
+// section build, the lookahead, the reader menu and the font-download screen all release
+// these caches explicitly before they claim memory. At 40 KB it sat inside the reader's
+// steady state -- an open book leaves 36-45 KB free -- so clearCache(), which runs at the
+// top of every page render, threw the arena away and the next prewarm re-read a page of
+// glyphs from the card (measured 2026-09-10: 74 frees and 11.7 s of rebuilds in a 3.7 min
+// session, three of the last four attributed to clearCache at 36/43/28 KB free).
+constexpr size_t MINI_RETAIN_MIN_FREE_HEAP = 24 * 1024;
 constexpr uint8_t MINI_UNDERUSE_RUNS_BEFORE_FREE = 3;
 
 // Keep-if-fits buffer reuse: only reallocate when the needed size exceeds the
@@ -827,17 +837,17 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
 
   // Cap the unique-codepoint budget by what the heap can actually hold as a
   // full mini arena (glyph structs + bitmaps, working headroom left over).
-  // Multi-string batches only: a several-hundred-chapter CJK table of
-  // contents would otherwise extract up to MAX_PAGE_GLYPHS and fail the whole
-  // arena allocation — better to load the first screens' worth and let
-  // scrolling union-in the rest page by page. Per-string requests are small
-  // and already bounded by the union gate in prewarmStyle (running the check
-  // there would also log per draw call); metadata-only prewarms load no
-  // bitmaps. Bytes/glyph prefers the measured average from the resident mini:
+  // A several-hundred-chapter CJK table of contents, or a dense page arriving as one
+  // scanned string, would otherwise extract up to MAX_PAGE_GLYPHS and fail the whole arena
+  // allocation partway through -- and the failure path drops everything already read, so the
+  // page then fetches every glyph separately at ~13 ms each (measured 2026-09-10: 76 glyphs
+  // discarded at 5 KB free, then 139 per-glyph loads and a 5.3 s page). Better to load what
+  // fits and let the rest fault in, or the next page's union pick them up. Metadata-only
+  // prewarms load no bitmaps and are left alone. Bytes/glyph prefers the measured average from the resident mini:
   // Hangul ink boxes run well under the advanceY-squared em estimate, which
   // otherwise roughly halves the usable budget.
   uint32_t cpBudget = MAX_PAGE_GLYPHS;
-  if (!metadataOnly && textCount > 1) {
+  if (!metadataOnly) {
     uint8_t refStyle = MAX_STYLES;
     for (uint8_t si = 0; si < MAX_STYLES && refStyle == MAX_STYLES; si++) {
       if ((styleMask & (1 << si)) && styles_[si].present) refStyle = si;
@@ -850,7 +860,10 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
         bitmapPerGlyph = s.miniBitmapUsed / s.miniGlyphCount;
       }
       const uint32_t perGlyph = bitmapPerGlyph + sizeof(EpdGlyph);
-      constexpr uint32_t PREWARM_HEAP_HEADROOM = 16 * 1024;
+      // Headroom left for the rest of the render. Small on purpose: this figure decides how
+      // many glyphs the page gets, and a budget of zero means no arena at all -- every glyph
+      // then costs an SD read of ~13 ms, on every pass the page makes.
+      constexpr uint32_t PREWARM_HEAP_HEADROOM = 8 * 1024;
       const uint32_t freeHeap = ESP.getFreeHeap();
       const uint32_t budgetBytes = freeHeap > PREWARM_HEAP_HEADROOM ? freeHeap - PREWARM_HEAP_HEADROOM : 0;
       const uint32_t budgetGlyphs = budgetBytes / (perGlyph > 0 ? perGlyph : 1);
@@ -1011,6 +1024,19 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
               s.epdFont.data == &s.miniData ? "mini" : "stub");
       return missedInMini;
     }
+  }
+
+  // A metadata-only request must not tear down a resident that carries bitmaps. These requests
+  // come from measurement on the fallback-redirect path (UI titles, the reader's status bar),
+  // and rebuilding the arena metadata-only throws away the page's glyph bitmaps: the draw that
+  // follows then re-reads the whole page from the card, one glyph at a time through the eight-slot
+  // overflow ring. Measured 2026-09-10: 12 s of rebuilds and up to 139 per-glyph loads in a
+  // four-minute session, with the grayscale pass skipped on the worst pages. The uncovered
+  // codepoints take the on-demand path for their metrics instead -- one small read each, and
+  // layout's own measurements come from the persistent advance table rather than from here.
+  if (metadataOnly && !s.miniMetadataOnly && s.miniGlyphCount > 0 && s.miniBitmapUsed > 0) {
+    LOG_DBG("SDCF", "prewarm: keeping the bitmap arena (style=%u cps=%u wanted metadata only)", styleIdx, cpCount);
+    return 0;
   }
 
   // Past the resident-subset check, so everything below is a rebuild. Counted and timed on the
@@ -1773,6 +1799,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   self->overflow_[slot].styleIdx = styleIdx;
 
   self->overflowLoads_++;
+  InputDiag::noteGlyphMiss(codepoint, styleIdx);
   LOG_DBG("SDCF", "Overflow: loaded U+%04X style %u on demand (slot %u/%u)", codepoint, styleIdx, slot,
           OVERFLOW_CAPACITY);
 

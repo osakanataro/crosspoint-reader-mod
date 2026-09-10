@@ -122,6 +122,8 @@ uint32_t scanLastBytes = 0;
 uint8_t scanLastFonts = 0;
 uint32_t scanZeroCount = 0;
 uint32_t prewarmEntryFailsTotal = 0;
+// Draws whose font found no free scan slot: their glyphs were never prewarmed.
+uint32_t scanFontOverflowTotal = 0;
 
 // Book-open heap checkpoints (see noteOpenStage in the header). KB resolution is
 // enough to attribute an ~85KB footprint; labels are truncated to keep the line short.
@@ -193,6 +195,15 @@ uint32_t buildHeadroomMinFree = UINT32_MAX;
 uint32_t buildHeadroomMinMaxAlloc = 0;
 uint32_t buildHeadroomMinWords = 0;
 uint32_t buildHeadroomMaxWords = 0;
+
+// Ring of the last per-glyph fetches, newest last.
+constexpr uint8_t GLYPH_MISS_EVENTS = 24;
+struct GlyphMissEvent {
+  uint32_t codepoint;
+  uint8_t style;
+};
+GlyphMissEvent glyphMissEvents[GLYPH_MISS_EVENTS] = {};
+uint32_t glyphMissTotal = 0;
 
 // Next-chapter lookahead build (EpubReaderActivity::tickLookaheadBuild): kept apart from the
 // foreground build counters so a slow idle tick and a slow chapter crossing stay tellable.
@@ -363,7 +374,9 @@ void InputDiag::noteImageEvent(const char* line) {
   }
 }
 
-void InputDiag::noteScanOutcome(const uint32_t scanBytes, const uint8_t scanFonts, const uint32_t prewarmEntryFails) {
+void InputDiag::noteScanOutcome(const uint32_t scanBytes, const uint8_t scanFonts, const uint32_t prewarmEntryFails,
+                                const uint32_t scanFontOverflows) {
+  scanFontOverflowTotal = scanFontOverflows;
   scanLastBytes = scanBytes;
   scanLastFonts = scanFonts;
   if (scanBytes == 0) scanZeroCount++;
@@ -435,6 +448,26 @@ void InputDiag::noteBuildHeadroom(const uint32_t freeHeap, const uint32_t maxAll
   buildHeadroomMinWords = words;
 }
 
+// Newest last, so a run of the same script reads in the order the page drew it.
+void formatGlyphMisses(char* out, const size_t outSize) {
+  out[0] = '\0';
+  size_t off = 0;
+  const uint32_t shown = glyphMissTotal < GLYPH_MISS_EVENTS ? glyphMissTotal : GLYPH_MISS_EVENTS;
+  for (uint32_t i = 0; i < shown && off < outSize; i++) {
+    const auto& e = glyphMissEvents[(glyphMissTotal - shown + i) % GLYPH_MISS_EVENTS];
+    const int n = snprintf(out + off, outSize - off, "%sU+%04X/%u", i ? " " : "", e.codepoint, e.style);
+    if (n <= 0) break;
+    off += static_cast<size_t>(n);
+  }
+}
+
+void InputDiag::noteGlyphMiss(const uint32_t codepoint, const uint8_t style) {
+  auto& ev = glyphMissEvents[glyphMissTotal % GLYPH_MISS_EVENTS];
+  ev.codepoint = codepoint;
+  ev.style = style;
+  glyphMissTotal++;
+}
+
 void InputDiag::noteLookaheadStart() { lookaheadStarts++; }
 
 void InputDiag::noteLookaheadRelease() { lookaheadReleases++; }
@@ -467,8 +500,13 @@ void InputDiag::captureLogs(const char* reason) {
   // still names the original cause.
   if (capturedLogsPending) return;
   const std::string logs = getLastLogs();
-  const int len = snprintf(capturedLogs, sizeof(capturedLogs), "reason=%s\nuptime_ms=%lu\n\n%s", reason ? reason : "?",
-                           millis(), logs.c_str());
+  // The glyph misses as they stood at this moment: on a slow render they name the characters
+  // the page had to fetch one at a time, which the periodic report (written later, usually from
+  // another screen) no longer holds.
+  char glyphMissBuf[GLYPH_MISS_EVENTS * 12] = "";
+  formatGlyphMisses(glyphMissBuf, sizeof(glyphMissBuf));
+  const int len = snprintf(capturedLogs, sizeof(capturedLogs), "reason=%s\nuptime_ms=%lu\nglyph_miss=%u last=%s\n\n%s",
+                           reason ? reason : "?", millis(), glyphMissTotal, glyphMissBuf, logs.c_str());
   if (len <= 0) return;
   capturedLogsPending = true;
 }
@@ -513,6 +551,9 @@ void InputDiag::flush(const bool inputActive) {
     }
   }
 
+  char glyphMissBuf[GLYPH_MISS_EVENTS * 12] = "";
+  formatGlyphMisses(glyphMissBuf, sizeof(glyphMissBuf));
+
   int len = snprintf(
       reportBuf, sizeof(reportBuf),
       // First line, because every question asked of this file starts with which build wrote it.
@@ -554,7 +595,8 @@ void InputDiag::flush(const bool inputActive) {
       "ui_prewarm_fail=%u (max_alloc_then=%u)\n"
       "glyph_ondemand_last=%u max=%u (%s)\n"
       "glyph_rebuild_last=%u max=%u (%s) total_ms=%u\n"
-      "page_scan_last=%ub/%uf zero=%u prewarm_entry_fails=%u\n"
+      "page_scan_last=%ub/%uf zero=%u prewarm_entry_fails=%u font_slots_lost=%u\n"
+      "glyph_miss=%u last=%s\n"
       "ui_prewarm_heap_max=%d\n"
       "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
       now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower, debounceEpisodes,
@@ -570,8 +612,8 @@ void InputDiag::flush(const bool inputActive) {
       lookaheadChunkMaxMhz, lookaheadReleases, miniFreeTotal, miniFreeBuf, aaAborts, uiPrewarmFailCount,
       uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName, miniRebuildsLast,
       miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount,
-      prewarmEntryFailsTotal, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount,
-      listScreenHeight);
+      prewarmEntryFailsTotal, scanFontOverflowTotal, glyphMissTotal, glyphMissBuf, uiPrewarmHeapMax, listBandY,
+      listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }

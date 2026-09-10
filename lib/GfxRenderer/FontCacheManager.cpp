@@ -120,7 +120,14 @@ void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::S
     }
   }
   if (fontSlot == scanFontCount_) {
-    if (scanFontCount_ >= MAX_SCAN_FONTS) return;
+    if (scanFontCount_ >= MAX_SCAN_FONTS) {
+      // Dropping the font here means every glyph it draws faults in one at a time later.
+      if (scanFontOverflow_ == 0) {
+        LOG_DBG("FCM", "Scan font slots (%u) exhausted; font %d will load on demand", MAX_SCAN_FONTS, fontId);
+      }
+      scanFontOverflow_++;
+      return;
+    }
     scanFontIds_[scanFontCount_++] = fontId;
   }
 

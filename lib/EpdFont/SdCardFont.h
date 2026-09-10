@@ -324,8 +324,15 @@ class SdCardFont {
   };
   OverflowContext overflowCtx_[MAX_STYLES] = {};
 
-  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler)
-  static constexpr uint32_t OVERFLOW_CAPACITY = 8;
+  // Shared on-demand overflow buffer (ring buffer of glyphs loaded via glyphMissHandler).
+  // Sized for the working set of one page rather than one line: the grayscale pass redraws the
+  // page once per band, so a glyph the arena could not hold is fetched again on every band --
+  // at eight slots a page with two dozen uncovered codepoints re-read all of them ten times
+  // over (measured 2026-09-10: 119 and 222 per-glyph loads in the two grayscale planes, 2.0 and
+  // 2.5 s, against a 290 ms black-and-white pass on the same page). The ring is emptied at the
+  // top of every render by clearCache(), so this is a per-render ceiling, not resident memory:
+  // 48 glyph headers plus their bitmaps, about 4 KB at 16 pt CJK.
+  static constexpr uint32_t OVERFLOW_CAPACITY = 48;
   struct OverflowEntry {
     EpdGlyph glyph;
     uint8_t* bitmap = nullptr;

@@ -2383,6 +2383,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  // A layout pass that gave up leaves its words unconsumed, so the block only grows from here
+  // and the next token push is what runs the heap out (2026-09-10 abort in addVerticalToken).
+  // The build is already failed; stop taking text until parseStep notices.
+  if (self->layoutOom_) return;
   const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData;
   const uint32_t callbackVisibleOffset = self->visibleTextOffset;
   if (countVisibleOffsets) {

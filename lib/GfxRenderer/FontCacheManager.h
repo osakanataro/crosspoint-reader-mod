@@ -67,7 +67,11 @@ class FontCacheManager {
 
   // A render pass touches at most a handful of font ids. Codepoints are packed
   // with a compact font slot and resolved style, then grouped for prewarming.
-  static constexpr uint8_t MAX_SCAN_FONTS = 4;
+  // Six slots because a reader page already needs four (the reading face, its CJK fallback,
+  // and the two status-bar UI faces) and a heading or a size change adds more; a font past
+  // the cap is dropped from the scan silently, and every glyph it draws then loads one at a
+  // time from the card. The cost of a slot is four group counters (8 bytes).
+  static constexpr uint8_t MAX_SCAN_FONTS = 6;
   static constexpr uint16_t MAX_SCAN_CODEPOINTS = 512;
   static constexpr uint8_t SCAN_STYLE_SHIFT = 21;
   static constexpr uint8_t SCAN_FONT_SHIFT = SCAN_STYLE_SHIFT + 2;
@@ -81,6 +85,12 @@ class FontCacheManager {
   uint16_t scanCodepointCount_ = 0;
   uint8_t scanFontCount_ = 0;
   bool scanOverflowWarned_ = false;
+  // Times a draw named a font the scan had no slot left for. Non-zero means the page's
+  // prewarm was incomplete by construction.
+  uint32_t scanFontOverflow_ = 0;
   uint32_t lastScanBytes_ = 0;
   uint8_t lastScanFonts_ = 0;
+
+ public:
+  [[nodiscard]] uint32_t scanFontOverflows() const { return scanFontOverflow_; }
 };

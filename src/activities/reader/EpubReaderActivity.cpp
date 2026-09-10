@@ -67,6 +67,9 @@ bool bookIsVertical(const Epub* epub) {
 
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 constexpr size_t initialBookmarkCacheCapacity = 16;
+// Rows per band of the grayscale pass. The scratch buffer holding one band is reserved at the
+// top of a render and consumed at the end, so both places name the same figure.
+constexpr int GRAYSCALE_STRIP_ROWS = 80;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
 
 int clampPercent(int percent) {
@@ -1826,7 +1829,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   scope.endScanAndPrewarm();
   // No-op unless built with INPUT_DIAG: what the scan collected and whether any prewarm bailed at
   // entry, so a fast prewarm that left the draw cold can be attributed without the log ring.
-  InputDiag::noteScanOutcome(fcm->lastScanBytes(), fcm->lastScanFonts(), renderer.glyphPrewarmEntryFails());
+  InputDiag::noteScanOutcome(fcm->lastScanBytes(), fcm->lastScanFonts(), renderer.glyphPrewarmEntryFails(),
+                             fcm->scanFontOverflows());
   const auto tPrewarm = millis();
 
   const bool pageHasImages = page->hasImages();
@@ -1909,7 +1913,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   InputDiag::notePageRender(tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender);
 
   if (tiledGrayscale) {
-    constexpr int STRIP_ROWS = 80;
+    constexpr int STRIP_ROWS = GRAYSCALE_STRIP_ROWS;
     const int gh = renderer.getDisplayHeight();
     const int gwBytes = renderer.getDisplayWidthBytes();
     const size_t planeBytes = static_cast<size_t>(gwBytes) * gh;
@@ -1978,6 +1982,9 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // ordinary reading never trips it.
       constexpr uint32_t AA_MAX_BW_ON_DEMAND_GLYPHS = 64;
       const bool glyphsTooScattered = bwOnDemandGlyphs > AA_MAX_BW_ON_DEMAND_GLYPHS;
+      // Allocated here rather than reserved at the top of the render: holding 7.9 KB across the
+      // whole render competes with the glyph arena for the same heap, and a page whose arena
+      // cannot be built costs far more than its antialiasing does.
       auto scratch =
           glyphsTooScattered ? nullptr : makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
       renderer.waitRefreshComplete();

@@ -73,7 +73,8 @@ class InputDiag {
   // running count of prewarm() entry bails (scratch alloc failure / zero heap budget). Splits the
   // "prewarm reported done in 10ms yet the draw faulted a screenful" symptom into its three
   // possible causes; see the field comments in InputDiag.cpp.
-  static void noteScanOutcome(uint32_t scanBytes, uint8_t scanFonts, uint32_t prewarmEntryFails);
+  static void noteScanOutcome(uint32_t scanBytes, uint8_t scanFonts, uint32_t prewarmEntryFails,
+                              uint32_t scanFontOverflows);
 
   // One page render's phase breakdown, in milliseconds. renderContents already measures these for
   // LOG_DBG; on a device with no serial console that measurement had nowhere to go, which is why the
@@ -122,6 +123,12 @@ class InputDiag {
   // it at ~1 KB, laying out 648 tokens).
   static void noteBuildHeadroom(uint32_t freeHeap, uint32_t maxAlloc, uint32_t words);
 
+  // Codepoints the render had to fetch one at a time because the prewarmed arena did not hold
+  // them. The last few are printed: which characters they are says whether the prewarm missed a
+  // font (they will share one script or style), a whole page (the arena was evicted), or just
+  // the tail of a dense one.
+  static void noteGlyphMiss(uint32_t codepoint, uint8_t style);
+
   // Idle next-chapter build: one startBuild, and one buildSomeMore() tick with the pages it
   // produced. Reported with the CPU clock the slowest tick ran at, since a tick that lands
   // after the idle downclock would run at a fraction of the speed and look like a bad page.
@@ -164,7 +171,7 @@ class InputDiag {
   static void noteOpenBegin() {}
   static void noteOpenStage(uint8_t, const char*) {}
   static void noteCloseHeap(uint32_t, uint32_t, uint32_t) {}
-  static void noteScanOutcome(uint32_t, uint8_t, uint32_t) {}
+  static void noteScanOutcome(uint32_t, uint8_t, uint32_t, uint32_t) {}
   static void notePageRender(unsigned long, unsigned long, unsigned long) {}
   static void notePageDrawParts(unsigned long, unsigned long) {}
   static void noteVerticalRender(unsigned long, unsigned long, unsigned long, unsigned long, unsigned long) {}
@@ -173,6 +180,7 @@ class InputDiag {
   static void noteBuildChunk(int, uint16_t, uint16_t, unsigned long) {}
   static void noteBuildTotal(int, unsigned long, int) {}
   static void noteBuildHeadroom(uint32_t, uint32_t, uint32_t) {}
+  static void noteGlyphMiss(uint32_t, uint8_t) {}
   static void noteLookaheadStart() {}
   static void noteLookaheadChunk(int, uint16_t, unsigned long, bool) {}
   static void noteLookaheadRelease() {}

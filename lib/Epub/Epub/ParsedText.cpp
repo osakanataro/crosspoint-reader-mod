@@ -26,11 +26,15 @@ constexpr int MAX_COST = std::numeric_limits<int>::max();
 // 4 bytes each, on top of the 2-byte widths and the two bit vectors. Vertical keeps only a
 // uint16 height per word; its other arrays are per column, not per paragraph.
 constexpr size_t LAYOUT_BYTES_PER_WORD_HORIZONTAL = 12;
-constexpr size_t LAYOUT_BYTES_PER_WORD_VERTICAL = 6;
-// Room for the fixed-size allocations around them (TextBlock arenas, the shared_ptr control
-// blocks, the advance-table top-up) so a pass that just clears the per-word figure still has
-// somewhere to put a column.
-constexpr size_t LAYOUT_HEAP_FLOOR = 6 * 1024;
+// The vertical pass keeps one uint16 height per token; its other arrays are per column, which
+// is a twentieth of the paragraph. Four bytes covers the height plus the column-scale share.
+constexpr size_t LAYOUT_BYTES_PER_WORD_VERTICAL = 4;
+// Room for the fixed-size allocations around them: one column's TextBlock arena and its control
+// block, the advance-table top-up. Deliberately small -- refusing a paragraph fails the whole
+// chapter, so the gate is there to catch a heap that cannot hold the pass at all, not to
+// reserve working room (a 380-token column pass was measured needing about 1.5 KB, and an
+// earlier 6 KB floor refused it at 8.4 KB free).
+constexpr size_t LAYOUT_HEAP_FLOOR = 2 * 1024;
 
 namespace {
 
