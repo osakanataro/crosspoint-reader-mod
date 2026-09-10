@@ -789,8 +789,6 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     renderer.ensureSdCardFontReady(fontId, words, hyphenationEnabled, styleMask);
   }
 
-  const int lineHeight = renderer.getLineHeight(fontId);
-
   // Reference CJK cell advance from the first Upright word (cannot hardcode "一": it may be
   // absent from the advance table). Used as the TateChuYoko cell height and spacing base.
   int cjkCharAdvance = 0;
@@ -806,7 +804,9 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   } else if (cjkCellWidthMemo != nullptr && *cjkCellWidthMemo > 0) {
     cjkCharAdvance = *cjkCellWidthMemo;
   }
-  if (cjkCharAdvance == 0) cjkCharAdvance = lineHeight;
+  // Last resort for a paragraph with no upright token at all (pure Latin): the font's own
+  // full-width cell, not its line height -- the columns around this one are placed on the cell.
+  if (cjkCharAdvance == 0) cjkCharAdvance = renderer.getCjkCellWidth(fontId);
 
   // Per-word stacked height including inter-cell spacing. A plain array rather than a vector:
   // this is the largest single allocation the pass makes, and a vector's reserve terminates
@@ -864,7 +864,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     if (blockStyle.textIndentDefined) {
       verticalIndent = std::max<int>(blockStyle.textIndent, -static_cast<int>(blockStyle.topInset()));
     } else if (naturalAlign && !extraParagraphSpacing && !beginsWithIdeographicSpace()) {
-      verticalIndent = cjkCharAdvance > 0 ? cjkCharAdvance : lineHeight;
+      verticalIndent = cjkCharAdvance > 0 ? cjkCharAdvance : renderer.getCjkCellWidth(fontId);
     }
   }
 

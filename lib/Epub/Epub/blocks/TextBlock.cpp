@@ -331,7 +331,10 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     }
   }
   if (cellWidth == 0) {
-    cellWidth = renderer.getLineHeight(fontId);
+    // Not the line height: that is the source font's own hhea metric and differs by nearly half
+    // between faces at the same point size, which would draw this block's cells at a different
+    // width from the one the parser laid the columns out with (see getCjkCellWidth).
+    cellWidth = renderer.getCjkCellWidth(fontId);
   }
 
   // Cell top -> the y drawText expects. drawText adds the ascender itself, and for a CJK

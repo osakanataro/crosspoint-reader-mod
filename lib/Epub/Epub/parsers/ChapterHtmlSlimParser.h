@@ -73,6 +73,13 @@ class ChapterHtmlSlimParser {
   // Full-width cell advance carried across paragraphs for layoutVerticalColumns,
   // so a pure-Latin paragraph keeps its neighbours' cell width.
   int verticalCellWidthMemo = 0;
+
+  // Geometry of one column in vertical writing: the cell the glyphs occupy, and the gap to the
+  // next column. Both derive from the font's full-width cell, never from its line height --
+  // see VERTICAL_COLUMN_PITCH_EM. Every site that positions a column (text, inline images,
+  // full-width images) must use these two so the drawn cell and the layout agree.
+  int verticalColumnWidth() const;
+  int verticalColumnSpacing() const;
   const CssParser* cssParser;
   bool embeddedStyle;
   uint8_t imageRendering;

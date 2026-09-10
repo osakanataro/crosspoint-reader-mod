@@ -66,6 +66,15 @@ constexpr int16_t TABLE_CELL_HORIZONTAL_PADDING = 4;
 constexpr int16_t TABLE_ROW_SEPARATOR_GAP = 4;
 constexpr uint8_t TABLE_ROW_SEPARATOR_THICKNESS = 1;
 constexpr int16_t TABLE_MIN_CELL_WIDTH_LINE_HEIGHTS = 3;
+
+// Column pitch in vertical writing, as a multiple of the full-width cell, before the reader's
+// line-spacing setting scales it. JLREQ 2.3 sets the line pitch as a ratio of the character
+// size (body text runs about 1.5 to 1.75 em); the pitch used to be the font's own line height
+// plus a quarter, which is not a fixed ratio at all -- BIZUDGothic_12 came out at 1.25 em and
+// NotoSansJP_12 at 1.8 em from the same setting, so changing font silently changed how much
+// text a page held. With the four line-spacing steps (0.95/1.0/1.1/1.2) this spans 1.43 to
+// 1.8 em, which covers the range JLREQ describes.
+constexpr float VERTICAL_COLUMN_PITCH_EM = 1.5f;
 // Cap on the marks a single horizontal word gets. Japanese bouten runs are short; a longer
 // word is almost always Latin, where the per-character annotation buys nothing and the
 // spacer string would outweigh the word.
@@ -833,7 +842,7 @@ bool ChapterHtmlSlimParser::flushForcedOrientation(const EpdFontFamily::Style fo
     }
     std::string run(partWordBuffer, static_cast<size_t>(partWordBufferIndex));
     if (isNaturalTateChuYoko(run)) return false;
-    const int cell = verticalCellWidthMemo > 0 ? verticalCellWidthMemo : renderer.getLineHeight(fontId) * 2 / 3;
+    const int cell = verticalCellWidthMemo > 0 ? verticalCellWidthMemo : renderer.getCjkCellWidth(fontId);
     if (renderer.getTextAdvanceX(fontId, run.c_str(), fontStyle) > cell * 3 / 2) return false;
     currentTextBlock->addVerticalToken(std::move(run), flipped, VerticalBehavior::TateChuYoko);
     return true;
@@ -1879,7 +1888,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // wider than the column pitch would overlap its neighbours and still gets a
                 // column of its own below; so does anything taller than half a column.
                 if (self->isVertical && self->currentTextBlock && displayWidth > 0 && displayHeight > 0) {
-                  const int columnPitch = self->renderer.getLineHeight(self->fontId, self->lineCompression);
+                  const int columnPitch = self->verticalColumnWidth() + self->verticalColumnSpacing();
                   if (displayWidth <= columnPitch && displayHeight <= self->viewportHeight / 2) {
                     self->currentTextBlock->addVerticalToken(
                         InlineImageToken::encode(displayWidth, displayHeight, cachedImagePath, resolvedPath),
@@ -1927,8 +1936,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   // horizontal model; here the column gap separates image from text. An
                   // image wider than the space left moves to a fresh page, which is also
                   // how a full-page illustration naturally becomes a page of its own.
-                  const int columnWidth = self->renderer.getLineHeight(self->fontId, self->lineCompression);
-                  const int columnSpacing = columnWidth / 4;
+                  const int columnWidth = self->verticalColumnWidth();
+                  const int columnSpacing = self->verticalColumnSpacing();
 
                   if (!self->currentPage) {
                     self->currentPage.reset(new Page());
@@ -3119,10 +3128,23 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
   currentPageNextY += lineHeight;
 }
 
+int ChapterHtmlSlimParser::verticalColumnWidth() const {
+  // The cell the glyphs are drawn in is the full-width advance itself, unscaled: the line
+  // spacing setting moves the columns apart, it does not stretch the characters.
+  return std::max(1, renderer.getCjkCellWidth(fontId));
+}
+
+int ChapterHtmlSlimParser::verticalColumnSpacing() const {
+  const int width = verticalColumnWidth();
+  const int pitch = static_cast<int>(width * VERTICAL_COLUMN_PITCH_EM * lineCompression + 0.5f);
+  // A gap of at least one pixel even if a setting combination rounds the pitch down to the cell.
+  return std::max(1, pitch - width);
+}
+
 void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
-  // Column occupies one CJK cell of width plus a quarter-cell gap to the next column.
-  const int columnWidth = renderer.getLineHeight(fontId, lineCompression);
-  const int columnSpacing = columnWidth / 4;
+  // Column occupies one full-width cell plus the gap that carries the line-spacing setting.
+  const int columnWidth = verticalColumnWidth();
+  const int columnSpacing = verticalColumnSpacing();
 
   if (!currentPage) {
     currentPage.reset(new Page());

@@ -57,6 +57,8 @@ class GfxRenderer {
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  // Memo for getCjkCellWidth(). Dropped whenever the font behind an id goes away.
+  mutable std::map<int, int> cjkCellWidths_;
   mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
 
   // Mutable because drawText() is const but needs to delegate scan-mode
@@ -156,6 +158,7 @@ class GfxRenderer {
     fontMap.erase(fontId);
     sdCardFonts_.erase(fontId);
     sdCardFontScales_.erase(fontId);
+    cjkCellWidths_.erase(fontId);
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
@@ -181,6 +184,7 @@ class GfxRenderer {
   void clearSdCardFonts() {
     sdCardFonts_.clear();
     sdCardFontScales_.clear();
+    cjkCellWidths_.clear();
   }
   void registerSdCardFontScale(int fontId, uint16_t scale) { sdCardFontScales_[fontId] = scale; }
   void clearSdCardFontScales() { sdCardFontScales_.clear(); }
@@ -320,6 +324,19 @@ class GfxRenderer {
   /// Negative, matching the font data. ascender - descender is the line box height.
   int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
+
+  // The full-width (em) cell advance of fontId, measured from the font itself.
+  //
+  // Vertical writing sizes its column pitch in ems, not in the font's own line height: JLREQ
+  // 2.3 defines the line pitch as a ratio of the character size, while getLineHeight() returns
+  // whatever the .cpfont baked in from the source font's hhea metrics -- 25 px for
+  // BIZUDGothic_12 but 36 px for NotoSansJP_12, both at the same 12 pt (measured 2026-09-10).
+  // Taking the line height as the column width made the same book lay out 11 columns in one
+  // font and 7 in the other with every setting identical.
+  //
+  // Memoized per font: resolving it costs one advance lookup, and on an SD font whose advance
+  // table has not seen the probe character yet, a single glyph read.
+  int getCjkCellWidth(int fontId) const;
   void setVerticalCharSpacing(int spacingPercent) { _verticalCharSpacing = spacingPercent; }
   int getVerticalCharSpacing() const { return _verticalCharSpacing; }
   int getLineHeight(int fontId, float compression) const;

@@ -67,7 +67,7 @@ namespace {
 // v50: An anchor names the page its content lands on, not the page its block started on, and a
 //      paragraph long enough to be laid out in several passes is indented once instead of at
 //      every pass boundary. Both change what a cached section holds (anchor map, line x/y).
-constexpr uint8_t SECTION_FILE_VERSION = 50;  // 2026-09-10: anchor pages and mid-paragraph indent
+constexpr uint8_t SECTION_FILE_VERSION = 51;  // 2026-09-10: vertical column pitch measured in ems
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

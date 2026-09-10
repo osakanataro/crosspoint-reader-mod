@@ -2209,6 +2209,29 @@ int GfxRenderer::getLineHeight(const int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->advanceY;
 }
 
+int GfxRenderer::getCjkCellWidth(const int fontId) const {
+  const auto memo = cjkCellWidths_.find(fontId);
+  if (memo != cjkCellWidths_.end()) return memo->second;
+
+  // U+3000 (ideographic space) is the cheapest full-width probe and every CJK font carries it.
+  // The kana and the kanji cover a subset that dropped it; a font with none of them is not a
+  // CJK font at all and can only fall back to its own line height.
+  static const char* const probes[] = {"\xE3\x80\x80", "\xE3\x81\x82", "\xE3\x82\xA2", "\xE5\x9B\xBD"};
+  int width = 0;
+  for (const char* probe : probes) {
+    width = getTextAdvanceX(fontId, probe, EpdFontFamily::REGULAR);
+    if (width > 0) break;
+  }
+  // Not memoized when no probe resolved: the font may simply not be ready yet (an SD font whose
+  // advance table is still empty and whose glyph read failed), and caching the fallback would
+  // pin the wrong cell width for the rest of the session.
+  if (width <= 0) return getLineHeight(fontId);
+
+  cjkCellWidths_[fontId] = width;
+  LOG_DBG("GFX", "CJK cell for font %d: %d px (line height %d)", fontId, width, getLineHeight(fontId));
+  return width;
+}
+
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
   return static_cast<int>(getLineHeight(fontId) * compression + 0.5f);
 }
