@@ -786,13 +786,30 @@ bool SdCardFont::load(const char* path) {
   loaded_ = true;
 
   LOG_DBG("SDCF", "Loaded: %s (v%u, %u styles)", path, CPFONT_VERSION, styleCount_);
+  // What this font costs before a single page is laid out: the coverage intervals, the kern class
+  // tables and the ligature pairs, per style. Reported alongside the em size, because those two
+  // together are what changes when the reader is pointed at a different .cpfont -- and a font
+  // whose glyphs are much larger leaves the page arena no room (2026-09-10).
+  uint32_t residentBytes = 0;
+  uint8_t firstAdvanceY = 0;
+  uint32_t firstGlyphCount = 0;
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     if (!styles_[i].present) continue;
     const auto& h = styles_[i].header;
+    residentBytes +=
+        h.intervalCount * static_cast<uint32_t>(styles_[i].intervalsAreBmp16 ? sizeof(PerStyle::BmpInterval16)
+                                                                             : sizeof(EpdUnicodeInterval));
+    residentBytes += (h.kernLeftEntryCount + h.kernRightEntryCount) * static_cast<uint32_t>(sizeof(EpdKernClassEntry));
+    residentBytes += h.ligaturePairCount * static_cast<uint32_t>(sizeof(EpdLigaturePair));
+    if (firstAdvanceY == 0) {
+      firstAdvanceY = h.advanceY;
+      firstGlyphCount = h.glyphCount;
+    }
     LOG_DBG("SDCF", "  style[%u]: %u intervals, %u glyphs, advY=%u, asc=%d, desc=%d, kernL=%u, kernR=%u, ligs=%u", i,
             h.intervalCount, h.glyphCount, h.advanceY, h.ascender, h.descender, h.kernLeftEntryCount,
             h.kernRightEntryCount, h.ligaturePairCount);
   }
+  InputDiag::noteFontChoice(path, styleCount_, firstAdvanceY, firstGlyphCount, residentBytes);
   return true;
 }
 
@@ -860,10 +877,14 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
         bitmapPerGlyph = s.miniBitmapUsed / s.miniGlyphCount;
       }
       const uint32_t perGlyph = bitmapPerGlyph + sizeof(EpdGlyph);
-      // Headroom left for the rest of the render. Small on purpose: this figure decides how
-      // many glyphs the page gets, and a budget of zero means no arena at all -- every glyph
-      // then costs an SD read of ~13 ms, on every pass the page makes.
-      constexpr uint32_t PREWARM_HEAP_HEADROOM = 8 * 1024;
+      // Headroom left for the rest of the render, and deliberately the same figure as the
+      // retention floor: an arena built below that floor is freed at the end of the very render
+      // whose SD reads paid for it, so the page takes the cost and keeps none of the benefit.
+      // With a heavier font that showed up as a budget filling the heap down to ~9 KB, the arena
+      // discarded every page, 476 per-glyph loads, a 7.8 s page, and finally a layout that could
+      // not get its own vectors (2026-09-10, after a font change). Below this the page simply
+      // gets a smaller arena and faults the rest in through the overflow ring.
+      constexpr uint32_t PREWARM_HEAP_HEADROOM = static_cast<uint32_t>(MINI_RETAIN_MIN_FREE_HEAP);
       const uint32_t freeHeap = ESP.getFreeHeap();
       const uint32_t budgetBytes = freeHeap > PREWARM_HEAP_HEADROOM ? freeHeap - PREWARM_HEAP_HEADROOM : 0;
       const uint32_t budgetGlyphs = budgetBytes / (perGlyph > 0 ? perGlyph : 1);
@@ -970,6 +991,10 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
 
   LOG_DBG("SDCF", "prewarm: cps=%u mask=0x%02X metaOnly=%d budget=%u", cpCount, styleMask, metadataOnly ? 1 : 0,
           cpBudget);
+  // A page whose codepoints ran out the budget got a partial arena; the rest fault in one at a
+  // time. Recorded so a slow page after a font change can be told apart from a slow page from
+  // markup: this is the number that moves when the glyphs themselves get bigger.
+  if (!metadataOnly) InputDiag::notePrewarmBudget(cpBudget, cpCount, ESP.getFreeHeap());
 
   // Prewarm each requested style
   int totalMissed = 0;

@@ -35,8 +35,24 @@ constexpr size_t LAYOUT_BYTES_PER_WORD_VERTICAL = 4;
 // reserve working room (a 380-token column pass was measured needing about 1.5 KB, and an
 // earlier 6 KB floor refused it at 8.4 KB free).
 constexpr size_t LAYOUT_HEAP_FLOOR = 2 * 1024;
+// What one emitted line or column costs on top of the paragraph-scale arrays: the word and ruby
+// string spines (24 bytes each on this target), the style, the two coordinates, and the copy the
+// TextBlock keeps in its own arena. Used by the probe below, not by the paragraph gate.
+constexpr size_t EMIT_BYTES_PER_TOKEN = 64;
 
 namespace {
+
+// Ask the allocator before building the vectors an emitted line or column needs. Those go through
+// the throwing operator new, which on this build (-fno-exceptions) ends the firmware instead of
+// reporting, so taking the block and handing it straight back is the only way to know it is there.
+// Probed for the whole line/column at once, so the several vectors that follow come out of the
+// room the probe just proved (2026-09-10: a ruby column's assign aborted at about 9 KB free, with
+// the paragraph-scale gate long since passed and the font prewarm having eaten the rest).
+bool heapCanHoldEmit(const size_t tokenCount) {
+  if (tokenCount == 0) return true;
+  const auto probe = makeUniqueNoThrow<uint8_t[]>(tokenCount * EMIT_BYTES_PER_TOKEN);
+  return probe != nullptr;
+}
 
 // Soft hyphen byte pattern used throughout EPUBs (UTF-8 for U+00AD).
 constexpr char SOFT_HYPHEN_UTF8[] = "\xC2\xAD";
@@ -909,6 +925,12 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     const size_t start = emitStart;
     const size_t end = columnEnds[i];
     const size_t count = end - start;
+    if (!heapCanHoldEmit(count)) {
+      LOG_ERR("PTX", "Column layout gave up: %u tokens do not fit the %u bytes free", static_cast<unsigned>(count),
+              static_cast<unsigned>(ESP.getFreeHeap()));
+      layoutFailed_ = true;
+      return;
+    }
     std::vector<std::string> colWords(std::make_move_iterator(words.begin() + start),
                                       std::make_move_iterator(words.begin() + end));
     std::vector<EpdFontFamily::Style> colStyles(wordStyles.begin() + start, wordStyles.begin() + end);
@@ -1032,6 +1054,9 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   for (size_t i = 0; i < lineCount; ++i) {
     extractLine(i, pageWidth, wordWidths, wordContinues, wordNoSpaceBefore, lineBreakIndices, processLine, renderer,
                 fontId);
+    // A line that could not be built leaves its words in place: consuming them below would drop
+    // the text silently. layoutFailed() stops the parser feeding this paragraph any further.
+    if (layoutFailed_) return;
   }
 
   // Remove consumed words so size() reflects only remaining words
@@ -1558,6 +1583,13 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   const size_t lastBreakAt = breakIndex > 0 ? lineBreakIndices[breakIndex - 1] : 0;
   const size_t lineWordCount = lineBreak - lastBreakAt;
   const uint32_t lineVisibleOffset = visibleOffsetAt(lastBreakAt);
+
+  if (!heapCanHoldEmit(lineWordCount)) {
+    LOG_ERR("PTX", "Layout gave up: a line of %u words does not fit the %u bytes free",
+            static_cast<unsigned>(lineWordCount), static_cast<unsigned>(ESP.getFreeHeap()));
+    layoutFailed_ = true;
+    return;
+  }
 
   const int firstLineIndent = resolveFirstLineIndent(breakIndex == 0, renderer, fontId);
 

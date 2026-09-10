@@ -123,6 +123,18 @@ class InputDiag {
   // it at ~1 KB, laying out 648 tokens).
   static void noteBuildHeadroom(uint32_t freeHeap, uint32_t maxAlloc, uint32_t words);
 
+  // The .cpfont the reader is pointed at, taken at load: its name, how many styles it carries,
+  // the em size and glyph count of the first, and the bytes it holds permanently (coverage
+  // intervals, kern classes, ligature pairs) before any page is drawn. A report from a device
+  // that "got slow after changing the font" is unreadable without this line.
+  static void noteFontChoice(const char* path, uint8_t styles, uint8_t advanceY, uint32_t glyphs,
+                             uint32_t residentBytes);
+
+  // One page-glyph prewarm: how many glyphs the heap allowed and how many the page asked for.
+  // When the two meet, the budget bit and the rest of the page faults in one glyph at a time --
+  // the number that moves when the glyphs get bigger rather than the markup more complex.
+  static void notePrewarmBudget(uint32_t budgetGlyphs, uint32_t wantedGlyphs, uint32_t freeHeap);
+
   // Codepoints the render had to fetch one at a time because the prewarmed arena did not hold
   // them. The last few are printed: which characters they are says whether the prewarm missed a
   // font (they will share one script or style), a whole page (the arena was evicted), or just
@@ -181,6 +193,8 @@ class InputDiag {
   static void noteBuildTotal(int, unsigned long, int) {}
   static void noteBuildHeadroom(uint32_t, uint32_t, uint32_t) {}
   static void noteGlyphMiss(uint32_t, uint8_t) {}
+  static void noteFontChoice(const char*, uint8_t, uint8_t, uint32_t, uint32_t) {}
+  static void notePrewarmBudget(uint32_t, uint32_t, uint32_t) {}
   static void noteLookaheadStart() {}
   static void noteLookaheadChunk(int, uint16_t, unsigned long, bool) {}
   static void noteLookaheadRelease() {}

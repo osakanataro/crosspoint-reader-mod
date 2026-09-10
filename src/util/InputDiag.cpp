@@ -205,6 +205,20 @@ struct GlyphMissEvent {
 GlyphMissEvent glyphMissEvents[GLYPH_MISS_EVENTS] = {};
 uint32_t glyphMissTotal = 0;
 
+// The .cpfont in use and what it costs before any page: see noteFontChoice.
+char fontName[32] = "";
+uint8_t fontStyles = 0;
+uint8_t fontAdvanceY = 0;
+uint32_t fontGlyphs = 0;
+uint32_t fontResidentBytes = 0;
+
+// Page-glyph prewarm budgets. The minimum is what the tightest page got; clips count the pages
+// that wanted more glyphs than the heap would pay for.
+uint32_t prewarmBudgetMin = UINT32_MAX;
+uint32_t prewarmBudgetMinWanted = 0;
+uint32_t prewarmBudgetMinFree = 0;
+uint32_t prewarmBudgetClips = 0;
+
 // Next-chapter lookahead build (EpubReaderActivity::tickLookaheadBuild): kept apart from the
 // foreground build counters so a slow idle tick and a slow chapter crossing stay tellable.
 uint32_t lookaheadStarts = 0;
@@ -468,6 +482,31 @@ void InputDiag::noteGlyphMiss(const uint32_t codepoint, const uint8_t style) {
   glyphMissTotal++;
 }
 
+void InputDiag::noteFontChoice(const char* path, const uint8_t styles, const uint8_t advanceY, const uint32_t glyphs,
+                               const uint32_t residentBytes) {
+  const char* name = path;
+  for (const char* p = path; *p; p++) {
+    if (*p == '/' || *p == '\\') name = p + 1;
+  }
+  strncpy(fontName, name, sizeof(fontName) - 1);
+  fontName[sizeof(fontName) - 1] = '\0';
+  fontStyles = styles;
+  fontAdvanceY = advanceY;
+  fontGlyphs = glyphs;
+  fontResidentBytes = residentBytes;
+}
+
+void InputDiag::notePrewarmBudget(const uint32_t budgetGlyphs, const uint32_t wantedGlyphs, const uint32_t freeHeap) {
+  // The budget only means something when the page actually filled it: an easy page stops well
+  // short and its budget says nothing about how tight the heap was.
+  if (wantedGlyphs >= budgetGlyphs) prewarmBudgetClips++;
+  if (budgetGlyphs < prewarmBudgetMin) {
+    prewarmBudgetMin = budgetGlyphs;
+    prewarmBudgetMinWanted = wantedGlyphs;
+    prewarmBudgetMinFree = freeHeap;
+  }
+}
+
 void InputDiag::noteLookaheadStart() { lookaheadStarts++; }
 
 void InputDiag::noteLookaheadRelease() { lookaheadReleases++; }
@@ -597,6 +636,8 @@ void InputDiag::flush(const bool inputActive) {
       "glyph_rebuild_last=%u max=%u (%s) total_ms=%u\n"
       "page_scan_last=%ub/%uf zero=%u prewarm_entry_fails=%u font_slots_lost=%u\n"
       "glyph_miss=%u last=%s\n"
+      "font=%s styles=%u advY=%u glyphs=%u resident=%u\n"
+      "prewarm_budget_min=%u wanted_then=%u free_then=%u clips=%u\n"
       "ui_prewarm_heap_max=%d\n"
       "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
       now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower, debounceEpisodes,
@@ -612,8 +653,10 @@ void InputDiag::flush(const bool inputActive) {
       lookaheadChunkMaxMhz, lookaheadReleases, miniFreeTotal, miniFreeBuf, aaAborts, uiPrewarmFailCount,
       uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName, miniRebuildsLast,
       miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount,
-      prewarmEntryFailsTotal, scanFontOverflowTotal, glyphMissTotal, glyphMissBuf, uiPrewarmHeapMax, listBandY,
-      listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
+      prewarmEntryFailsTotal, scanFontOverflowTotal, glyphMissTotal, glyphMissBuf, fontName, fontStyles, fontAdvanceY,
+      fontGlyphs, fontResidentBytes, prewarmBudgetMin == UINT32_MAX ? 0 : prewarmBudgetMin, prewarmBudgetMinWanted,
+      prewarmBudgetMinFree, prewarmBudgetClips, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx,
+      listVisibleRowCount, listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
