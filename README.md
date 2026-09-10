@@ -439,11 +439,12 @@ X3 のドライバは階調を当てる前に較正された白黒の土台を�
 
 **実機確認**: `2026091010-diag`（10分の読書）で `build_headroom_min=13920 max_alloc_then=10228 words_then=447`。
 447語なら見積もりは8.8KBなので約5KBの余裕を残して通っており、門番が誤って章を拒否してはいない。落ちた章
-（テスト23本文）が今度は最後まで組み上がった。続く `2026091011-diag` は `build_headroom_min=30424
-max_alloc_then=23540`。ただし `words_max=103` は短い段落の章（テスト24）を読んだためで、**区切りの上限超過の
-再測定は済んでいない**（章の版が変わらないので保存が再利用され、配置そのものが走らない。測るなら該当の章の
-保存を消す）。`heap_min_free` は 3,756／8,188 バイトまで落ちており、**落ちなくなっただけで狭さ自体は残っている**
-（`OOM: grayscale strip scratch (7920 bytes); skipping AA this page` も出る）。
+（テスト23本文）が今度は最後まで組み上がった。続く `2026091011-diag` でテスト23本文を組み直させたところ
+`build_headroom_min=24360 max_alloc_then=18420 words_then=380` で **`words_max=471`→`380`**。上限320に対する
+超過が151語から60語（溜め込み1杯＝約66字）に収まり、区切りの修正が効いていることを確認した。
+`heap_min_free` は 3,756／8,188／2,920 バイトまで落ちており、**落ちなくなっただけで狭さ自体は残っている**
+（`OOM: grayscale strip scratch (7920 bytes); skipping AA this page` や
+`132 glyphs loaded on demand in the BW pass; skipping AA this page` が出る）。
 
 同じ診断から次の候補: 字形の一時記憶の作り直しにセッション合計18.6秒（`glyph_rebuild ... total_ms=18656`、
 `mini_free=120`）、および「BW描画で128字を1字ずつSDから読み階調を諦めた」6秒のページ（`aa_aborts=2`）。
