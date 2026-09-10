@@ -64,8 +64,10 @@ namespace {
 //      laid out by 2026090606 (image classes missing, illustrations unsized) are rebuilt.
 // v48: Horizontal bouten are attached per character token instead of the whole run on the
 //      first token, so cached horizontal pages with emphasis lay out differently.
-constexpr uint8_t SECTION_FILE_VERSION = 49;  // 2026-09-09: layouts built before the 09-06 evening CSS work (tag.class,
-                                              // descendant selectors, vertical text-indent) must rebuild
+// v50: An anchor names the page its content lands on, not the page its block started on, and a
+//      paragraph long enough to be laid out in several passes is indented once instead of at
+//      every pass boundary. Both change what a cached section holds (anchor map, line x/y).
+constexpr uint8_t SECTION_FILE_VERSION = 50;  // 2026-09-10: anchor pages and mid-paragraph indent
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

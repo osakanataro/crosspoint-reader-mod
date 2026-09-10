@@ -66,6 +66,16 @@ class ParsedText {
   // about vertical mode.
   bool verticalMode;
   bool isNaturalAlign;
+  // True once this paragraph has handed a line (horizontal) or a column (vertical) to the page.
+  // The parser soft-flushes a paragraph over the word threshold, so layout runs several times
+  // over the same ParsedText; each run numbers its own lines from zero and would otherwise
+  // re-apply the first-line indent at every flush boundary. Never reset: one ParsedText is one
+  // paragraph (startNewTextBlock builds a fresh one).
+  bool lineEmitted = false;
+  // Set when a layout pass gave up for want of memory. The parser turns it into a build
+  // failure, so the chapter is rebuilt on the next open instead of the reader aborting
+  // mid-paragraph (observed 2026-09-10 in layoutVerticalColumns at ~1 KB free).
+  bool layoutFailed_ = false;
   bool hasRtlWord;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
@@ -103,6 +113,11 @@ class ParsedText {
                    const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                    const GfxRenderer& renderer, int fontId);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
+  // Whether the heap can hold the arrays a layout pass sizes by word count. Checked once at
+  // the top of each pass: every one of them is a bare operator new, which terminates the
+  // firmware on failure (-fno-exceptions) rather than returning null, so there is nowhere
+  // downstream to fail gracefully.
+  static bool hasHeapForLayout(size_t wordCount, size_t bytesPerWord);
 
  public:
   explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
@@ -143,6 +158,10 @@ class ParsedText {
   // Read access to a token's text (the parser's bouten path needs each CJK token's length).
   const std::string& wordAt(size_t index) const { return words[index]; }
   bool isEmpty() const { return words.empty(); }
+  // True when a layout pass could not get the memory it needed and emitted nothing. The
+  // pages built so far are still correct; what follows this paragraph is missing, so the
+  // caller must discard the build rather than persist it.
+  [[nodiscard]] bool layoutFailed() const { return layoutFailed_; }
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                              bool includeLastLine = true);

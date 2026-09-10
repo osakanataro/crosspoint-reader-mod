@@ -1,8 +1,10 @@
 #include "ParsedText.h"
 
+#include <Arduino.h>
 #include <BidiUtils.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -18,6 +20,17 @@
 #include "hyphenation/Hyphenator.h"
 
 constexpr int MAX_COST = std::numeric_limits<int>::max();
+
+// What a layout pass allocates per word in the arrays that scale with the paragraph.
+// Horizontal is the expensive one: the line breaker's dp (int) and ans (size_t) tables are
+// 4 bytes each, on top of the 2-byte widths and the two bit vectors. Vertical keeps only a
+// uint16 height per word; its other arrays are per column, not per paragraph.
+constexpr size_t LAYOUT_BYTES_PER_WORD_HORIZONTAL = 12;
+constexpr size_t LAYOUT_BYTES_PER_WORD_VERTICAL = 6;
+// Room for the fixed-size allocations around them (TextBlock arenas, the shared_ptr control
+// blocks, the advance-table top-up) so a pass that just clears the per-word figure still has
+// somewhere to put a column.
+constexpr size_t LAYOUT_HEAP_FLOOR = 6 * 1024;
 
 namespace {
 
@@ -708,7 +721,10 @@ bool ParsedText::beginsWithIdeographicSpace() const {
 }
 
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& renderer, const int fontId) const {
-  if (!isFirstLine || !isNaturalAlign) {
+  // lineEmitted: a paragraph past the parser's soft-flush threshold reaches this in several
+  // passes, and every pass would otherwise call its own first line the paragraph's first line
+  // and indent it again mid-paragraph.
+  if (!isFirstLine || lineEmitted || !isNaturalAlign) {
     return 0;
   }
   // A leading U+3000 is the indent. Adding ours would set the line in twice --
@@ -738,6 +754,13 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
                                        int* cjkCellWidthMemo, const bool includeLastColumn) {
   if (words.empty()) return;
 
+  if (!hasHeapForLayout(words.size(), LAYOUT_BYTES_PER_WORD_VERTICAL)) {
+    LOG_ERR("PTX", "Column layout gave up: %u tokens need more than the %u bytes free",
+            static_cast<unsigned>(words.size()), static_cast<unsigned>(ESP.getFreeHeap()));
+    layoutFailed_ = true;
+    return;
+  }
+
   // Load SD-card font advance metrics (no bitmaps) so getTextAdvanceX needs no per-glyph SD I/O.
   if (renderer.isSdCardFont(fontId)) {
     uint8_t styleMask = 0;
@@ -765,9 +788,15 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   }
   if (cjkCharAdvance == 0) cjkCharAdvance = lineHeight;
 
-  // Per-word stacked height including inter-cell spacing.
-  std::vector<uint16_t> wordHeights;
-  wordHeights.reserve(words.size());
+  // Per-word stacked height including inter-cell spacing. A plain array rather than a vector:
+  // this is the largest single allocation the pass makes, and a vector's reserve terminates
+  // the firmware when it cannot be satisfied instead of reporting it (2026-09-10 crash).
+  const auto wordHeights = makeUniqueNoThrow<uint16_t[]>(words.size());
+  if (!wordHeights) {
+    LOG_ERR("PTX", "Column layout gave up: no room for %u token heights", static_cast<unsigned>(words.size()));
+    layoutFailed_ = true;
+    return;
+  }
   const int sp = renderer.getVerticalCharSpacing();
   const int cjkSpacing = cjkCharAdvance * sp / 100;
   for (size_t i = 0; i < words.size(); i++) {
@@ -777,7 +806,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     if (vb == VerticalTextUtils::VerticalBehavior::InlineImage || InlineImageToken::is(words[i].c_str())) {
       const int adv = InlineImageToken::advance(words[i].c_str());
       baseHeight = static_cast<uint16_t>(adv > 0 ? adv : cjkCharAdvance);
-      wordHeights.push_back(static_cast<uint16_t>(baseHeight + cjkSpacing));
+      wordHeights[i] = static_cast<uint16_t>(baseHeight + cjkSpacing);
       continue;
     }
     if (vb == VerticalTextUtils::VerticalBehavior::TateChuYoko) {
@@ -786,9 +815,9 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
       baseHeight = static_cast<uint16_t>(renderer.getTextAdvanceX(fontId, words[i].c_str(), wordStyles[i]));
     }
     if (vb == VerticalTextUtils::VerticalBehavior::Upright) {
-      wordHeights.push_back(static_cast<uint16_t>(baseHeight + baseHeight * sp / 100));
+      wordHeights[i] = static_cast<uint16_t>(baseHeight + baseHeight * sp / 100);
     } else {
-      wordHeights.push_back(static_cast<uint16_t>(baseHeight + cjkSpacing));
+      wordHeights[i] = static_cast<uint16_t>(baseHeight + cjkSpacing);
     }
   }
 
@@ -806,11 +835,17 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   const bool naturalAlign =
       blockStyle.alignment == CssTextAlign::Justify ||
       (blockStyle.isRtl ? blockStyle.alignment == CssTextAlign::Right : blockStyle.alignment == CssTextAlign::Left);
+  // Only for the paragraph's real first column. A paragraph past the parser's soft-flush
+  // threshold is laid out in several passes over the same ParsedText, and each pass starts
+  // its own column numbering -- so without this the indent came back at every flush boundary,
+  // mid-paragraph.
   int verticalIndent = 0;
-  if (blockStyle.textIndentDefined) {
-    verticalIndent = std::max<int>(blockStyle.textIndent, -static_cast<int>(blockStyle.topInset()));
-  } else if (naturalAlign && !extraParagraphSpacing && !beginsWithIdeographicSpace()) {
-    verticalIndent = cjkCharAdvance > 0 ? cjkCharAdvance : lineHeight;
+  if (!lineEmitted) {
+    if (blockStyle.textIndentDefined) {
+      verticalIndent = std::max<int>(blockStyle.textIndent, -static_cast<int>(blockStyle.topInset()));
+    } else if (naturalAlign && !extraParagraphSpacing && !beginsWithIdeographicSpace()) {
+      verticalIndent = cjkCharAdvance > 0 ? cjkCharAdvance : lineHeight;
+    }
   }
 
   // First pass: column boundaries. columnEnds[i] is the exclusive end index of column i.
@@ -889,8 +924,17 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
       colRuby.assign(std::make_move_iterator(rubyTexts.begin() + start),
                      std::make_move_iterator(rubyTexts.begin() + end));
     }
-    processColumn(std::make_shared<TextBlock>(colWords, colXpos, colYpos, colStyles, blockStyle, std::move(colRuby),
-                                              static_cast<uint16_t>(cjkCharAdvance)));
+    // nothrow: make_shared uses the throwing operator new, which terminates the firmware on a
+    // heap this tight rather than reporting. valid() then covers the block's own arena.
+    auto column = std::shared_ptr<TextBlock>(new (std::nothrow) TextBlock(
+        colWords, colXpos, colYpos, colStyles, blockStyle, std::move(colRuby), static_cast<uint16_t>(cjkCharAdvance)));
+    if (!column || !column->valid()) {
+      LOG_ERR("PTX", "Column layout gave up: no room for a column of %u tokens", static_cast<unsigned>(count));
+      layoutFailed_ = true;
+      return;
+    }
+    processColumn(std::move(column));
+    lineEmitted = true;
     isFirstColumn = false;
     emitStart = end;
   }
@@ -915,10 +959,22 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   }
 }
 
+bool ParsedText::hasHeapForLayout(const size_t wordCount, const size_t bytesPerWord) {
+  const size_t needed = wordCount * bytesPerWord + LAYOUT_HEAP_FLOOR;
+  return ESP.getFreeHeap() >= needed;
+}
+
 void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
                                        const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                                        const bool includeLastLine) {
   if (words.empty()) {
+    return;
+  }
+
+  if (!hasHeapForLayout(words.size(), LAYOUT_BYTES_PER_WORD_HORIZONTAL)) {
+    LOG_ERR("PTX", "Layout gave up: %u words need more than the %u bytes free", static_cast<unsigned>(words.size()),
+            static_cast<unsigned>(ESP.getFreeHeap()));
+    layoutFailed_ = true;
     return;
   }
 
@@ -1844,6 +1900,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
       LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
       return;
     }
+    lineEmitted = true;
     processLine(std::move(block), lineVisibleOffset);
     return;
   }
@@ -1867,5 +1924,6 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
     return;
   }
+  lineEmitted = true;
   processLine(std::move(block), lineVisibleOffset);
 }

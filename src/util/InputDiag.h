@@ -116,6 +116,12 @@ class InputDiag {
   // that shape entirely, so this pins the worst render-level total separately.
   static void noteBuildTotal(int spineIndex, unsigned long totalMs, int chunkCount);
 
+  // Headroom a layout pass had when it started: free heap, largest block, and the token count
+  // it was about to size its arrays by. The smallest of these across a session says how close
+  // ordinary chapters run to the point where the pass has to give up (a 2026-09-10 crash had
+  // it at ~1 KB, laying out 648 tokens).
+  static void noteBuildHeadroom(uint32_t freeHeap, uint32_t maxAlloc, uint32_t words);
+
   // Idle next-chapter build: one startBuild, and one buildSomeMore() tick with the pages it
   // produced. Reported with the CPU clock the slowest tick ran at, since a tick that lands
   // after the idle downclock would run at a fraction of the speed and look like a bad page.
@@ -166,6 +172,7 @@ class InputDiag {
                                  unsigned long, unsigned long, unsigned long) {}
   static void noteBuildChunk(int, uint16_t, uint16_t, unsigned long) {}
   static void noteBuildTotal(int, unsigned long, int) {}
+  static void noteBuildHeadroom(uint32_t, uint32_t, uint32_t) {}
   static void noteLookaheadStart() {}
   static void noteLookaheadChunk(int, uint16_t, unsigned long, bool) {}
   static void noteLookaheadRelease() {}

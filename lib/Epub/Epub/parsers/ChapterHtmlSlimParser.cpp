@@ -467,9 +467,24 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
     }
   }
 
-  // Record deferred anchor after previous block is flushed (and any TOC page break)
-  anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
+  // Hold the anchor until a line of its block has actually been placed. completedPageCount here
+  // is the page in progress, and the block's first line may not fit on it -- addLineToPage then
+  // emits that page and puts the line on the next one. A TOC anchor came out right before this
+  // change only because it forces the break above first; nothing else did.
+  if (anchorsAwaitingPlacement.size() < MAX_ANCHORS_AWAITING_PLACEMENT) {
+    anchorsAwaitingPlacement.push_back(std::move(pendingAnchorId));
+  } else {
+    anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
+  }
   pendingAnchorId.clear();
+}
+
+void ChapterHtmlSlimParser::commitAnchorsAwaitingPlacement() {
+  if (anchorsAwaitingPlacement.empty()) return;
+  for (auto& anchor : anchorsAwaitingPlacement) {
+    anchorData.push_back({std::move(anchor), static_cast<uint16_t>(completedPageCount)});
+  }
+  anchorsAwaitingPlacement.clear();
 }
 
 void ChapterHtmlSlimParser::setCurrentPageVisibleOffset(const uint32_t offset) {
@@ -1049,6 +1064,8 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   currentPage->elements.push_back(pageRule);
   setCurrentPageVisibleOffset(visibleTextOffset);
   currentPageNextY = static_cast<int16_t>(currentPageNextY + ruleThickness + bottomSpacing);
+  // The rule is on this page, so anything still waiting is on it too.
+  commitAnchorsAwaitingPlacement();
 
   if (!pendingAnchorId.empty()) {
     anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
@@ -1174,6 +1191,7 @@ void ChapterHtmlSlimParser::finishTableRow() {
           }
           tableLineVisibleOffsets[lineIndex] = std::min(tableLineVisibleOffsets[lineIndex], offset);
         });
+    if (tableRowCells[column]->layoutFailed()) layoutOom_ = true;
     maxLineCount = std::max(maxLineCount, lines.size());
   }
   tableRowCells.clear();
@@ -1306,7 +1324,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         const char* idValue = atts[i + 1];
         const bool isTocAnchor =
             std::find(self->tocAnchors.begin(), self->tocAnchors.end(), idValue) != self->tocAnchors.end();
-        if (isTocAnchor || (!isNonNavigableInlineElement(name) && self->anchorData.size() < MAX_ANCHORS_PER_CHAPTER)) {
+        // Both lists count toward the cap: an anchor waiting for placement is one that will be
+        // recorded, just not yet.
+        if (isTocAnchor ||
+            (!isNonNavigableInlineElement(name) &&
+             self->anchorData.size() + self->anchorsAwaitingPlacement.size() < MAX_ANCHORS_PER_CHAPTER)) {
           // Flush a displaced anchor before overwriting. Consecutive non-block elements
           // (e.g. <aside id="fn1">text</aside><aside id="fn2">) with no intervening block
           // never trigger startNewTextBlock, so fn1 gets silently overwritten. That leaves
@@ -1953,6 +1975,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   self->currentPage->elements.push_back(pageImage);
                   IMG_DIAG("placed %dx%d x=%d y=%d vert=1", displayWidth, displayHeight, vertX, vertY);
                   self->setCurrentPageVisibleOffset(self->visibleTextOffset);
+                  // An anchor on (or just before) the image names the page the image landed on.
+                  self->commitAnchorsAwaitingPlacement();
                   // The next column starts one gap to the image's left.
                   self->currentPageNextX = static_cast<int16_t>(vertX - columnSpacing - columnWidth);
 
@@ -2018,6 +2042,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 IMG_DIAG("placed %dx%d y=%d vert=%d", displayWidth, displayHeight, self->currentPageNextY,
                          self->isVertical ? 1 : 0);
                 self->setCurrentPageVisibleOffset(self->visibleTextOffset);
+                // An anchor on (or just before) the image names the page the image landed on.
+                self->commitAnchorsAwaitingPlacement();
                 self->currentPageNextY += displayHeight + imageMarginBottom;
 
                 // The image consumed the empty block's accumulated vertical spacing.
@@ -2587,45 +2613,59 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
         self->flushPartWordBuffer();
         self->nextWordContinues = true;
       }
+      // Bound how far past the threshold one chunk can carry the block: checking only after
+      // the whole chunk was tokenized let a 4 KB read add well over a thousand tokens (648
+      // against a 320 threshold, 2026-09-10), and the layout pass then has to allocate for all
+      // of them at once. This is the CJK path -- text with no spaces reaches the tokenizer only
+      // when the 200-byte buffer fills, and a 3-byte character straddling that boundary leaves
+      // the buffer non-empty, so the token-boundary check below never fires on it.
+      self->maybeSoftFlushTextBlock();
     }
 
     if (self->partWordBufferIndex == 0) {
       self->partWordVisibleOffset = codepointOffset;
+      // Same bound for space-separated text, which empties the buffer at every word and so
+      // never reaches the size trigger above.
+      self->maybeSoftFlushTextBlock();
     }
     self->partWordBuffer[self->partWordBufferIndex++] = s[i];
   }
 
-  // Keep token growth bounded: CSS-heavy spans can fragment text into many tiny
-  // words, so flush earlier when embedded CSS is active. We still keep the
-  // "exclude last line" behavior to preserve paragraph flow across chunks.
-  const size_t blockWordCount = self->currentTextBlock->size();
-  const size_t softFlushThreshold =
-      self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
-  if (blockWordCount > softFlushThreshold && !self->inRuby) {
-    LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    if (self->isVertical) {
-      const int verticalInset =
-          self->currentTextBlock->getBlockStyle().topInset() + self->currentTextBlock->getBlockStyle().bottomInset();
-      const uint16_t effectiveHeight = (verticalInset < self->viewportHeight)
-                                           ? static_cast<uint16_t>(self->viewportHeight - verticalInset)
-                                           : self->viewportHeight;
-      self->currentTextBlock->layoutVerticalColumns(
-          self->renderer, self->fontId, effectiveHeight,
-          [self](const std::shared_ptr<TextBlock>& col) { self->addColumnToPage(col); }, &self->verticalCellWidthMemo,
-          false);
-    } else {
-      const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-      const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                          ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                          : self->viewportWidth;
-      self->currentTextBlock->layoutAndExtractLines(
-          self->renderer, self->fontId, effectiveWidth,
-          [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
-            self->addLineToPage(textBlock, offset);
-          },
-          false);
-    }
+  self->maybeSoftFlushTextBlock();
+}
+
+// Lay the block out and consume it once it is past the soft-flush threshold, keeping token
+// growth bounded: CSS-heavy spans fragment text into many tiny words, so the threshold is
+// lower when embedded CSS is active. The trailing line (column) is deliberately not emitted,
+// so paragraph flow survives the chunk boundary.
+void ChapterHtmlSlimParser::maybeSoftFlushTextBlock() {
+  if (!currentTextBlock || inRuby) return;
+  const size_t blockWordCount = currentTextBlock->size();
+  const size_t softFlushThreshold = embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
+  if (blockWordCount <= softFlushThreshold) return;
+
+  LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
+  InputDiag::noteBuildHeadroom(ESP.getFreeHeap(), ESP.getMaxAllocHeap(), static_cast<uint32_t>(blockWordCount));
+  if (isVertical) {
+    const int verticalInset =
+        currentTextBlock->getBlockStyle().topInset() + currentTextBlock->getBlockStyle().bottomInset();
+    const uint16_t effectiveHeight =
+        (verticalInset < viewportHeight) ? static_cast<uint16_t>(viewportHeight - verticalInset) : viewportHeight;
+    currentTextBlock->layoutVerticalColumns(
+        renderer, fontId, effectiveHeight, [this](const std::shared_ptr<TextBlock>& col) { addColumnToPage(col); },
+        &verticalCellWidthMemo, false);
+  } else {
+    const int horizontalInset = currentTextBlock->getBlockStyle().totalHorizontalInset();
+    const uint16_t effectiveWidth =
+        (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
+    currentTextBlock->layoutAndExtractLines(
+        renderer, fontId, effectiveWidth,
+        [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
+          addLineToPage(textBlock, offset);
+        },
+        false);
   }
+  if (currentTextBlock->layoutFailed()) layoutOom_ = true;
 }
 
 void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const XML_Char* s, const int len) {
@@ -2936,6 +2976,11 @@ ChapterHtmlSlimParser::ParseStatus ChapterHtmlSlimParser::parseStep() {
 
   const int done = parseFile_.available() == 0;
 
+  if (layoutOom_) {
+    LOG_ERR("EHP", "Abandoning build: a layout pass ran out of heap");
+    return ParseStatus::Error;
+  }
+
   if (XML_ParseBuffer(xmlParser_, static_cast<int>(len), done) == XML_STATUS_ERROR) {
     if (htmlEnded_) {
       LOG_DBG("EHP", "Ignoring trailing data after </html>: %s", XML_ErrorString(XML_GetErrorCode(xmlParser_)));
@@ -2961,6 +3006,16 @@ void ChapterHtmlSlimParser::abortParse() {
 }
 
 bool ChapterHtmlSlimParser::finishParse() {
+  if (layoutOom_) {
+    LOG_ERR("EHP", "Abandoning build: a layout pass ran out of heap");
+    if (xmlParser_) {
+      destroyXmlParser(xmlParser_);
+      xmlParser_ = nullptr;
+    }
+    parseFile_.close();
+    return false;
+  }
+
   if (xmlParser_) {
     LOG_DBG("EHP", "Time to parse and build pages: %lu ms", millis() - parseStartTime_);
     destroyXmlParser(xmlParser_);
@@ -2980,6 +3035,18 @@ bool ChapterHtmlSlimParser::finishParse() {
     completedPageCount++;
     currentPage.reset();
     currentTextBlock.reset();
+  }
+
+  // Anything still waiting laid out nothing of its own -- an empty anchored element, or a
+  // chapter that ended in a table. The last page that exists is the closest there is, and is
+  // what the old record-on-flush behaviour would have named. Runs after the block above so
+  // the final page is already counted.
+  if (!anchorsAwaitingPlacement.empty()) {
+    const int lastPage = completedPageCount > 0 ? completedPageCount - 1 : 0;
+    for (auto& anchor : anchorsAwaitingPlacement) {
+      anchorData.push_back({std::move(anchor), static_cast<uint16_t>(lastPage)});
+    }
+    anchorsAwaitingPlacement.clear();
   }
 
   return true;
@@ -3021,6 +3088,8 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
     currentPageVisibleOffsetSet = false;
   }
   setCurrentPageVisibleOffset(visibleOffset);
+  // The page is settled now, so anchors waiting since their block was flushed name this one.
+  commitAnchorsAwaitingPlacement();
 
   // Track cumulative words to assign footnotes to the page containing their anchor
   wordsExtractedInBlock += line->wordCount();
@@ -3083,6 +3152,8 @@ void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
     verticalCursorPageIndex = completedPageCount;
   }
   setCurrentPageVisibleOffset(visibleTextOffset);
+  // Same as addLineToPage: the column's page is settled, so waiting anchors name this one.
+  commitAnchorsAwaitingPlacement();
 
   wordsExtractedInBlock += column->wordCount();
   auto footnoteIt = pendingFootnotes.begin();
@@ -3114,6 +3185,9 @@ void ChapterHtmlSlimParser::makePages() {
   // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
 
+  InputDiag::noteBuildHeadroom(ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+                               static_cast<uint32_t>(currentTextBlock->size()));
+
   // Vertical (tategaki): lay the paragraph out as right-to-left columns. Block top/bottom
   // margins are a horizontal-flow concept; vertical advances by column width and adds a
   // half-cell inter-paragraph gap instead.
@@ -3124,6 +3198,7 @@ void ChapterHtmlSlimParser::makePages() {
     currentTextBlock->layoutVerticalColumns(
         renderer, fontId, effectiveHeight, [this](const std::shared_ptr<TextBlock>& col) { addColumnToPage(col); },
         &verticalCellWidthMemo);
+    if (currentTextBlock->layoutFailed()) layoutOom_ = true;
     if (!pendingFootnotes.empty() && currentPage) {
       for (const auto& [idx, fn] : pendingFootnotes) {
         currentPage->addFootnote(fn.number, fn.href);
@@ -3151,6 +3226,7 @@ void ChapterHtmlSlimParser::makePages() {
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
       [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) { addLineToPage(textBlock, offset); });
+  if (currentTextBlock->layoutFailed()) layoutOom_ = true;
 
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches

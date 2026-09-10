@@ -140,6 +140,21 @@ class ChapterHtmlSlimParser {
   std::vector<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;          // deferred until after previous text block is flushed
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
+  // Anchors whose element has been flushed but whose first line is not on a page yet. The page
+  // an anchor names must be the page its content lands on, and that is not known until
+  // addLineToPage/addColumnToPage has decided whether the line still fits: a block starting
+  // exactly at a page boundary used to be recorded one page early, sending a footnote jump to
+  // the page before the note. Committed by those two sites, and by the end of the parse for
+  // an anchored element that produces no text of its own.
+  std::vector<std::string> anchorsAwaitingPlacement;
+  // Only an id'd element that lays out nothing can leave an entry waiting, so a run this long
+  // means a run of empty anchored elements; past it they are recorded at the current page,
+  // which is the behaviour this replaces and no worse.
+  static constexpr size_t MAX_ANCHORS_AWAITING_PLACEMENT = 16;
+  // A layout pass gave up for want of heap, so the chapter is incomplete from that point on.
+  // The build is failed rather than persisted: a section file missing the rest of a paragraph
+  // would be indistinguishable from a good one on the next open.
+  bool layoutOom_ = false;
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;
   // Canonical reading-position counter: zero-based Unicode codepoints in visible
@@ -176,7 +191,12 @@ class ChapterHtmlSlimParser {
   void updateEffectiveInlineStyle();
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPendingAnchor();
+  // Record every anchor waiting for placement against the page in progress. Called once the
+  // caller has put content on that page, so completedPageCount is the page the reader will
+  // see the anchored content on.
+  void commitAnchorsAwaitingPlacement();
   void flushPartWordBuffer();
+  void maybeSoftFlushTextBlock();
   void fallbackTableRowToStacked();
   void closeTableCell();
   void finishTableRow();

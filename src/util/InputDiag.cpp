@@ -186,6 +186,14 @@ uint32_t buildTotalMaxMs = 0;
 int buildTotalMaxSpineIndex = -1;
 int buildTotalMaxChunkCount = 0;
 
+// Smallest headroom any layout pass started with this session, and the token count that
+// needed it. UINT32_MAX until the first pass so an untouched session prints nothing useful
+// rather than a misleading zero.
+uint32_t buildHeadroomMinFree = UINT32_MAX;
+uint32_t buildHeadroomMinMaxAlloc = 0;
+uint32_t buildHeadroomMinWords = 0;
+uint32_t buildHeadroomMaxWords = 0;
+
 // Next-chapter lookahead build (EpubReaderActivity::tickLookaheadBuild): kept apart from the
 // foreground build counters so a slow idle tick and a slow chapter crossing stay tellable.
 uint32_t lookaheadStarts = 0;
@@ -419,6 +427,14 @@ void InputDiag::noteBuildTotal(const int spineIndex, const unsigned long totalMs
   buildTotalMaxChunkCount = chunkCount;
 }
 
+void InputDiag::noteBuildHeadroom(const uint32_t freeHeap, const uint32_t maxAlloc, const uint32_t words) {
+  if (words > buildHeadroomMaxWords) buildHeadroomMaxWords = words;
+  if (freeHeap >= buildHeadroomMinFree) return;
+  buildHeadroomMinFree = freeHeap;
+  buildHeadroomMinMaxAlloc = maxAlloc;
+  buildHeadroomMinWords = words;
+}
+
 void InputDiag::noteLookaheadStart() { lookaheadStarts++; }
 
 void InputDiag::noteLookaheadRelease() { lookaheadReleases++; }
@@ -530,6 +546,7 @@ void InputDiag::flush(const bool inputActive) {
       "vert_ruby_draw_ms=%u groups=%u\n"
       "build_chunk_max_ms=%u spine=%d pages=%u..%u\n"
       "build_total_max_ms=%u spine=%d chunks=%d\n"
+      "build_headroom_min=%u max_alloc_then=%u words_then=%u words_max=%u\n"
       "lookahead=starts %u done %u ticks %u pages %u total_ms %u chunk_max_ms %u (spine %d at %u MHz) font_releases "
       "%u\n"
       "mini_free=%u last=%s\n"
@@ -547,12 +564,14 @@ void InputDiag::flush(const bool inputActive) {
       aaWorstLsbGlyphs, aaWorstLsbSdMs, aaWorstLsbSdDraws, aaWorstAtMs, aaWorstMsbMs, aaWorstMsbGlyphs, aaWorstMsbSdMs,
       aaWorstMsbSdDraws, vertBodyMs, vertBodyCells, vertRubyMeasureMs, vertRubyDrawMs, vertRubyGroups, buildChunkMaxMs,
       buildChunkMaxSpineIndex, buildChunkMaxPageBefore, buildChunkMaxPageAfter, buildTotalMaxMs,
-      buildTotalMaxSpineIndex, buildTotalMaxChunkCount, lookaheadStarts, lookaheadCompletions, lookaheadTicks,
-      lookaheadPages, lookaheadTotalMs, lookaheadChunkMaxMs, lookaheadChunkMaxSpineIndex, lookaheadChunkMaxMhz,
-      lookaheadReleases, miniFreeTotal, miniFreeBuf, aaAborts, uiPrewarmFailCount, uiPrewarmFailMinAlloc,
-      onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName, miniRebuildsLast, miniRebuildsMax,
-      miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount, prewarmEntryFailsTotal,
-      uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
+      buildTotalMaxSpineIndex, buildTotalMaxChunkCount, buildHeadroomMinFree == UINT32_MAX ? 0 : buildHeadroomMinFree,
+      buildHeadroomMinMaxAlloc, buildHeadroomMinWords, buildHeadroomMaxWords, lookaheadStarts, lookaheadCompletions,
+      lookaheadTicks, lookaheadPages, lookaheadTotalMs, lookaheadChunkMaxMs, lookaheadChunkMaxSpineIndex,
+      lookaheadChunkMaxMhz, lookaheadReleases, miniFreeTotal, miniFreeBuf, aaAborts, uiPrewarmFailCount,
+      uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName, miniRebuildsLast,
+      miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount,
+      prewarmEntryFailsTotal, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount,
+      listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
