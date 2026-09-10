@@ -1830,7 +1830,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tPrewarm = millis();
 
   const bool pageHasImages = page->hasImages();
-  const bool pageHasImagesNeedingDecode = pageHasImages && page->hasImagesNeedingDecode();
   const bool manualRefreshPending = forcedRefreshPending;
   forcedRefreshPending = false;
   const bool cleanImageBasePending = manualRefreshPending || pagesUntilFullRefresh <= 1;
@@ -1851,12 +1850,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     }
   };
 
-  if (pageHasImagesNeedingDecode) {
-    page->renderWithImagePlaceholders(renderer, fontId, orientedMarginLeft, orientedMarginTop);
-    renderStatusBar();
-    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-    renderer.clearScreen();
-  }
+  // No outlined-box pass before a cold image page. It cost a whole extra panel cycle (~0.5 s)
+  // to show a page the reader then replaced, on top of the several seconds the decode and the
+  // grayscale passes already take. The panel holds the previous page for nothing while that
+  // runs, so the turn now costs one refresh and lands on the finished picture. Only the cold
+  // path ever reached it -- build-time pregeneration leaves a valid cache for most pages --
+  // so a warm page is unchanged. Page::renderWithImagePlaceholders() and hasImagesNeedingDecode()
+  // keep their definitions: they are upstream API, and deleting them invites merge conflicts.
 
 #ifdef INPUT_DIAG
   // Discard what the scan pass accumulated: it runs the same loops with drawing suppressed, so

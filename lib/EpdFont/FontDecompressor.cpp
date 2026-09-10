@@ -251,6 +251,16 @@ int32_t FontDecompressor::findGlyphIndex(const EpdFontData* fontData, uint32_t c
 int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8Text) {
   if (!fontData || !fontData->groups || !utf8Text) return 0;
 
+  // A second slot for a font already held is unreachable: getBitmap() stops at the first slot
+  // whose fontData matches (see the break there), so the later slot's glyphs are never read.
+  // It would cost one of the four slots a *different* font then cannot have -- which is where
+  // the "All 4 page buffer slots full" errors came from, since one family is reachable through
+  // several font ids (headings, body, fallback). Anything the existing slot lacks takes the
+  // hot-group path, exactly where a second slot would have left it anyway.
+  for (uint8_t s = 0; s < pageSlotCount; s++) {
+    if (pageSlots[s].fontData == fontData) return 0;
+  }
+
   // Allocate the next available slot (caller must call freePageBuffer/clearCache to reset)
   if (pageSlotCount >= MAX_PAGE_SLOTS) {
     LOG_ERR("FDC", "All %u page buffer slots full, cannot prewarm fontData=%p", MAX_PAGE_SLOTS, (void*)fontData);
