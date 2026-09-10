@@ -1525,6 +1525,8 @@ uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
 // Caller owns the codepoints buffer.
 int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask) {
   int totalMissed = 0;
+  const unsigned long fetchStartMs = millis();
+  advanceFetchCalls_++;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
     const auto& s = styles_[si];
@@ -1532,7 +1534,13 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     // Stop fetching once the cache is full — further inserts would be dropped
     // by the merge anyway. The renderer fast path tolerates missing entries
     // (returns 0); the slow path is still correct for those codepoints.
-    if (advanceTableSize_[si] >= ADVANCE_CACHE_LIMIT) continue;
+    if (advanceTableSize_[si] >= ADVANCE_CACHE_LIMIT) {
+      // Counted, not just skipped: past the cap every measurement of an uncached codepoint
+      // falls through to a per-glyph load, so this is the point where a build's font cost
+      // changes character.
+      advanceFullSkips_++;
+      continue;
+    }
 
     // For each codepoint in `codepoints`, skip those already cached, then
     // resolve to a glyph index. Build a parallel array sorted by glyph index
@@ -1622,6 +1630,7 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
             ADVANCE_CACHE_LIMIT);
   }
 
+  advanceFetchMs_ += static_cast<uint32_t>(millis() - fetchStartMs);
   return totalMissed;
 }
 

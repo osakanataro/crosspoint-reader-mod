@@ -7,6 +7,7 @@
 #include <Memory.h>
 #include <Serialization.h>
 
+#include "../../../src/util/InputDiag.h"
 #include "Epub/css/CssParser.h"
 #include "Epub/css/CssSelectorUsage.h"
 #include "Page.h"
@@ -110,12 +111,17 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
     return 0;
   }
 
+  // Timed apart from the rest of the build: writing a laid-out page to the card is the one
+  // phase that is storage-bound rather than parse- or measure-bound, so it has to be separable
+  // before anything is attributed to "the build being slow".
+  const unsigned long writeStartMs = millis();
   const uint32_t position = file.position();
   if (!page->serialize(file)) {
     LOG_ERR("SCT", "Failed to serialize page %d", builtPageCount_);
     return 0;
   }
   LOG_DBG("SCT", "Page %d processed", builtPageCount_);
+  InputDiag::noteBuildPageWrite(millis() - writeStartMs);
 
   builtPageCount_++;
   // pageCount is the pages available to read: a rebuild over a partial only raises it

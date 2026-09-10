@@ -130,6 +130,29 @@ class InputDiag {
   static void noteFontChoice(const char* path, uint8_t styles, uint8_t advanceY, uint32_t glyphs,
                              uint32_t residentBytes);
 
+  // Time the render spent waiting for the panel to finish the black-and-white refresh before the
+  // grayscale planes can be pushed. Reported on its own because it used to be counted as part of
+  // the first grayscale plane, where it read as a drawing cost and was chased twice as one.
+  static void noteRefreshWait(unsigned long ms);
+
+  // The two grayscale plane loops, each split into composing the strip in RAM and pushing it to
+  // the panel. They do identical work, so a large difference between them is not drawing: it is
+  // the bus waiting on a panel that has not finished the black-and-white refresh.
+  static void noteGrayscalePhases(unsigned long lsbDrawMs, unsigned long lsbPushMs, unsigned long msbDrawMs,
+                                  unsigned long msbPushMs);
+
+  // One laid-out page written to the card during a section build. Counted and summed so the
+  // storage-bound part of a build is separable from the parse/measure part before anything is
+  // attributed to "the build being slow".
+  static void noteBuildPageWrite(unsigned long ms);
+
+  // Advance-table work a build did, sampled when the build finishes: SD fetch calls and their
+  // total time, how full the table got against its cap, and how many fetches were refused
+  // because it was already full. Past the cap every measurement of an uncached codepoint costs
+  // a per-glyph load, so a non-zero full_skips changes what the rest of the build is doing.
+  static void noteBuildFontWork(uint32_t calls, uint32_t ms, uint32_t tableMax, uint32_t tableLimit,
+                                uint32_t fullSkips);
+
   // One page-glyph prewarm: how many glyphs the heap allowed and how many the page asked for.
   // When the two meet, the budget bit and the rest of the page faults in one glyph at a time --
   // the number that moves when the glyphs get bigger rather than the markup more complex.
@@ -195,6 +218,10 @@ class InputDiag {
   static void noteGlyphMiss(uint32_t, uint8_t) {}
   static void noteFontChoice(const char*, uint8_t, uint8_t, uint32_t, uint32_t) {}
   static void notePrewarmBudget(uint32_t, uint32_t, uint32_t) {}
+  static void noteRefreshWait(unsigned long) {}
+  static void noteGrayscalePhases(unsigned long, unsigned long, unsigned long, unsigned long) {}
+  static void noteBuildPageWrite(unsigned long) {}
+  static void noteBuildFontWork(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
   static void noteLookaheadStart() {}
   static void noteLookaheadChunk(int, uint16_t, unsigned long, bool) {}
   static void noteLookaheadRelease() {}

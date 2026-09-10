@@ -175,6 +175,22 @@ class SdCardFont {
   // in microseconds -- externally identical (fast, no rebuild, no SD reads).
   uint32_t prewarmEntryFails() const { return prewarmEntryFails_; }
 
+  // Advance-table work, which is what a section build spends its font time on: it measures text
+  // and never draws it. calls/ms cover the SD reads; fullSkips counts the times a style was
+  // skipped because its table already holds ADVANCE_CACHE_LIMIT entries -- past that point every
+  // measurement of an uncached codepoint falls through to a per-glyph load instead.
+  uint32_t advanceFetchCalls() const { return advanceFetchCalls_; }
+  uint32_t advanceFetchMs() const { return advanceFetchMs_; }
+  uint32_t advanceFullSkips() const { return advanceFullSkips_; }
+  uint32_t advanceTableMax() const {
+    uint32_t largest = 0;
+    for (uint8_t i = 0; i < MAX_STYLES; i++) {
+      if (advanceTableSize_[i] > largest) largest = advanceTableSize_[i];
+    }
+    return largest;
+  }
+  static constexpr uint32_t advanceTableLimit() { return ADVANCE_CACHE_LIMIT; }
+
   // Content hash of the file header + style TOC entries (computed during load).
   // Used to generate deterministic font IDs for section cache invalidation.
   uint32_t contentHash() const { return contentHash_; }
@@ -365,6 +381,9 @@ class SdCardFont {
   uint32_t contentHash_ = 0;
   uint32_t overflowLoads_ = 0;
   uint32_t miniRebuilds_ = 0;
+  uint32_t advanceFetchCalls_ = 0;
+  uint32_t advanceFetchMs_ = 0;
+  uint32_t advanceFullSkips_ = 0;
   uint32_t miniRebuildMs_ = 0;
   uint32_t prewarmEntryFails_ = 0;
   bool loaded_ = false;

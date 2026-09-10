@@ -1581,6 +1581,11 @@ void EpubReaderActivity::renderBook() {
 
   if (buildChunkCountThisRender > 0) {
     InputDiag::noteBuildTotal(currentSpineIndex, buildAccumMsThisRender, buildChunkCountThisRender);
+    // Sampled here rather than per chunk: the counters are cumulative for the session, and what
+    // the report needs is where a build's time went, not a per-chunk series.
+    uint32_t advCalls = 0, advMs = 0, advTableMax = 0, advTableLimit = 0, advFullSkips = 0;
+    renderer.sdAdvanceStats(advCalls, advMs, advTableMax, advTableLimit, advFullSkips);
+    InputDiag::noteBuildFontWork(advCalls, advMs, advTableMax, advTableLimit, advFullSkips);
   }
   // Section loaded (or built far enough for the requested page).
   InputDiag::noteOpenStage(3, "sect");
@@ -1988,6 +1993,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       auto scratch =
           glyphsTooScattered ? nullptr : makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
       renderer.waitRefreshComplete();
+      // Bracketed apart from the plane loops below. This wait used to sit inside the gray_lsb
+      // figure, which made the first plane look ~60x the cost of the second and sent two separate
+      // investigations after a difference in drawing that was never there: on 2026-09-11 the split
+      // came out lsb=2293ms against draw 97ms + push 36ms, the remaining 2160ms being this line.
+      // The panel finishing the black-and-white refresh is not part of antialiasing.
+      const auto tRefreshWait = millis();
       if (glyphsTooScattered) {
         LOG_ERR("ERS", "%u glyphs loaded on demand in the BW pass; skipping AA this page", bwOnDemandGlyphs);
       }
@@ -2018,6 +2029,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
         // is already on the panel in black and white, and the reader would rather have the
         // next page than the grays on this one. Checked per strip (~50-100 ms).
         bool aaAborted = false;
+#ifdef INPUT_DIAG
+        // The two loops are the same work, yet the first still measures ~60x the second with
+        // glyph loads and SD traffic both at zero (2,157 ms vs 35 ms, 2026-09-11). Whatever the
+        // first pass pays is neither drawing nor the card, so split the loop where the only
+        // other candidate sits: composing the strip in RAM versus pushing it down the bus to a
+        // panel that may still be finishing the black-and-white refresh.
+        unsigned long lsbDrawMs = 0, lsbPushMs = 0, msbDrawMs = 0, msbPushMs = 0;
+#endif
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
         for (int y = 0; y < gh; y += STRIP_ROWS) {
           if (mappedInput.hasPendingInput()) {
@@ -2025,11 +2044,21 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
             break;
           }
           const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+#ifdef INPUT_DIAG
+          const auto tStripStart = millis();
+#endif
           renderer.beginStripTarget(scratch.get(), y, rows);
           renderer.clearScreen(0x00);
           renderGrayscalePass();
           renderer.endStripTarget();
+#ifdef INPUT_DIAG
+          const auto tStripDrawn = millis();
+          lsbDrawMs += tStripDrawn - tStripStart;
+#endif
           renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
+#ifdef INPUT_DIAG
+          lsbPushMs += millis() - tStripDrawn;
+#endif
         }
         const auto tGrayLsb = millis();
 #ifdef INPUT_DIAG
@@ -2044,11 +2073,21 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
             break;
           }
           const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+#ifdef INPUT_DIAG
+          const auto tStripStart = millis();
+#endif
           renderer.beginStripTarget(scratch.get(), y, rows);
           renderer.clearScreen(0x00);
           renderGrayscalePass();
           renderer.endStripTarget();
+#ifdef INPUT_DIAG
+          const auto tStripDrawn = millis();
+          msbDrawMs += tStripDrawn - tStripStart;
+#endif
           renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
+#ifdef INPUT_DIAG
+          msbPushMs += millis() - tStripDrawn;
+#endif
         }
         const auto tGrayMsb = millis();
 #ifdef INPUT_DIAG
@@ -2056,13 +2095,18 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           const auto msbImg = ImageBlock::takeCacheRenderStats();
           const uint32_t msbOnDemand = renderer.glyphOnDemandLoads() - onDemandBeforeLsb - lsbOnDemand;
           LOG_DBG("ERS",
-                  "AA split: lsb=%lums glyphs=%u img_slot=%u/%u stream=%u sd=%lums | "
+                  "AA split: wait=%lums | lsb=%lums glyphs=%u img_slot=%u/%u stream=%u sd=%lums | "
                   "msb=%lums glyphs=%u img_slot=%u/%u stream=%u sd=%lums",
-                  tGrayLsb - tDisplay, lsbOnDemand, lsbImg.slotHits, lsbImg.slotLoads, lsbImg.streamDraws, lsbImg.sdMs,
-                  tGrayMsb - tGrayLsb, msbOnDemand, msbImg.slotHits, msbImg.slotLoads, msbImg.streamDraws, msbImg.sdMs);
-          InputDiag::noteGrayscaleSplit(tGrayLsb - tDisplay, lsbOnDemand, lsbImg.sdMs,
+                  tRefreshWait - tDisplay, tGrayLsb - tRefreshWait, lsbOnDemand, lsbImg.slotHits, lsbImg.slotLoads,
+                  lsbImg.streamDraws, lsbImg.sdMs, tGrayMsb - tGrayLsb, msbOnDemand, msbImg.slotHits, msbImg.slotLoads,
+                  msbImg.streamDraws, msbImg.sdMs);
+          InputDiag::noteRefreshWait(tRefreshWait - tDisplay);
+          InputDiag::noteGrayscaleSplit(tGrayLsb - tRefreshWait, lsbOnDemand, lsbImg.sdMs,
                                         lsbImg.slotLoads + lsbImg.streamDraws, tGrayMsb - tGrayLsb, msbOnDemand,
                                         msbImg.sdMs, msbImg.slotLoads + msbImg.streamDraws);
+          LOG_DBG("ERS", "AA phases: lsb draw=%lums push=%lums | msb draw=%lums push=%lums", lsbDrawMs, lsbPushMs,
+                  msbDrawMs, msbPushMs);
+          InputDiag::noteGrayscalePhases(lsbDrawMs, lsbPushMs, msbDrawMs, msbPushMs);
         }
 #endif
 
@@ -2082,10 +2126,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
         const auto tEnd = millis();
         LOG_DBG("ERS",
-                "Page render (tiled): prewarm=%lums bw_render=%lums display=%lums gray_lsb=%lums "
+                "Page render (tiled): prewarm=%lums bw_render=%lums display=%lums wait=%lums gray_lsb=%lums "
                 "gray_msb=%lums gray_display=%lums cleanup=%lums total=%lums",
-                tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tGrayLsb - tDisplay, tGrayMsb - tGrayLsb,
-                tGrayDisplay - tGrayMsb, tCleanup - tGrayDisplay, tEnd - t0);
+                tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, tRefreshWait - tDisplay,
+                tGrayLsb - tRefreshWait, tGrayMsb - tGrayLsb, tGrayDisplay - tGrayMsb, tCleanup - tGrayDisplay,
+                tEnd - t0);
       }
     }
   } else {

@@ -151,6 +151,12 @@ class GfxRenderer {
   // Times an SD-font prewarm bailed before touching any style (scratch alloc
   // failure or zero heap budget). See SdCardFont::prewarmEntryFails().
   uint32_t glyphPrewarmEntryFails() const;
+
+  // Advance-table work across every registered SD font. A section build measures text and never
+  // draws it, so this is where its font time goes; tableMax against tableLimit says whether the
+  // table has filled, past which every uncached codepoint costs a per-glyph load to measure.
+  void sdAdvanceStats(uint32_t& calls, uint32_t& ms, uint32_t& tableMax, uint32_t& tableLimit,
+                      uint32_t& fullSkips) const;
   // Clears both the flash-font map and any SD-font registration for fontId.
   // Coupled to avoid dangling SdCardFont* in sdCardFonts_ when callers free
   // the underlying SdCardFont and forget the SD-side unregister.

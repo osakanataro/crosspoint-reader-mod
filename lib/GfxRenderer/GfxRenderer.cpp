@@ -219,6 +219,23 @@ uint32_t GfxRenderer::glyphPrewarmEntryFails() const {
   return fails;
 }
 
+void GfxRenderer::sdAdvanceStats(uint32_t& calls, uint32_t& ms, uint32_t& tableMax, uint32_t& tableLimit,
+                                 uint32_t& fullSkips) const {
+  calls = 0;
+  ms = 0;
+  tableMax = 0;
+  fullSkips = 0;
+  tableLimit = SdCardFont::advanceTableLimit();
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font == nullptr) continue;
+    calls += font->advanceFetchCalls();
+    ms += font->advanceFetchMs();
+    fullSkips += font->advanceFullSkips();
+    if (font->advanceTableMax() > tableMax) tableMax = font->advanceTableMax();
+  }
+}
+
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   if (fallbackFontMap_.empty() || text == nullptr || *text == '\0') {
     return fontId;

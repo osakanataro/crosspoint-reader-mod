@@ -212,6 +212,24 @@ uint8_t fontAdvanceY = 0;
 uint32_t fontGlyphs = 0;
 uint32_t fontResidentBytes = 0;
 
+// Grayscale plane loops split into compose-in-RAM and push-to-panel.
+bool aaWorstArmed = false;
+uint32_t aaRefreshWaitMs = 0;
+uint32_t aaRefreshWaitMaxMs = 0;
+uint32_t aaLsbDrawMs = 0;
+uint32_t aaLsbPushMs = 0;
+uint32_t aaMsbDrawMs = 0;
+uint32_t aaMsbPushMs = 0;
+
+// Section-build phases: pages written to the card, and the advance-table work the measuring did.
+uint32_t buildPageWrites = 0;
+uint32_t buildPageWriteMs = 0;
+uint32_t buildFontCalls = 0;
+uint32_t buildFontMs = 0;
+uint32_t buildFontTableMax = 0;
+uint32_t buildFontTableLimit = 0;
+uint32_t buildFontFullSkips = 0;
+
 // Page-glyph prewarm budgets. The minimum is what the tightest page got; clips count the pages
 // that wanted more glyphs than the heap would pay for.
 uint32_t prewarmBudgetMin = UINT32_MAX;
@@ -427,6 +445,10 @@ void InputDiag::noteGrayscaleSplit(const unsigned long lsbMs, const unsigned lon
                                    const unsigned long msbMs, const unsigned long msbGlyphs,
                                    const unsigned long msbSdMs, const unsigned long msbSdDraws) {
   if (static_cast<uint32_t>(lsbMs) <= aaWorstLsbMs) return;
+  // Arms noteGrayscalePhases, which is called immediately after with the same page's numbers:
+  // the phases only mean anything next to the worst page's totals, and the worst page is rarely
+  // the last one rendered.
+  aaWorstArmed = true;
   aaWorstLsbMs = static_cast<uint32_t>(lsbMs);
   aaWorstAtMs = static_cast<uint32_t>(millis());
   aaWorstLsbGlyphs = static_cast<uint32_t>(lsbGlyphs);
@@ -505,6 +527,35 @@ void InputDiag::notePrewarmBudget(const uint32_t budgetGlyphs, const uint32_t wa
     prewarmBudgetMinWanted = wantedGlyphs;
     prewarmBudgetMinFree = freeHeap;
   }
+}
+
+void InputDiag::noteRefreshWait(const unsigned long ms) {
+  aaRefreshWaitMs = static_cast<uint32_t>(ms);
+  if (aaRefreshWaitMs > aaRefreshWaitMaxMs) aaRefreshWaitMaxMs = aaRefreshWaitMs;
+}
+
+void InputDiag::noteGrayscalePhases(const unsigned long lsbDrawMs, const unsigned long lsbPushMs,
+                                    const unsigned long msbDrawMs, const unsigned long msbPushMs) {
+  if (!aaWorstArmed) return;
+  aaWorstArmed = false;
+  aaLsbDrawMs = static_cast<uint32_t>(lsbDrawMs);
+  aaLsbPushMs = static_cast<uint32_t>(lsbPushMs);
+  aaMsbDrawMs = static_cast<uint32_t>(msbDrawMs);
+  aaMsbPushMs = static_cast<uint32_t>(msbPushMs);
+}
+
+void InputDiag::noteBuildPageWrite(const unsigned long ms) {
+  buildPageWrites++;
+  buildPageWriteMs += static_cast<uint32_t>(ms);
+}
+
+void InputDiag::noteBuildFontWork(const uint32_t calls, const uint32_t ms, const uint32_t tableMax,
+                                  const uint32_t tableLimit, const uint32_t fullSkips) {
+  buildFontCalls = calls;
+  buildFontMs = ms;
+  buildFontTableMax = tableMax;
+  buildFontTableLimit = tableLimit;
+  buildFontFullSkips = fullSkips;
 }
 
 void InputDiag::noteLookaheadStart() { lookaheadStarts++; }
@@ -638,6 +689,10 @@ void InputDiag::flush(const bool inputActive) {
       "glyph_miss=%u last=%s\n"
       "font=%s styles=%u advY=%u glyphs=%u resident=%u\n"
       "prewarm_budget_min=%u wanted_then=%u free_then=%u clips=%u\n"
+      "aa_refresh_wait=%ums (max %ums)\n"
+      "aa_phases=lsb draw %ums push %ums | msb draw %ums push %ums\n"
+      "build_page_write=%u pages %ums\n"
+      "build_font=%u calls %ums table %u/%u full_skips %u\n"
       "ui_prewarm_heap_max=%d\n"
       "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
       now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower, debounceEpisodes,
@@ -655,7 +710,9 @@ void InputDiag::flush(const bool inputActive) {
       miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount,
       prewarmEntryFailsTotal, scanFontOverflowTotal, glyphMissTotal, glyphMissBuf, fontName, fontStyles, fontAdvanceY,
       fontGlyphs, fontResidentBytes, prewarmBudgetMin == UINT32_MAX ? 0 : prewarmBudgetMin, prewarmBudgetMinWanted,
-      prewarmBudgetMinFree, prewarmBudgetClips, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx,
+      prewarmBudgetMinFree, prewarmBudgetClips, aaRefreshWaitMs, aaRefreshWaitMaxMs, aaLsbDrawMs, aaLsbPushMs,
+      aaMsbDrawMs, aaMsbPushMs, buildPageWrites, buildPageWriteMs, buildFontCalls, buildFontMs, buildFontTableMax,
+      buildFontTableLimit, buildFontFullSkips, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx,
       listVisibleRowCount, listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
