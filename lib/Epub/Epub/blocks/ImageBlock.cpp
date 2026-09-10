@@ -118,6 +118,13 @@ constexpr size_t PXC_CHUNK_SIZE = 1u << PXC_CHUNK_SHIFT;
 constexpr size_t PXC_MAX_CHUNKS = 6;  // 96 KB: a full-screen 2bpp image
 constexpr size_t PXC_HEAP_RESERVE = 24 * 1024;
 constexpr size_t PXC_MAX_ALLOC_RESERVE = 8 * 1024;
+// A payload this small is an inline gaiji, not a picture: 33x33 at 2 bits per pixel is 297
+// bytes. The reserves above are sized for a page-filling image that really does have to leave
+// the render room to work, and applying them flat refused the small ones on exactly the tight
+// pages where the fallback -- re-reading the card on every grayscale band -- costs the most
+// (measured 2026-09-10: img_slot=0/0 stream=1 at 297 bytes wanted).
+constexpr size_t PXC_SMALL_PAYLOAD = 4 * 1024;
+constexpr size_t PXC_SMALL_RESERVE = 4 * 1024;
 // Rows can straddle a chunk boundary; they are reassembled into a stack
 // buffer. (screenWidth + 3) / 4 caps at 200 B for an 800px panel.
 constexpr int PXC_MAX_BYTES_PER_ROW = 208;
@@ -166,9 +173,12 @@ bool loadPxcSlot(uint64_t cacheHash, HalFile& cacheFile, uint16_t cachedWidth, u
   if (chunkCount == 0 || chunkCount > PXC_MAX_CHUNKS) {
     return false;
   }
+  const bool small = remaining <= PXC_SMALL_PAYLOAD;
+  const size_t heapReserve = small ? PXC_SMALL_RESERVE : PXC_HEAP_RESERVE;
+  const size_t allocReserve = small ? PXC_SMALL_RESERVE : PXC_MAX_ALLOC_RESERVE;
   for (size_t i = 0; i < chunkCount; i++) {
     const size_t want = remaining < PXC_CHUNK_SIZE ? remaining : PXC_CHUNK_SIZE;
-    if (ESP.getFreeHeap() < remaining + PXC_HEAP_RESERVE || ESP.getMaxAllocHeap() < want + PXC_MAX_ALLOC_RESERVE) {
+    if (ESP.getFreeHeap() < remaining + heapReserve || ESP.getMaxAllocHeap() < want + allocReserve) {
       releasePxcSlot();
       return false;
     }
@@ -375,8 +385,6 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   FontCacheManager* fcm = renderer.getFontCacheManager();
   if (fcm && fcm->isScanning()) return;
 
-  LOG_DBG("IMG", "Rendering image at %d,%d: %s (%dx%d)", x, y, imagePath.c_str(), width, height);
-
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
 
@@ -397,6 +405,11 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (!renderer.glyphIntersectsStrip(x, y, x + width - 1, y + height - 1)) {
     return;
   }
+
+  // Logged here rather than on entry: a grayscale page walks every image once per band, so
+  // logging before the band check put a dozen lines per page into a sixteen-line ring and
+  // pushed out whatever the capture was actually taken for (2026-09-10 slow-render report).
+  LOG_DBG("IMG", "Rendering image at %d,%d: %s (%dx%d)", x, y, imagePath.c_str(), width, height);
 
   if (imageFailedThisRender(imagePath)) {
     renderPlaceholder(renderer, x, y);
