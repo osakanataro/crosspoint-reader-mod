@@ -3157,7 +3157,13 @@ int ChapterHtmlSlimParser::verticalRubyReserve() const {
   // is clipped by the screen edge -- the readings on a page's first column simply went missing
   // (2026-09-11). TextBlock draws ruby in a half-width cell, so reserving exactly that keeps the
   // page's own right edge clear without taking a whole column's worth of width.
-  return verticalColumnWidth() / 2;
+  // Only the part the reader's own right margin does not already cover. Reserving the full ruby
+  // width inside the viewport cost a whole column: at 18 pt the ruby cell is 19 px and the page
+  // held 9 columns up to a reserve of 18, so 19 dropped it to 8 -- an 11% loss of text per page
+  // for one pixel (measured 2026-09-11, viewport 512, pitch 57).
+  const int rubyWidth = verticalColumnWidth() / 2;
+  const int covered = rightMargin;
+  return rubyWidth > covered ? rubyWidth - covered : 0;
 }
 
 void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {

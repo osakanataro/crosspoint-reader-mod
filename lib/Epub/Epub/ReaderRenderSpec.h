@@ -27,4 +27,9 @@ struct ReaderRenderSpec {
   // so switching a book between vertical and horizontal invalidates its section cache.
   bool isVertical = false;
   uint8_t verticalCharSpacing = 0;
+  // White space the reader keeps outside the viewport on the right, in pixels (the user's screen
+  // margin, not the bezel inset, which is under the frame and cannot be drawn into usefully).
+  // Vertical ruby is set beside its column and the rightmost column's lands here, so the page
+  // only has to reserve what this does not already cover.
+  uint8_t rightMargin = 0;
 };
