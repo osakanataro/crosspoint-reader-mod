@@ -1329,7 +1329,10 @@ void EpubReaderActivity::renderBook() {
   const auto showBuildError = [this]() {
     // Snapshot the log ring before anything else: on a device with no serial console this is the
     // only record of which check inside the section build actually failed. No-op without INPUT_DIAG.
-    InputDiag::captureLogs("section-build-failed");
+    InputDiag::captureLogs("section-build-failed", /*failure=*/true);
+    // Written out now rather than at the next scheduled flush: the popup below waits for the
+    // reader, and a capture sitting in RAM is no use if the session ends there.
+    InputDiag::flushNow();
     renderer.clearScreen();
     GUI.drawPopup(renderer, tr(STR_INDEX_FAILED));
     automaticPageTurnActive = false;

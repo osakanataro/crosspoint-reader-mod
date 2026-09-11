@@ -130,6 +130,13 @@ class InputDiag {
   static void noteFontChoice(const char* path, uint8_t styles, uint8_t advanceY, uint32_t glyphs,
                              uint32_t residentBytes);
 
+  // A layout pass that refused to lay out a paragraph, line or column. Refusing is not a crash --
+  // it abandons the chapter build and the reader shows "Failed to index" -- so the report has to
+  // name which of the six checks refused and on how many tokens, or the failure is unattributable.
+  // kind: 1 vertical paragraph gate, 2 vertical token heights, 3 vertical column probe,
+  //       4 vertical column TextBlock, 5 horizontal paragraph gate, 6 horizontal line probe.
+  static void noteLayoutGiveUp(uint8_t kind, uint32_t tokens);
+
   // Time the render spent waiting for the panel to finish the black-and-white refresh before the
   // grayscale planes can be pushed. Reported on its own because it used to be counted as part of
   // the first grayscale plane, where it read as a drawing cost and was chased twice as one.
@@ -184,12 +191,14 @@ class InputDiag {
   // ring keeps the last 24 events, enough for every image in the diagnostic EPUB.
   static void noteImageEvent(const char* line);
 
-  // Snapshot the RTC log ring into memory, to be written out by the next flush().
-  //
-  // Copies rather than writing on the spot: this is called from failure paths that may already
-  // hold the storage mutex, and the ring is only sixteen lines deep, so waiting for the flush
-  // would let routine debug output evict the very error being chased.
-  static void captureLogs(const char* reason);
+  // Snapshot the RTC log ring. A failure capture displaces a pending informational one: the
+  // periodic flush is seconds away, and a slow render taken just before a build failed used to
+  // keep the failure's own log ring from ever reaching the card (2026-09-11).
+  static void captureLogs(const char* reason, bool failure = false);
+
+  // Write the report and any pending capture now, ignoring the usual interval. For failure paths,
+  // where the session may not survive to the next scheduled flush.
+  static void flushNow();
 
   // Rewrites the snapshot on the SD card, at most every few seconds.
   static void flush(bool inputActive);
@@ -218,6 +227,7 @@ class InputDiag {
   static void noteGlyphMiss(uint32_t, uint8_t) {}
   static void noteFontChoice(const char*, uint8_t, uint8_t, uint32_t, uint32_t) {}
   static void notePrewarmBudget(uint32_t, uint32_t, uint32_t) {}
+  static void noteLayoutGiveUp(uint8_t, uint32_t) {}
   static void noteRefreshWait(unsigned long) {}
   static void noteGrayscalePhases(unsigned long, unsigned long, unsigned long, unsigned long) {}
   static void noteBuildPageWrite(unsigned long) {}
@@ -228,7 +238,8 @@ class InputDiag {
   static void noteAaAborted() {}
   static void noteUiPrewarmFailure() {}
   static void noteImageEvent(const char*) {}
-  static void captureLogs(const char*) {}
+  static void captureLogs(const char*, bool = false) {}
+  static void flushNow() {}
   static void flush(bool) {}
 };
 #endif

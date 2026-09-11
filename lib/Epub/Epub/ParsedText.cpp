@@ -14,6 +14,7 @@
 #include <limits>
 #include <vector>
 
+#include "../../../src/util/InputDiag.h"
 #include "InlineImageToken.h"
 #include "TokenBoundary.h"
 #include "hyphenation/HyphenationCommon.h"
@@ -777,6 +778,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   if (!hasHeapForLayout(words.size(), LAYOUT_BYTES_PER_WORD_VERTICAL)) {
     LOG_ERR("PTX", "Column layout gave up: %u tokens need more than the %u bytes free",
             static_cast<unsigned>(words.size()), static_cast<unsigned>(ESP.getFreeHeap()));
+    InputDiag::noteLayoutGiveUp(1, words.size());
     layoutFailed_ = true;
     return;
   }
@@ -814,6 +816,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   const auto wordHeights = makeUniqueNoThrow<uint16_t[]>(words.size());
   if (!wordHeights) {
     LOG_ERR("PTX", "Column layout gave up: no room for %u token heights", static_cast<unsigned>(words.size()));
+    InputDiag::noteLayoutGiveUp(2, words.size());
     layoutFailed_ = true;
     return;
   }
@@ -928,6 +931,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     if (!heapCanHoldEmit(count)) {
       LOG_ERR("PTX", "Column layout gave up: %u tokens do not fit the %u bytes free", static_cast<unsigned>(count),
               static_cast<unsigned>(ESP.getFreeHeap()));
+      InputDiag::noteLayoutGiveUp(3, count);
       layoutFailed_ = true;
       return;
     }
@@ -956,6 +960,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
         colWords, colXpos, colYpos, colStyles, blockStyle, std::move(colRuby), static_cast<uint16_t>(cjkCharAdvance)));
     if (!column || !column->valid()) {
       LOG_ERR("PTX", "Column layout gave up: no room for a column of %u tokens", static_cast<unsigned>(count));
+      InputDiag::noteLayoutGiveUp(4, count);
       layoutFailed_ = true;
       return;
     }
@@ -1000,6 +1005,7 @@ void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fo
   if (!hasHeapForLayout(words.size(), LAYOUT_BYTES_PER_WORD_HORIZONTAL)) {
     LOG_ERR("PTX", "Layout gave up: %u words need more than the %u bytes free", static_cast<unsigned>(words.size()),
             static_cast<unsigned>(ESP.getFreeHeap()));
+    InputDiag::noteLayoutGiveUp(5, words.size());
     layoutFailed_ = true;
     return;
   }
@@ -1587,6 +1593,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   if (!heapCanHoldEmit(lineWordCount)) {
     LOG_ERR("PTX", "Layout gave up: a line of %u words does not fit the %u bytes free",
             static_cast<unsigned>(lineWordCount), static_cast<unsigned>(ESP.getFreeHeap()));
+    InputDiag::noteLayoutGiveUp(6, lineWordCount);
     layoutFailed_ = true;
     return;
   }

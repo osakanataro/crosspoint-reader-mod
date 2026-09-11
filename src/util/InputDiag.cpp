@@ -174,6 +174,7 @@ uint32_t aaWorstMsbSdDraws = 0;
 constexpr char LOG_PATH[] = "/input-diag-log.txt";
 char capturedLogs[2048];
 bool capturedLogsPending = false;
+bool capturedLogsIsFailure = false;
 
 // Worst single buildSomeMore() call this session, by duration.
 uint32_t buildChunkMaxMs = 0;
@@ -214,6 +215,13 @@ uint32_t fontResidentBytes = 0;
 
 // Grayscale plane loops split into compose-in-RAM and push-to-panel.
 bool aaWorstArmed = false;
+// Layout give-ups: the count, and which check refused last (see noteLayoutGiveUp).
+uint32_t layoutGiveUps = 0;
+uint8_t layoutGiveUpKind = 0;
+uint32_t layoutGiveUpTokens = 0;
+uint32_t layoutGiveUpFree = 0;
+uint32_t layoutGiveUpMaxAlloc = 0;
+
 uint32_t aaRefreshWaitMs = 0;
 uint32_t aaRefreshWaitMaxMs = 0;
 uint32_t aaLsbDrawMs = 0;
@@ -529,6 +537,14 @@ void InputDiag::notePrewarmBudget(const uint32_t budgetGlyphs, const uint32_t wa
   }
 }
 
+void InputDiag::noteLayoutGiveUp(const uint8_t kind, const uint32_t tokens) {
+  layoutGiveUps++;
+  layoutGiveUpKind = kind;
+  layoutGiveUpTokens = tokens;
+  layoutGiveUpFree = ESP.getFreeHeap();
+  layoutGiveUpMaxAlloc = ESP.getMaxAllocHeap();
+}
+
 void InputDiag::noteRefreshWait(const unsigned long ms) {
   aaRefreshWaitMs = static_cast<uint32_t>(ms);
   if (aaRefreshWaitMs > aaRefreshWaitMaxMs) aaRefreshWaitMaxMs = aaRefreshWaitMs;
@@ -585,10 +601,12 @@ void InputDiag::noteUiPrewarmFailure() {
   }
 }
 
-void InputDiag::captureLogs(const char* reason) {
+void InputDiag::captureLogs(const char* reason, const bool failure) {
   // Keep the first capture. A failure often cascades, and the earliest report is the one that
-  // still names the original cause.
-  if (capturedLogsPending) return;
+  // still names the original cause -- except that a failure outranks an informational capture
+  // waiting to be written: a slow render taken seconds earlier used to keep a build failure's
+  // own log ring from ever reaching the card.
+  if (capturedLogsPending && !(failure && !capturedLogsIsFailure)) return;
   const std::string logs = getLastLogs();
   // The glyph misses as they stood at this moment: on a slow render they name the characters
   // the page had to fetch one at a time, which the periodic report (written later, usually from
@@ -599,6 +617,14 @@ void InputDiag::captureLogs(const char* reason) {
                            reason ? reason : "?", millis(), glyphMissTotal, glyphMissBuf, logs.c_str());
   if (len <= 0) return;
   capturedLogsPending = true;
+  capturedLogsIsFailure = failure;
+}
+
+void InputDiag::flushNow() {
+  // Failure paths only. The interval exists so routine flushes stay out of the intervals being
+  // measured; a build that just failed has nothing left to measure and may not reach the next one.
+  lastFlushAt = millis() - FLUSH_INTERVAL_MS;
+  flush(false);
 }
 
 void InputDiag::flush(const bool inputActive) {
@@ -689,6 +715,7 @@ void InputDiag::flush(const bool inputActive) {
       "glyph_miss=%u last=%s\n"
       "font=%s styles=%u advY=%u glyphs=%u resident=%u\n"
       "prewarm_budget_min=%u wanted_then=%u free_then=%u clips=%u\n"
+      "layout_giveup=%u last=kind%u tokens=%u free=%u max=%u\n"
       "aa_refresh_wait=%ums (max %ums)\n"
       "aa_phases=lsb draw %ums push %ums | msb draw %ums push %ums\n"
       "build_page_write=%u pages %ums\n"
@@ -710,10 +737,11 @@ void InputDiag::flush(const bool inputActive) {
       miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount,
       prewarmEntryFailsTotal, scanFontOverflowTotal, glyphMissTotal, glyphMissBuf, fontName, fontStyles, fontAdvanceY,
       fontGlyphs, fontResidentBytes, prewarmBudgetMin == UINT32_MAX ? 0 : prewarmBudgetMin, prewarmBudgetMinWanted,
-      prewarmBudgetMinFree, prewarmBudgetClips, aaRefreshWaitMs, aaRefreshWaitMaxMs, aaLsbDrawMs, aaLsbPushMs,
-      aaMsbDrawMs, aaMsbPushMs, buildPageWrites, buildPageWriteMs, buildFontCalls, buildFontMs, buildFontTableMax,
-      buildFontTableLimit, buildFontFullSkips, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx,
-      listVisibleRowCount, listScreenHeight);
+      prewarmBudgetMinFree, prewarmBudgetClips, layoutGiveUps, layoutGiveUpKind, layoutGiveUpTokens, layoutGiveUpFree,
+      layoutGiveUpMaxAlloc, aaRefreshWaitMs, aaRefreshWaitMaxMs, aaLsbDrawMs, aaLsbPushMs, aaMsbDrawMs, aaMsbPushMs,
+      buildPageWrites, buildPageWriteMs, buildFontCalls, buildFontMs, buildFontTableMax, buildFontTableLimit,
+      buildFontFullSkips, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount,
+      listScreenHeight);
   if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
     return;
   }
