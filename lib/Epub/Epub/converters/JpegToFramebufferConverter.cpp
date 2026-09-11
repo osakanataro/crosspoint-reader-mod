@@ -87,6 +87,7 @@ struct BufferedJpegFile {
   int32_t bufStart{0};  // file offset the buffer begins at
   int32_t bufLen{0};    // valid bytes in the buffer
   int32_t pos{0};       // logical file position
+  int32_t filePos{0};   // where the HalFile actually is, so a sequential refill skips the seek
 };
 
 void* jpegOpen(const char* filename, int32_t* size) {
@@ -133,14 +134,20 @@ int32_t jpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
     }
     // Refill from the card at the current position. Counted and timed: this is the only place
     // the decode touches storage, so ioCalls is the number of real reads, not of JPEGDEC's asks.
+    // The seek is skipped when the file is already there -- refills are sequential almost always,
+    // and seeking anyway is what the unbuffered version never did.
     const uint32_t t0 = millis();
-    if (!f->file.seek(f->pos)) break;
+    if (f->filePos != f->pos) {
+      if (!f->file.seek(f->pos)) break;
+      f->filePos = f->pos;
+    }
     const int got = f->file.read(f->buf, BufferedJpegFile::BUF_SIZE);
     if (g_ioTimingCtx) {
       g_ioTimingCtx->ioMs += millis() - t0;
       g_ioTimingCtx->ioCalls++;
     }
     if (got <= 0) break;
+    f->filePos = f->pos + got;
     f->bufStart = f->pos;
     f->bufLen = got;
   }

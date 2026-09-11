@@ -1829,11 +1829,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                         // heap. Nothing draws inside this scope; the next page
                         // render repaints the restored-white buffer in full.
                         GfxRenderer::FrameBufferLoan loan(self->renderer);
-                        // 16 KB, not 4: the extraction of a 1440x2048 page image measured 8,563 ms
-                        // -- half the whole pregeneration -- and it is storage-bound, so the chunk
-                        // size is what decides how many trips to the card it takes. The buffers are
-                        // transient and the inflate window comes from the loan above, not the heap.
-                        extracted = self->epub->readItemContentsToStream(resolvedPath, outFile, 16384);
+                        // 8 KB, matching extractItemToFile(). 4 KB was measurably worse and 16 KB
+                        // was tried and reverted: a deflated entry mallocs the chunk twice, so 16 KB
+                        // wants 32 KB contiguous and the extraction of a gaiji failed outright at a
+                        // 32 KB largest block (2026-09-11). The chunk barely moves the clock anyway
+                        // -- the extraction is limited by what the card delivers (~180 KB/s), not by
+                        // the number of trips.
+                        extracted = self->epub->readItemContentsToStream(resolvedPath, outFile, 8192);
                       }
                       outFile.flush();
                       outFile.close();
