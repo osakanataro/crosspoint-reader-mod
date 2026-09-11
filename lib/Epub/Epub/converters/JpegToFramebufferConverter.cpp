@@ -15,6 +15,18 @@
 #include "DitherUtils.h"
 #include "PixelCache.h"
 
+#if INPUT_DIAG
+#include "../../../../src/util/InputDiag.h"
+#define IMG_DIAG(fmt, ...)                                        \
+  do {                                                            \
+    char imgDiagBuf[72];                                          \
+    snprintf(imgDiagBuf, sizeof(imgDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(imgDiagBuf);                        \
+  } while (0)
+#else
+#define IMG_DIAG(fmt, ...)
+#endif
+
 namespace {
 
 // Context struct passed through JPEGDEC callbacks to avoid global mutable state.
@@ -43,6 +55,15 @@ struct JpegContext {
   int32_t invScaleFPX{1 << 16};   // X: dst -> src column mapping
   int32_t fineScaleFPY{1 << 16};  // Y: src -> dst row mapping
   int32_t invScaleFPY{1 << 16};   // Y: dst -> src row mapping
+
+  // Where the decode's seconds actually go. JPEGDEC's own work is the total minus these:
+  // io covers the read/seek callbacks (the card), draw covers this file's scale+dither loop,
+  // and flush covers writing the pixel cache back out. A 1440x2048 page image measured 17.7 s
+  // and none of it was attributable without the split (2026-09-11).
+  uint32_t ioMs{0};
+  uint32_t ioCalls{0};
+  uint32_t drawMs{0};
+  uint32_t flushMs{0};
 
   PixelCache cache;
   bool caching{false};
@@ -75,10 +96,20 @@ void jpegClose(void* handle) {
 // checks iPos < iSize to decide whether more data is available). The callbacks
 // MUST maintain iPos to match the actual file position, otherwise progressive
 // JPEGs with large headers fail during parsing.
+// The read/seek callbacks only receive JPEGFILE, so the context they must charge their time to
+// is reached through this. One decode runs at a time (the decoder object is built per call and
+// the render task is the only caller), so a file-scope pointer is enough.
+JpegContext* g_ioTimingCtx = nullptr;
+
 int32_t jpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
   HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
   if (!f) return 0;
+  const uint32_t t0 = millis();
   int32_t bytesRead = f->read(pBuf, len);
+  if (g_ioTimingCtx) {
+    g_ioTimingCtx->ioMs += millis() - t0;
+    g_ioTimingCtx->ioCalls++;
+  }
   if (bytesRead < 0) return 0;
   pFile->iPos += bytesRead;
   return bytesRead;
@@ -87,7 +118,13 @@ int32_t jpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
 int32_t jpegSeek(JPEGFILE* pFile, int32_t pos) {
   HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
   if (!f) return -1;
-  if (!f->seek(pos)) return -1;
+  const uint32_t t0 = millis();
+  const bool ok = f->seek(pos);
+  if (g_ioTimingCtx) {
+    g_ioTimingCtx->ioMs += millis() - t0;
+    g_ioTimingCtx->ioCalls++;
+  }
+  if (!ok) return -1;
   pFile->iPos = pos;
   return pos;
 }
@@ -124,6 +161,14 @@ constexpr int32_t FP_MASK = FP_ONE - 1;
 int jpegDrawCallback(JPEGDRAW* pDraw) {
   JpegContext* ctx = reinterpret_cast<JpegContext*>(pDraw->pUser);
   if (!ctx || !ctx->config || !ctx->renderer) return 0;
+  const uint32_t drawStartMs = millis();
+  // Charges this block's whole callback, cache flush included, to drawMs; the flush subtracts
+  // itself again below so the two figures do not double-count.
+  struct DrawTimer {
+    JpegContext* c;
+    uint32_t t0;
+    ~DrawTimer() { c->drawMs += millis() - t0; }
+  } drawTimer{ctx, drawStartMs};
 
   ImageToFramebufferDecoder::yieldDuringDecode(ctx->lastYieldMs);
 
@@ -182,7 +227,14 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
   DirectCacheWriter cw;
   int cacheOriginY = 0;
   if (caching) {
-    if (!ctx->cache.advanceTo(dstYStart)) {
+    const uint32_t flushT0 = millis();
+    const bool advanced = ctx->cache.advanceTo(dstYStart);
+    const uint32_t flushElapsed = millis() - flushT0;
+    ctx->flushMs += flushElapsed;
+    // Taken back out of drawMs so the two figures partition the callback rather than overlapping:
+    // the timer at the top charges the whole callback, this part included.
+    ctx->drawMs -= flushElapsed;
+    if (!advanced) {
       caching = false;
       ctx->caching = false;
     } else {
@@ -501,8 +553,13 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   unsigned long decodeStart = millis();
   ctx.lastYieldMs = decodeStart;
+  g_ioTimingCtx = &ctx;
   rc = jpeg->decode(0, 0, jpegScaleOption);
+  g_ioTimingCtx = nullptr;
   unsigned long decodeTime = millis() - decodeStart;
+  // JPEGDEC's own work is what is left after the card and this file's own loops.
+  IMG_DIAG("jpeg split total=%lu io=%u/%u draw=%u flush=%u prog=%d scale=1/%d", decodeTime, ctx.ioMs, ctx.ioCalls,
+           ctx.drawMs, ctx.flushMs, isProgressive ? 1 : 0, jpegScaleDenom);
 
   if (rc != 1) {
     LOG_ERR("JPG", "Decode failed (rc=%d, lastError=%d)", rc, jpeg->getLastError());

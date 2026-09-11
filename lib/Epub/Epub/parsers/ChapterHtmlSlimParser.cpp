@@ -1839,12 +1839,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                         // A partial file would satisfy the size probe next session.
                         Storage.remove(cachedImagePath.c_str());
                       }
-                      IMG_DIAG("pregen extract %s max=%u", extracted ? "ok" : "FAIL", ESP.getMaxAllocHeap());
+                      // Timed apart from the decode below: the two used to share one figure, and
+                      // a 17.7 s "decode" turned out to include inflating a megabyte of JPEG out
+                      // of the zip and writing it to the card (2026-09-11).
+                      IMG_DIAG("pregen extract %s max=%u ms=%lu", extracted ? "ok" : "FAIL", ESP.getMaxAllocHeap(),
+                               millis() - pregenStartMs);
                     }
                   }
 
                   if (haveFile) {
                     bool cached = false;
+                    // Both decode paths time themselves from here, so the figure they report is
+                    // the decode alone and not the extraction above it.
+                    const unsigned long streamStartMs = millis();
                     if (FsHelpers::hasPngExtension(cachedImagePath)) {
                       // Streamed decode: the inflate state comes out of the lent
                       // framebuffer, so this works under any heap layout -- a
@@ -1854,7 +1861,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                       cached = PngStreamDecoder::decodeToCache(
                           cachedImagePath, ImageBlock::cachePathFor(cachedImagePath), displayWidth, displayHeight);
                       IMG_DIAG("pregen stream %s %dx%d max=%u ms=%lu", cached ? "ok" : "FAIL", displayWidth,
-                               displayHeight, ESP.getMaxAllocHeap(), millis() - pregenStartMs);
+                               displayHeight, ESP.getMaxAllocHeap(), millis() - streamStartMs);
                     }
                     if (!cached) {
                       // PNGdec/JPEGDEC fallback (JPEG always; PNG only for the forms
@@ -1876,11 +1883,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                       pregen.useExactDimensions = true;
                       pregen.cacheOnly = true;
                       pregen.cachePath = ImageBlock::cachePathFor(cachedImagePath);
+                      const unsigned long decodeStartMs = millis();
+                      (void)streamStartMs;
                       ImageToFramebufferDecoder* pregenDecoder = ImageDecoderFactory::getDecoder(cachedImagePath);
                       cached =
                           pregenDecoder && pregenDecoder->decodeToFramebuffer(cachedImagePath, self->renderer, pregen);
                       IMG_DIAG("pregen decode %s %dx%d max=%u ms=%lu", cached ? "ok" : "FAIL", displayWidth,
-                               displayHeight, ESP.getMaxAllocHeap(), millis() - pregenStartMs);
+                               displayHeight, ESP.getMaxAllocHeap(), millis() - decodeStartMs);
                     }
                   }
                 }
