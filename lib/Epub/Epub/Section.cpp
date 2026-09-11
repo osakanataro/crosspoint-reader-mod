@@ -68,7 +68,7 @@ namespace {
 // v50: An anchor names the page its content lands on, not the page its block started on, and a
 //      paragraph long enough to be laid out in several passes is indented once instead of at
 //      every pass boundary. Both change what a cached section holds (anchor map, line x/y).
-constexpr uint8_t SECTION_FILE_VERSION = 52;  // 2026-09-11: right edge reserves the first column's ruby
+constexpr uint8_t SECTION_FILE_VERSION = 53;  // 2026-09-11: the ruby reserve nets off the screen margin
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
