@@ -1394,9 +1394,6 @@ void EpubReaderActivity::renderBook() {
 
   ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
   renderSpec.isVertical = bookIsVertical(epub.get());
-  // The user's own white margin, not the bezel inset added above it: vertical ruby may be set
-  // into the former (it is on the panel) but not the latter (it is under the frame).
-  renderSpec.rightMargin = SETTINGS.screenMargin;
   // getReaderFontId() inside readerRenderSpec resolves (and lazily loads) the SD reader font.
   InputDiag::noteOpenStage(2, "font");
 

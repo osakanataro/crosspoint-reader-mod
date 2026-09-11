@@ -273,6 +273,10 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.embeddedStyle = embeddedStyle != 0;
   spec.imageRendering = imageRendering;
   spec.focusReadingEnabled = focusReadingEnabled != 0;
+  // Set here rather than at the call sites: three of them build a spec and only one had set this,
+  // so a chapter built by the lookahead laid out with a different ruby reserve -- and therefore a
+  // different column count -- from one built in the foreground (2026-09-11).
+  spec.rightMargin = screenMargin;
   return spec;
 }
 

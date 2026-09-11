@@ -8,6 +8,7 @@
 #include <Memory.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <new>
 
@@ -74,20 +75,35 @@ struct JpegContext {
 
 // File I/O callbacks use pFile->fHandle to access the HalFile*,
 // avoiding the need for global file state.
+// JPEGDEC asks for its data about a kilobyte at a time, and each of those used to be a trip to
+// the card: 846 calls costing 4,270 ms of a 8,283 ms decode (measured 2026-09-11, 1440x2048).
+// Reads are sequential apart from the odd seek, so one buffer in front of the file turns them
+// into a handful of large reads. 8 KB is the largest that still fits the build-time heap this
+// runs on without competing with the decoder's own ~20 KB.
+struct BufferedJpegFile {
+  HalFile file;
+  static constexpr int32_t BUF_SIZE = 8 * 1024;
+  uint8_t buf[BUF_SIZE];
+  int32_t bufStart{0};  // file offset the buffer begins at
+  int32_t bufLen{0};    // valid bytes in the buffer
+  int32_t pos{0};       // logical file position
+};
+
 void* jpegOpen(const char* filename, int32_t* size) {
-  HalFile* f = new HalFile();
-  if (!Storage.openFileForRead("JPG", std::string(filename), *f)) {
+  auto* f = new (std::nothrow) BufferedJpegFile();
+  if (!f) return nullptr;
+  if (!Storage.openFileForRead("JPG", std::string(filename), f->file)) {
     delete f;
     return nullptr;
   }
-  *size = f->size();
+  *size = f->file.size();
   return f;
 }
 
 void jpegClose(void* handle) {
-  HalFile* f = reinterpret_cast<HalFile*>(handle);
+  auto* f = reinterpret_cast<BufferedJpegFile*>(handle);
   if (f) {
-    f->close();
+    f->file.close();
     delete f;
   }
 }
@@ -102,29 +118,41 @@ void jpegClose(void* handle) {
 JpegContext* g_ioTimingCtx = nullptr;
 
 int32_t jpegRead(JPEGFILE* pFile, uint8_t* pBuf, int32_t len) {
-  HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
-  if (!f) return 0;
-  const uint32_t t0 = millis();
-  int32_t bytesRead = f->read(pBuf, len);
-  if (g_ioTimingCtx) {
-    g_ioTimingCtx->ioMs += millis() - t0;
-    g_ioTimingCtx->ioCalls++;
+  auto* f = reinterpret_cast<BufferedJpegFile*>(pFile->fHandle);
+  if (!f || len <= 0) return 0;
+  int32_t done = 0;
+  while (done < len) {
+    const int32_t inBuf = f->pos - f->bufStart;
+    if (inBuf >= 0 && inBuf < f->bufLen) {
+      int32_t take = f->bufLen - inBuf;
+      if (take > len - done) take = len - done;
+      memcpy(pBuf + done, f->buf + inBuf, static_cast<size_t>(take));
+      done += take;
+      f->pos += take;
+      continue;
+    }
+    // Refill from the card at the current position. Counted and timed: this is the only place
+    // the decode touches storage, so ioCalls is the number of real reads, not of JPEGDEC's asks.
+    const uint32_t t0 = millis();
+    if (!f->file.seek(f->pos)) break;
+    const int got = f->file.read(f->buf, BufferedJpegFile::BUF_SIZE);
+    if (g_ioTimingCtx) {
+      g_ioTimingCtx->ioMs += millis() - t0;
+      g_ioTimingCtx->ioCalls++;
+    }
+    if (got <= 0) break;
+    f->bufStart = f->pos;
+    f->bufLen = got;
   }
-  if (bytesRead < 0) return 0;
-  pFile->iPos += bytesRead;
-  return bytesRead;
+  pFile->iPos += done;
+  return done;
 }
 
 int32_t jpegSeek(JPEGFILE* pFile, int32_t pos) {
-  HalFile* f = reinterpret_cast<HalFile*>(pFile->fHandle);
+  auto* f = reinterpret_cast<BufferedJpegFile*>(pFile->fHandle);
   if (!f) return -1;
-  const uint32_t t0 = millis();
-  const bool ok = f->seek(pos);
-  if (g_ioTimingCtx) {
-    g_ioTimingCtx->ioMs += millis() - t0;
-    g_ioTimingCtx->ioCalls++;
-  }
-  if (!ok) return -1;
+  // No card access: the next read refills from here, and a seek inside the buffer costs nothing.
+  f->pos = pos;
   pFile->iPos = pos;
   return pos;
 }

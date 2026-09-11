@@ -1829,7 +1829,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                         // heap. Nothing draws inside this scope; the next page
                         // render repaints the restored-white buffer in full.
                         GfxRenderer::FrameBufferLoan loan(self->renderer);
-                        extracted = self->epub->readItemContentsToStream(resolvedPath, outFile, 4096);
+                        // 16 KB, not 4: the extraction of a 1440x2048 page image measured 8,563 ms
+                        // -- half the whole pregeneration -- and it is storage-bound, so the chunk
+                        // size is what decides how many trips to the card it takes. The buffers are
+                        // transient and the inflate window comes from the loan above, not the heap.
+                        extracted = self->epub->readItemContentsToStream(resolvedPath, outFile, 16384);
                       }
                       outFile.flush();
                       outFile.close();
