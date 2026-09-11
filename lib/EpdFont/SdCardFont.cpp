@@ -581,7 +581,7 @@ void SdCardFont::computeStyleFileOffsets(PerStyle& s, uint32_t baseOffset) {
 
 // --- Load ---
 
-bool SdCardFont::load(const char* path) {
+bool SdCardFont::load(const char* path, const bool isReaderFont) {
   freeAll();
   if (strlen(path) >= sizeof(filePath_)) {
     LOG_ERR("SDCF", "Path too long (%zu bytes, max %zu)", strlen(path), sizeof(filePath_) - 1);
@@ -809,7 +809,9 @@ bool SdCardFont::load(const char* path) {
             h.intervalCount, h.glyphCount, h.advanceY, h.ascender, h.descender, h.kernLeftEntryCount,
             h.kernRightEntryCount, h.ligaturePairCount);
   }
-  InputDiag::noteFontChoice(path, styleCount_, firstAdvanceY, firstGlyphCount, residentBytes);
+  if (isReaderFont) {
+    InputDiag::noteFontChoice(path, styleCount_, firstAdvanceY, firstGlyphCount, residentBytes);
+  }
   return true;
 }
 

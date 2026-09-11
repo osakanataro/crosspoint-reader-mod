@@ -83,6 +83,8 @@ class ChapterHtmlSlimParser {
   // Space kept clear at the right edge of the page for the rightmost column's ruby, which
   // TextBlock draws beside the column rather than inside it.
   int verticalRubyReserve() const;
+  // One vert_layout report per build, from the first column placed.
+  bool verticalLayoutReported_ = false;
   const CssParser* cssParser;
   bool embeddedStyle;
   uint8_t imageRendering;

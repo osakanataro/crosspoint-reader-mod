@@ -3164,6 +3164,16 @@ void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
   // Column occupies one full-width cell plus the gap that carries the line-spacing setting.
   const int columnWidth = verticalColumnWidth();
   const int columnSpacing = verticalColumnSpacing();
+#ifdef INPUT_DIAG
+  // Reported once per build rather than per column: the values are constant for a chapter, and
+  // the report needs them to reconcile a column count against the font and the margin setting.
+  if (!verticalLayoutReported_) {
+    verticalLayoutReported_ = true;
+    InputDiag::noteVerticalLayout(static_cast<uint16_t>(columnWidth),
+                                  static_cast<uint16_t>(columnWidth + columnSpacing),
+                                  static_cast<uint16_t>(verticalRubyReserve()), viewportWidth, viewportHeight);
+  }
+#endif
 
   if (!currentPage) {
     currentPage.reset(new Page());

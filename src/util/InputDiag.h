@@ -130,6 +130,14 @@ class InputDiag {
   static void noteFontChoice(const char* path, uint8_t styles, uint8_t advanceY, uint32_t glyphs,
                              uint32_t residentBytes);
 
+  // The geometry a vertical page was actually laid out with: the full-width cell, the column
+  // pitch (cell + gap), the ruby reserve at the right edge, the viewport, and how many columns
+  // that works out to. Without these the column count on the device cannot be reconciled with
+  // the font size and the margin/line-spacing settings -- which is exactly what a report of
+  // "the page holds fewer columns now" needs (2026-09-11).
+  static void noteVerticalLayout(uint16_t cell, uint16_t pitch, uint16_t rubyReserve, uint16_t viewportWidth,
+                                 uint16_t viewportHeight);
+
   // A layout pass that refused to lay out a paragraph, line or column. Refusing is not a crash --
   // it abandons the chapter build and the reader shows "Failed to index" -- so the report has to
   // name which of the six checks refused and on how many tokens, or the failure is unattributable.
@@ -227,6 +235,7 @@ class InputDiag {
   static void noteGlyphMiss(uint32_t, uint8_t) {}
   static void noteFontChoice(const char*, uint8_t, uint8_t, uint32_t, uint32_t) {}
   static void notePrewarmBudget(uint32_t, uint32_t, uint32_t) {}
+  static void noteVerticalLayout(uint16_t, uint16_t, uint16_t, uint16_t, uint16_t) {}
   static void noteLayoutGiveUp(uint8_t, uint32_t) {}
   static void noteRefreshWait(unsigned long) {}
   static void noteGrayscalePhases(unsigned long, unsigned long, unsigned long, unsigned long) {}

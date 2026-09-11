@@ -51,7 +51,11 @@ class SdCardFont {
   // Load .cpfont file: reads header + intervals into RAM, records file layout offsets.
   // Supports v4 (multi-style) format.
   // Returns true on success.
-  bool load(const char* path);
+  // isReaderFont marks the body-text size, as opposed to the smaller sizes loaded afterwards as
+  // UI fallbacks. Only the reader's own size is worth reporting: the diagnostic used to name
+  // whichever font loaded last, which was a UI fallback, and a report then said 12 pt while the
+  // page was laid out at 18 (2026-09-11).
+  bool load(const char* path, bool isReaderFont = false);
 
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
