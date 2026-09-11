@@ -215,6 +215,7 @@ uint32_t fontResidentBytes = 0;
 
 // Grayscale plane loops split into compose-in-RAM and push-to-panel.
 bool aaWorstArmed = false;
+uint32_t sdClockHz = 0;
 // Vertical page geometry, sampled once per chapter build (see noteVerticalLayout).
 uint16_t vertCell = 0, vertPitch = 0, vertRubyReserve = 0, vertViewportW = 0, vertViewportH = 0;
 // Layout give-ups: the count, and which check refused last (see noteLayoutGiveUp).
@@ -539,6 +540,8 @@ void InputDiag::notePrewarmBudget(const uint32_t budgetGlyphs, const uint32_t wa
   }
 }
 
+void InputDiag::noteSdClock(const uint32_t hz) { sdClockHz = hz; }
+
 void InputDiag::noteVerticalLayout(const uint16_t cell, const uint16_t pitch, const uint16_t rubyReserve,
                                    const uint16_t viewportWidth, const uint16_t viewportHeight) {
   vertCell = cell;
@@ -726,6 +729,7 @@ void InputDiag::flush(const bool inputActive) {
       "glyph_miss=%u last=%s\n"
       "font=%s styles=%u advY=%u glyphs=%u resident=%u\n"
       "prewarm_budget_min=%u wanted_then=%u free_then=%u clips=%u\n"
+      "sd_clock_hz=%u\n"
       "vert_layout=cell %u pitch %u ruby_reserve %u viewport %ux%u -> %u cols\n"
       "layout_giveup=%u last=kind%u tokens=%u free=%u max=%u\n"
       "aa_refresh_wait=%ums (max %ums)\n"
@@ -749,7 +753,8 @@ void InputDiag::flush(const bool inputActive) {
       miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount,
       prewarmEntryFailsTotal, scanFontOverflowTotal, glyphMissTotal, glyphMissBuf, fontName, fontStyles, fontAdvanceY,
       fontGlyphs, fontResidentBytes, prewarmBudgetMin == UINT32_MAX ? 0 : prewarmBudgetMin, prewarmBudgetMinWanted,
-      prewarmBudgetMinFree, prewarmBudgetClips, vertCell, vertPitch, vertRubyReserve, vertViewportW, vertViewportH,
+      prewarmBudgetMinFree, prewarmBudgetClips, sdClockHz, vertCell, vertPitch, vertRubyReserve, vertViewportW,
+      vertViewportH,
       (vertPitch > 0 && vertViewportW > vertRubyReserve + vertCell)
           ? static_cast<unsigned>((vertViewportW - vertRubyReserve - vertCell) / vertPitch + 1)
           : 0u,

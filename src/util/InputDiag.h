@@ -130,6 +130,11 @@ class InputDiag {
   static void noteFontChoice(const char* path, uint8_t styles, uint8_t advanceY, uint32_t glyphs,
                              uint32_t residentBytes);
 
+  // The SPI clock the SD card was actually opened at. The X3 routes its card through the GPIO
+  // matrix, which is rated lower than the SDK's 40 MHz default, so a throughput figure means
+  // nothing without knowing which rate produced it.
+  static void noteSdClock(uint32_t hz);
+
   // The geometry a vertical page was actually laid out with: the full-width cell, the column
   // pitch (cell + gap), the ruby reserve at the right edge, the viewport, and how many columns
   // that works out to. Without these the column count on the device cannot be reconciled with
@@ -235,6 +240,7 @@ class InputDiag {
   static void noteGlyphMiss(uint32_t, uint8_t) {}
   static void noteFontChoice(const char*, uint8_t, uint8_t, uint32_t, uint32_t) {}
   static void notePrewarmBudget(uint32_t, uint32_t, uint32_t) {}
+  static void noteSdClock(uint32_t) {}
   static void noteVerticalLayout(uint16_t, uint16_t, uint16_t, uint16_t, uint16_t) {}
   static void noteLayoutGiveUp(uint8_t, uint32_t) {}
   static void noteRefreshWait(unsigned long) {}
