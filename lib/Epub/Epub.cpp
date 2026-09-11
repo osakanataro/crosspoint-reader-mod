@@ -721,7 +721,9 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
       return false;
     }
-    readItemContentsToStream(coverImageHref, coverJpg, 1024);
+    // 8 KB, matching extractItemToFile(): a 634 KB cover at 1 KB is 620 round trips through the
+    // storage lock, and this runs on the Home screen where it was measured blocking for 8.4 s.
+    readItemContentsToStream(coverImageHref, coverJpg, 8192);
     // Explicitly close() file before reopening for reading
     coverJpg.close();
 

@@ -397,19 +397,11 @@ void setup() {
   LOG_INF("MAIN", "Device: %s", BoardConfig::ACTIVE.name);
 #endif
 
-  // The X3's card shares the display's SPI bus on GPIO 8/10/7, none of which are the C3's
-  // SPI2 IOMUX pins, so every SD signal routes through the GPIO matrix. ESP-IDF rates that path
-  // at 26.6 MHz for reads; 40 MHz is only valid on the IOMUX pins. The SDK asks for 40 MHz by
-  // default (sd.spiHz == 0), and the card delivers 160-340 KB/s against the ~3 MB/s the bus
-  // should give -- consistent with marginal timing costing retries rather than with the clock
-  // being the limit. Ask for a rate the routing is actually rated for and see which it is.
-  // SD_SPI_HZ_OVERRIDE=0 leaves the SDK default in place for a back-to-back comparison.
-#ifndef SD_SPI_HZ_OVERRIDE
-#define SD_SPI_HZ_OVERRIDE 20000000
-#endif
-  if (SD_SPI_HZ_OVERRIDE != 0 && BoardConfig::ACTIVE.sd.spiHz == 0 && BoardConfig::ACTIVE.sd.sclk < 0) {
-    BoardConfig::ACTIVE.sd.spiHz = SD_SPI_HZ_OVERRIDE;
-  }
+  // The SDK's 40 MHz default stays. The X3 routes its card through the GPIO matrix (GPIO 8/10/7
+  // are not the C3's SPI2 IOMUX pins), which ESP-IDF rates at 26.6 MHz for reads, so asking for
+  // 20 MHz looked like it might remove retries. Measured 2026-09-11 on the same 634 KB cover:
+  // 40 MHz 3,886 ms, 20 MHz 4,342 ms. Halving the clock cost only 10%, so the transfer is about
+  // a tenth of the time and the rest is per-operation overhead -- the clock is not the lever.
   InputDiag::noteSdClock(BoardConfig::ACTIVE.sd.spiHz != 0 ? BoardConfig::ACTIVE.sd.spiHz : 40000000);
 
   // SD Card Initialization
