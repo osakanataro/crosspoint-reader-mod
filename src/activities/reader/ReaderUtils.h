@@ -103,7 +103,7 @@ struct TouchPageTurn {
 
 // The tap zones and swipes carry a left-right sense too, so they follow the
 // page-progression direction along with the front buttons (see detectPageTurn).
-inline TouchPageTurn detectTouchPageTurn(GfxRenderer& renderer, const MappedInputManager& input,
+inline TouchPageTurn detectTouchPageTurn(const GfxRenderer& renderer, const MappedInputManager& input,
                                          const bool rtlPageProgression = false) {
   TouchPageTurn result{false, false, 0};
   if (!SETTINGS.touchReaderControls || !input.hasTouch()) {
@@ -213,7 +213,7 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
 // re-drive the whole text body (a visible flash). Other panels display
 // normally. Same refresh-cadence bookkeeping as displayWithRefreshCycle.
 inline void displayBaseWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
-  if (!renderer.combinesGrayscaleBase()) {
+  if (renderer.grayscaleCapabilities().base != HalDisplay::GrayscaleBase::Combined) {
     displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
     return;
   }
@@ -236,7 +236,8 @@ void renderAntiAliased(GfxRenderer& renderer, RenderFn&& renderFn) {
     LOG_ERR("READER", "Failed to store BW buffer for anti-aliasing");
     // A combined-base panel may still hold a deferred B/W activation; flush it
     // so the page reaches the panel even without its grays.
-    if (renderer.combinesGrayscaleBase()) renderer.cleanupGrayscaleWithFrameBuffer();
+    if (renderer.grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined)
+      renderer.cleanupGrayscaleWithFrameBuffer();
     return;
   }
 
