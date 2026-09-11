@@ -1958,7 +1958,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   // Same re-anchor rule as addColumnToPage: the cursor belongs to a
                   // page index, not to a Page object.
                   if (self->verticalCursorPageIndex != self->completedPageCount) {
-                    self->currentPageNextX = static_cast<int16_t>(self->viewportWidth - columnWidth);
+                    self->currentPageNextX =
+                        static_cast<int16_t>(self->viewportWidth - columnWidth - self->verticalRubyReserve());
                     self->verticalCursorPageIndex = self->completedPageCount;
                   }
 
@@ -1973,7 +1974,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                       return;
                     }
                     self->currentPageVisibleOffsetSet = false;
-                    self->currentPageNextX = static_cast<int16_t>(self->viewportWidth - columnWidth);
+                    self->currentPageNextX =
+                        static_cast<int16_t>(self->viewportWidth - columnWidth - self->verticalRubyReserve());
                     self->verticalCursorPageIndex = self->completedPageCount;
                     rightEdge = self->viewportWidth;
                   }
@@ -3149,6 +3151,15 @@ int ChapterHtmlSlimParser::verticalColumnSpacing() const {
   return std::max(1, pitch - width);
 }
 
+int ChapterHtmlSlimParser::verticalRubyReserve() const {
+  // Ruby in vertical writing is set beside its column, to the right (JLREQ 3.3). The gap between
+  // columns carries it for every column but the first, whose ruby lands outside the text area and
+  // is clipped by the screen edge -- the readings on a page's first column simply went missing
+  // (2026-09-11). TextBlock draws ruby in a half-width cell, so reserving exactly that keeps the
+  // page's own right edge clear without taking a whole column's worth of width.
+  return verticalColumnWidth() / 2;
+}
+
 void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
   // Column occupies one full-width cell plus the gap that carries the line-spacing setting.
   const int columnWidth = verticalColumnWidth();
@@ -3165,7 +3176,7 @@ void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
   // belongs to the current page. Keying on the page index instead is immune to that, and to
   // a fresh Page landing on the address of the one just handed off.
   if (verticalCursorPageIndex != completedPageCount) {
-    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth);
+    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth - verticalRubyReserve());
     verticalCursorPageIndex = completedPageCount;
   }
 
@@ -3181,7 +3192,7 @@ void ChapterHtmlSlimParser::addColumnToPage(std::shared_ptr<TextBlock> column) {
     completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
     completedPageCount++;
     currentPage.reset(new Page());
-    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth);
+    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth - verticalRubyReserve());
     currentPageVisibleOffsetSet = false;
     verticalCursorPageIndex = completedPageCount;
   }

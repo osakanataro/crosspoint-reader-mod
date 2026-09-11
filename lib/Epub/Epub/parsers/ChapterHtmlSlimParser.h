@@ -80,6 +80,9 @@ class ChapterHtmlSlimParser {
   // full-width images) must use these two so the drawn cell and the layout agree.
   int verticalColumnWidth() const;
   int verticalColumnSpacing() const;
+  // Space kept clear at the right edge of the page for the rightmost column's ruby, which
+  // TextBlock draws beside the column rather than inside it.
+  int verticalRubyReserve() const;
   const CssParser* cssParser;
   bool embeddedStyle;
   uint8_t imageRendering;
