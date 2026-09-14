@@ -2273,7 +2273,7 @@ int GfxRenderer::getTextHeight(const int fontId) const {
 }
 
 void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, const char* text, const int cellWidth,
-                                   const bool black, const EpdFontFamily::Style style) const {
+                                   const bool black, const EpdFontFamily::Style style, const bool centreInk) const {
   if (text == nullptr || *text == '\0') {
     return;
   }
@@ -2310,7 +2310,21 @@ void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, c
   if (isSupSub) {
     lineBoxCentre /= 2;
   }
-  const int baselineX = x + cellWidth / 2 - lineBoxCentre;
+  int baselineX = x + cellWidth / 2 - lineBoxCentre;
+
+  // A single turned mark is placed on its own ink instead (see the header). The turn maps
+  // the glyph's rise above the baseline onto screen-right, so the ink runs from
+  // baselineX + top back by its height; putting the middle of that span on the middle of
+  // the cell is what lines the mark up with the upright glyphs around it.
+  if (centreInk) {
+    const auto* probe = reinterpret_cast<const uint8_t*>(text);
+    const uint32_t firstCp = utf8NextCodepoint(&probe);
+    if (const EpdGlyph* g = font.getGlyph(firstCp, style)) {
+      const int top = isSupSub ? g->top / 2 : g->top;
+      const int height = isSupSub ? (g->height + 1) / 2 : g->height;
+      baselineX = x + cellWidth / 2 - top + (height - 1) / 2;
+    }
+  }
 
   int cursorY = y;
   int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap

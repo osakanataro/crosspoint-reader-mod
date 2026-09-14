@@ -367,8 +367,15 @@ class GfxRenderer {
   // Latin runs inside vertical Japanese text: glyphs turn clockwise and the run
   // advances downward from (x, y), which is the top-left of the column cell.
   // `cellWidth` is the full-width character cell; the rotated line box is centred on it.
+  //
+  // `centreInk` centres the glyph's own ink on the cell instead of the font's line box.
+  // For a run of letters the line box is the right thing -- it is what keeps successive
+  // runs on one axis whatever letters they hold. For a single turned punctuation mark it
+  // is not: the box includes the descender depth the mark does not use, so 「 and 」 come
+  // out a few pixels off the axis of the kanji above and below them. Single marks only:
+  // centring each glyph of a run separately would make the run wander.
   void drawTextSideways(int fontId, int x, int y, const char* text, int cellWidth, bool black = true,
-                        EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR, bool centreInk = false) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

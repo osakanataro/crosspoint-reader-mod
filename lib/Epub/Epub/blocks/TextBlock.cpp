@@ -344,10 +344,16 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
   const int lineBox = ascender - renderer.getFontDescenderSize(fontId);
   const int uprightYAdjust = (cellWidth - lineBox) / 2;
 
-  // Extent of word i down the column: an inline image's height, else the glyph advance.
+  // Extent of word i down the column: an inline image's height, a squeezed bracket's half
+  // cell (see 約物の二分アキ below), else the glyph advance.
   const auto wordAdvance = [&](const uint16_t i) {
     const int img = InlineImageToken::advance(wordText(i));
-    return img > 0 ? img : renderer.getTextAdvanceX(fontId, wordText(i), wordStyle(i));
+    if (img > 0) return img;
+    const auto* p = reinterpret_cast<const unsigned char*>(wordText(i));
+    if (VerticalTextUtils::verticalHalfWidthKind(utf8NextCodepoint(&p)) != VerticalTextUtils::HalfWidthKind::None) {
+      return cellWidth / 2;
+    }
+    return renderer.getTextAdvanceX(fontId, wordText(i), wordStyle(i));
   };
 
   // A vertical block is one column, so its own stacking positions give the column's
@@ -448,13 +454,24 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     bool turned = isSidewaysToken(word) || (punct != nullptr && punct->rotate);
     if (flipped) turned = !turned;
 
+    // 約物の二分アキ: layoutVerticalColumns gave this mark half a cell. The ink already sits
+    // in one half of the em -- an opening bracket in the far half, a closing one in the near
+    // half -- so a closing mark needs nothing and an opening mark is drawn from half a cell
+    // back, which lands its ink exactly in the shortened cell.
+    const auto halfKind = VerticalTextUtils::verticalHalfWidthKind(cp);
+    const int halfCell = cellWidth / 2;
+    const int halfShift = halfKind == VerticalTextUtils::HalfWidthKind::Opening ? -halfCell : 0;
+    const int cellExtent = halfKind == VerticalTextUtils::HalfWidthKind::None ? cellWidth : halfCell;
+
     // Before the draw branches below, all of which continue: every token contributes its
     // own extent down the column whichever way it is set. A sideways run reserved its
     // width, which is what the layout stacked; everything else occupies one cell.
     if (!scanning) {
       const EpdFontFamily::Style style = wordStyle(i);
       if (EpdFontFamily::hasTextDecoration(style)) {
-        const int extent = turned ? renderer.getTextAdvanceX(fontId, word, style) : cellWidth;
+        const int extent = turned && halfKind == VerticalTextUtils::HalfWidthKind::None
+                               ? renderer.getTextAdvanceX(fontId, word, style)
+                               : cellExtent;
         for (auto& line : verticalDecorations) {
           if ((style & line.style) == 0) {
             flushVerticalDecoration(line);
@@ -482,14 +499,17 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     // cell top, 」 closing at the bottom, ー running along the column. The advance is
     // unchanged, so the cell still measures one em.
     if (turned) {
-      renderer.drawTextSideways(fontId, cellX, cellY, word, cellWidth, true, wordStyle(i));
+      // centreInk for the punctuation table's marks only: a Latin run keeps the line-box
+      // centring that holds successive runs on one axis (see drawTextSideways).
+      renderer.drawTextSideways(fontId, cellX, cellY + halfShift, word, cellWidth, true, wordStyle(i),
+                                punct != nullptr);
       continue;
     }
 
     // Punctuation drawn from a horizontal-layout font is in the wrong place for a
     // vertical column (see VERTICAL_PUNCTUATION).
     int drawX = cellX;
-    int drawY = cellY + uprightYAdjust;
+    int drawY = cellY + uprightYAdjust + halfShift;
     if (flipped) {
       // Set upright against its text's nature: a Latin letter or a digit given a full
       // cell, or a run combined into one. Centre it on the cell whatever its width, so

@@ -118,6 +118,67 @@ static constexpr PunctuationOffset VERTICAL_PUNCTUATION[] = {
 };
 static constexpr int VERTICAL_PUNCTUATION_COUNT = sizeof(VERTICAL_PUNCTUATION) / sizeof(VERTICAL_PUNCTUATION[0]);
 
+// 約物の二分アキ (JLREQ 3.1.1): an opening bracket carries its blank half before the
+// ink and a closing bracket or a full stop carries it after, so a full em cell for each
+// leaves a visible hole next to the run of characters. Japanese setting removes that
+// half, and the mark takes half a cell.
+//
+// Which half the ink sits in is already true of the horizontal glyph -- 「 has its ink
+// against the right of the em so it hugs what follows, 」 against the left so it hugs
+// what precedes -- and rotating for the column carries that over as bottom and top. So
+// the squeeze is purely a matter of shortening the cell and, for an opening mark, of
+// starting the glyph half a cell earlier so its ink stays where it was.
+enum class HalfWidthKind : uint8_t {
+  None,     // full cell
+  Opening,  // ink in the second half: 「『（〈《【〔
+  Closing,  // ink in the first half: 」』）〉》】〕
+};
+
+inline HalfWidthKind verticalHalfWidthKind(const uint32_t cp) {
+  switch (cp) {
+    case 0x300C:  // 「
+    case 0x300E:  // 『
+    case 0x3010:  // 【
+    case 0x3014:  // 〔
+    case 0x3016:  // 〖
+    case 0x3018:  // 〘
+    case 0x301A:  // 〚
+    case 0x3008:  // 〈
+    case 0x300A:  // 《
+    case 0xFF08:  // （
+    case 0xFF3B:  // ［
+    case 0xFF5B:  // ｛
+      return HalfWidthKind::Opening;
+    case 0x300D:  // 」
+    case 0x300F:  // 』
+    case 0x3011:  // 】
+    case 0x3015:  // 〕
+    case 0x3017:  // 〗
+    case 0x3019:  // 〙
+    case 0x301B:  // 〛
+    case 0x3009:  // 〉
+    case 0x300B:  // 》
+    case 0xFF09:  // ）
+    case 0xFF3D:  // ］
+    case 0xFF5D:  // ｝
+      return HalfWidthKind::Closing;
+    // 、。，． are half-width in JLREQ too, but they reach the column through the
+    // translate-the-glyph path above rather than the rotate one, and those offsets are
+    // measured against a full em. Squeezing their cell without re-deriving the offsets
+    // would drop the mark a few pixels into the character after it. Left full-width:
+    // the hole this rule closes is the one beside a bracket, which is the visible one.
+    default:
+      return HalfWidthKind::None;
+  }
+}
+
+// The list marker for a vertical block. U+2022 is a Latin glyph on a proportional
+// advance (11 px against a 33 px cell in NotoSansJP) whose ink sits against the left
+// of that advance, so upright in a column it lands off the column axis in a cell a
+// third of the height of the ones around it. U+30FB is the full-width mark Japanese
+// uses for the same job and is centred in the em in both writing modes.
+constexpr const char* VERTICAL_LIST_MARKER = "\xe3\x83\xbb";  // ・ U+30FB
+
 // Look up punctuation offset. Returns nullptr if no special handling needed.
 inline const PunctuationOffset* getVerticalPunctuationOffset(uint32_t cp) {
   for (int i = 0; i < VERTICAL_PUNCTUATION_COUNT; i++) {

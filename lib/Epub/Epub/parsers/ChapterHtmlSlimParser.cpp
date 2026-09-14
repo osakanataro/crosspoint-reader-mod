@@ -2292,7 +2292,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
       if (strcmp(name, "li") == 0) {
         if (self->isVertical) {
-          self->currentTextBlock->addVerticalToken("\xe2\x80\xa2", EpdFontFamily::REGULAR,
+          // Not the Latin bullet the horizontal path uses: see VERTICAL_LIST_MARKER.
+          self->currentTextBlock->addVerticalToken(VerticalTextUtils::VERTICAL_LIST_MARKER, EpdFontFamily::REGULAR,
                                                    VerticalTextUtils::VerticalBehavior::Upright);
         } else {
           self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false,

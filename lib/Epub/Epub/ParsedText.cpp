@@ -834,6 +834,15 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     }
     if (vb == VerticalTextUtils::VerticalBehavior::TateChuYoko) {
       baseHeight = static_cast<uint16_t>(cjkCharAdvance);
+    } else if (vb == VerticalTextUtils::VerticalBehavior::Upright &&
+               VerticalTextUtils::verticalHalfWidthKind(firstCodepoint(words[i])) !=
+                   VerticalTextUtils::HalfWidthKind::None) {
+      // 約物の二分アキ: half the em, not the glyph's own advance -- the face gives every
+      // one of these a full-width advance with one half blank. TextBlock::renderVertical
+      // shortens the same cells by the same rule, so the drawn ink stays where the layout
+      // put it. Kept off the spacing below: a squeezed mark takes the Upright spacing that
+      // its neighbours do, so a column's cell count is unchanged by where the marks fall.
+      baseHeight = static_cast<uint16_t>(cjkCharAdvance / 2);
     } else {  // Upright and Sideways both advance by the glyph's own width
       baseHeight = static_cast<uint16_t>(renderer.getTextAdvanceX(fontId, words[i].c_str(), wordStyles[i]));
     }
