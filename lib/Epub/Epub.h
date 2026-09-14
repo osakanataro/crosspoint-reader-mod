@@ -65,6 +65,11 @@ class Epub {
   // True if the spine declares page-progression-direction="rtl" (RTL / vertical book).
   // Used to auto-detect tategaki when the writing-mode setting is AUTO.
   bool isPageProgressionRtl() const;
+  // First JPEG/PNG reference inside a cover document, resolved against that document's own
+  // directory; empty when the document holds none. Serves both the guide's cover XHTML and an
+  // SVG wrapper named as the cover image (56 of the 2,256 surveyed books point cover-image at
+  // an <svg><image xlink:href="...jpg"/></svg> rather than at the picture itself).
+  std::string findCoverImageInDocument(const std::string& docHref) const;
   std::string getCoverBmpPath(bool cropped = false, bool originalThresholds = false) const;
   bool generateCoverBmp(bool cropped = false, bool originalThresholds = false) const;
   std::string getThumbBmpPath() const;

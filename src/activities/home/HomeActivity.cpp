@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <Epub.h>
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalDisplay.h>
@@ -14,6 +15,18 @@
 #include <cstring>
 #include <vector>
 
+#include "../../util/InputDiag.h"
+
+#if INPUT_DIAG
+#define COVER_DIAG(fmt, ...)                                          \
+  do {                                                                \
+    char coverDiagBuf[72];                                            \
+    snprintf(coverDiagBuf, sizeof(coverDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(coverDiagBuf);                          \
+  } while (0)
+#else
+#define COVER_DIAG(fmt, ...)
+#endif
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
@@ -53,16 +66,38 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
   }
 }
 
+namespace {
+// Deflate's window is 32 KB and the reader leaves the largest free block near 20 KB. Measured on
+// the device: an extraction went through at 34.8 KB and failed at 23.5 KB, so this is the window
+// plus enough slack to cover the allocations around it.
+constexpr uint32_t THUMB_MIN_MAX_ALLOC = 34 * 1024;
+}  // namespace
+
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
+  bool releasedFontCachesForCovers = false;
   bool showingLoading = false;
   Rect popupRect;
 
   int progress = 0;
   for (RecentBook& book : recentBooks) {
+    COVER_DIAG("home bmp=%.40s", book.coverBmpPath.empty() ? "(empty)" : book.coverBmpPath.c_str());
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
       if (!Storage.exists(coverPath.c_str())) {
+        // Hand back the SD-card glyph caches before the first thumbnail is built, the reading
+        // font's included. Coming back from the reader the arenas are still resident and the
+        // largest block left is under 20 KB, while pulling a cover out of the zip needs
+        // deflate's 32 KB window -- so the thumbnail fails, the store is marked "no cover",
+        // and the book never gets one again. The list screens release for the same reason
+        // (UiListActivity::onEnter); the home screen is not one of them and had no release
+        // of its own. Once per visit, and only when there is a thumbnail to build.
+        if (!releasedFontCachesForCovers) {
+          releasedFontCachesForCovers = true;
+          if (auto* fcm = renderer.getFontCacheManager()) {
+            fcm->releaseSdFontCaches();
+          }
+        }
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");
@@ -75,6 +110,18 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
           }
           GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+          // Pulling the cover out of the zip needs deflate's 32 KB window in one block. When the
+          // largest one on the heap is smaller the attempt cannot succeed, and a failure here is
+          // permanent: the store is marked coverless and the book is never tried again. Leave it
+          // alone instead and come back on a later visit -- the home screen right after a boot has
+          // 80 KB free in one block, while the one entered straight from the reader has 20.
+          if (ESP.getMaxAllocHeap() < THUMB_MIN_MAX_ALLOC) {
+            COVER_DIAG("thumb deferred, heap too split");
+            coverRendered = false;
+            requestUpdate();
+            progress++;
+            continue;
+          }
           bool success = epub.generateThumbBmp(coverHeight);
           if (!success) {
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
