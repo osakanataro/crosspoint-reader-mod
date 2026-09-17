@@ -67,15 +67,21 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 }
 
 namespace {
-// Deflate's window is 32 KB and the reader leaves the largest free block near 20 KB. Measured on
-// the device: an extraction went through at 34.8 KB and failed at 23.5 KB, so this is the window
-// plus enough slack to cover the allocations around it.
-constexpr uint32_t THUMB_MIN_MAX_ALLOC = 34 * 1024;
+// What the thumbnail still needs from the heap once the loan below covers the big block. Deflate's
+// 32 KB window used to come from here, which made the gate 34 KB -- above the 34,804-byte ceiling
+// the home screen actually reaches after a session of reading, so every thumbnail was deferred
+// forever (2026-09-17; before that the same ceiling sat at 20,468 and nothing got through either).
+// The window now comes out of the lent framebuffer, and ZipFile halves its read/write chunks down
+// to 512 B, so what is left is the decoder's own working set.
+constexpr uint32_t THUMB_MIN_MAX_ALLOC = 12 * 1024;
 }  // namespace
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
   bool showingLoading = false;
+  // Set once a framebuffer loan has clobbered the drawn frame: the panel still shows it, but the
+  // bytes behind it are white, so drawing a popup into them would push a blank screen.
+  bool bufferLent = false;
   Rect popupRect;
 
   int progress = 0;
@@ -91,27 +97,44 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           epub.load(false, true);
 
           // Try to generate thumbnail image for Continue Reading card
-          if (!showingLoading) {
+          if (!showingLoading && !bufferLent) {
             showingLoading = true;
             popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
           }
-          GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-          // Pulling the cover out of the zip needs deflate's 32 KB window in one block. When the
-          // largest one on the heap is smaller the attempt cannot succeed, and a failure here is
-          // permanent: the store is marked coverless and the book is never tried again. Leave it
-          // alone instead and come back on a later visit -- the home screen right after a boot has
-          // 80 KB free in one block, while the one entered straight from the reader has 20.
+          if (!bufferLent) {
+            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+          }
+          // A failure here is permanent -- the store is marked coverless and the book is never
+          // tried again -- so skip the attempt outright when the heap cannot hold the decoder's
+          // working set, and come back on a later visit.
           if (ESP.getMaxAllocHeap() < THUMB_MIN_MAX_ALLOC) {
-            COVER_DIAG("thumb deferred, heap too split");
+            COVER_DIAG("thumb deferred, need=%u", static_cast<unsigned>(THUMB_MIN_MAX_ALLOC));
             coverRendered = false;
             requestUpdate();
             progress++;
             continue;
           }
-          bool success = epub.generateThumbBmp(coverHeight);
-          if (!success) {
+          bool success;
+          {
+            // Pulling the cover out of the zip needs deflate's 32 KB window in one block, which is
+            // the first thing to go missing on a fragmented heap: after a session of reading the
+            // largest block settles near 20 KB and never recovers, however much total free there
+            // is. Take it from the lent framebuffer instead, exactly as the chapter build does for
+            // its images. Safe here because loadRecentCovers() runs after displayBuffer() -- the
+            // panel already holds this frame -- but the bytes are clobbered, so nothing may draw
+            // into them afterwards; the requestUpdate() below repaints the screen in full.
+            GfxRenderer::FrameBufferLoan loan(renderer);
+            success = epub.generateThumbBmp(coverHeight);
+          }
+          bufferLent = true;
+          // Clearing the stored path is permanent: the book is never tried again, not even after
+          // a restart. Only do it when the book genuinely has no cover -- a build that failed on a
+          // starved heap must be left alone so a later visit retries it.
+          if (!success && !epub.hasCoverImage()) {
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
             book.coverBmpPath = "";
+          } else if (!success) {
+            COVER_DIAG("thumb build failed, keeping path");
           }
           coverRendered = false;
           requestUpdate();
@@ -120,12 +143,19 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           Xtc xtc(book.path, "/.crosspoint");
           if (xtc.load()) {
             // Try to generate thumbnail image for Continue Reading card
-            if (!showingLoading) {
+            if (!showingLoading && !bufferLent) {
               showingLoading = true;
               popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
             }
-            GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
-            bool success = xtc.generateThumbBmp(coverHeight);
+            if (!bufferLent) {
+              GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
+            }
+            bool success;
+            {
+              GfxRenderer::FrameBufferLoan loan(renderer);  // same reasoning as the EPUB branch
+              success = xtc.generateThumbBmp(coverHeight);
+            }
+            bufferLent = true;
             if (!success) {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
               book.coverBmpPath = "";

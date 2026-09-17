@@ -742,6 +742,7 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
 
     HalFile coverJpg;
     if (!Storage.openFileForWrite("EBP", coverJpgTempPath, coverJpg)) {
+      CSS_DIAG("thumb open-tmp FAIL jpg");
       return false;
     }
     // 8 KB, matching extractItemToFile(): a 634 KB cover at 1 KB is 620 round trips through the
@@ -811,6 +812,10 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
   return false;
 }
 
+bool Epub::hasCoverImage() const {
+  return bookMetadataCache && bookMetadataCache->isLoaded() && !bookMetadataCache->coreMetadata.coverItemHref.empty();
+}
+
 std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
@@ -850,11 +855,13 @@ bool Epub::generateThumbBmp(int height) const {
     coverJpg.close();
 
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
+      CSS_DIAG("thumb reopen FAIL jpg");
       return false;
     }
 
     HalFile thumbBmp;
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      CSS_DIAG("thumb open-out FAIL jpg");
       return false;
     }
     // Use smaller target size for Continue Reading card (half of screen: 240x400)
@@ -870,6 +877,7 @@ bool Epub::generateThumbBmp(int height) const {
 
     if (!success) {
       LOG_ERR("EBP", "Failed to generate thumb BMP from JPG cover image");
+      CSS_DIAG("thumb decode FAIL jpg %dx%d", THUMB_TARGET_WIDTH, THUMB_TARGET_HEIGHT);
       Storage.remove(getThumbBmpPath(height).c_str());
     }
     LOG_DBG("EBP", "Generated thumb BMP from JPG cover image, success: %s", success ? "yes" : "no");

@@ -72,6 +72,9 @@ class Epub {
   std::string findCoverImageInDocument(const std::string& docHref) const;
   std::string getCoverBmpPath(bool cropped = false, bool originalThresholds = false) const;
   bool generateCoverBmp(bool cropped = false, bool originalThresholds = false) const;
+  // True when the manifest names a cover image. Distinguishes "this book has no cover" from
+  // "the cover could not be built right now", which generateThumbBmp() reports the same way.
+  bool hasCoverImage() const;
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   bool generateThumbBmp(int height) const;
