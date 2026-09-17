@@ -84,7 +84,7 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
 - 開発に際して下記URLをClaude codeに読み込ませている(実装内容まとめで使う略語)
   - 本家 https://github.com/crosspoint-reader/crosspoint-reader
   - JP版 https://github.com/zrn-ns/crosspoint-jp
-  - CJK版 https://github.com/aBER0724/crosspoint-reader-cjk
+  - CJK版 https://github.com/CrossPoint-CJK/crosspoint-reader-cjk (旧URL https://github.com/aBER0724/crosspoint-reader-cjk )
   - Yomuka版 https://github.com/ponto1216-ai/crosspoint-jp
   - 抹茶版 https://github.com/eszter007/matcha-reader
   - freeink-sdk https://github.com/Free-Ink/freeink-sdk
