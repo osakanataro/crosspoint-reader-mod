@@ -455,8 +455,10 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // Check if image file exists
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
-    LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
-    IMG_DIAG("placeholder: no file");
+    // The book still holds the entry; what is missing is the copy the build (or
+    // the lazy path above) was supposed to extract onto the card.
+    LOG_ERR("IMG", "Extracted image missing: %s", imagePath.c_str());
+    IMG_DIAG("placeholder: not extracted");
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
