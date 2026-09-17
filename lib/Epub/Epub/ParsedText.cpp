@@ -193,36 +193,44 @@ bool hasCjkBreakOpportunityBetween(const uint32_t leftCp, const uint32_t rightCp
 }
 
 std::vector<size_t> cjkCharacterBreakByteOffsets(const std::string& text) {
-  struct CodepointBoundary {
-    uint32_t cp;
-    size_t endOffset;
-  };
-
-  std::vector<CodepointBoundary> codepoints;
-  codepoints.reserve(text.size());
-  bool hasCjkBreakable = false;
-
+  // Single pass over the codepoints, keeping only the previous one. The break rule
+  // (hasCjkBreakOpportunityBetween) looks at adjacent pairs, so no per-codepoint table
+  // is needed. The earlier form materialised every codepoint as an 8-byte record first,
+  // which for a Japanese paragraph -- one unspaced "word" -- cost 8x the paragraph's
+  // bytes in one block: 20 KB for a 2.5 KB paragraph, requested mid-build where the
+  // largest free block was 5 KB. With -fno-exceptions the failed reserve was a
+  // terminate() (crash 2026-09-17, horizontal-regression-test ch.14). The result vector
+  // is bounded by one entry per codepoint; pure CJK is 3 bytes each, so reserve a third
+  // and let a mixed run grow.
+  std::vector<size_t> allowedOffsets;
   const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
   const auto* const start = ptr;
+  uint32_t prevCp = utf8NextCodepoint(&ptr);
+  if (prevCp == 0) return {};
+  size_t prevEnd = static_cast<size_t>(ptr - start);
+  bool hasCjkBreakable = utf8IsCjkBreakable(prevCp);
+  bool reserved = false;
   while (*ptr) {
     const uint32_t cp = utf8NextCodepoint(&ptr);
     if (cp == 0) break;
-    if (utf8IsCjkBreakable(cp)) {
-      hasCjkBreakable = true;
+    if (utf8IsCjkBreakable(cp)) hasCjkBreakable = true;
+    if (hasCjkBreakOpportunityBetween(prevCp, cp)) {
+      if (!reserved) {
+        // First opportunity found: size the result once. Skip the whole per-character
+        // split when even that block cannot be placed -- the word then stays one token,
+        // and the line pre-check reports the page instead of the allocator aborting.
+        const size_t want = text.size() / 3 + 1;
+        constexpr size_t RESERVE_HEADROOM = 4 * 1024;
+        if (ESP.getMaxAllocHeap() < want * sizeof(size_t) + RESERVE_HEADROOM) return {};
+        allowedOffsets.reserve(want);
+        reserved = true;
+      }
+      allowedOffsets.push_back(prevEnd);
     }
-    codepoints.push_back({cp, static_cast<size_t>(ptr - start)});
+    prevCp = cp;
+    prevEnd = static_cast<size_t>(ptr - start);
   }
-
-  if (!hasCjkBreakable || codepoints.size() < 2) return {};
-
-  std::vector<size_t> allowedOffsets;
-  allowedOffsets.reserve(codepoints.size() - 1);
-  for (size_t i = 0; i + 1 < codepoints.size(); ++i) {
-    const uint32_t current = codepoints[i].cp;
-    const uint32_t next = codepoints[i + 1].cp;
-    if (!hasCjkBreakOpportunityBetween(current, next)) continue;
-    allowedOffsets.push_back(codepoints[i].endOffset);
-  }
+  if (!hasCjkBreakable) return {};
   return allowedOffsets;
 }
 
