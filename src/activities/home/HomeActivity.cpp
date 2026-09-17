@@ -75,7 +75,6 @@ constexpr uint32_t THUMB_MIN_MAX_ALLOC = 34 * 1024;
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
-  bool releasedFontCachesForCovers = false;
   bool showingLoading = false;
   Rect popupRect;
 
@@ -85,19 +84,6 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     if (!book.coverBmpPath.empty()) {
       std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
       if (!Storage.exists(coverPath.c_str())) {
-        // Hand back the SD-card glyph caches before the first thumbnail is built, the reading
-        // font's included. Coming back from the reader the arenas are still resident and the
-        // largest block left is under 20 KB, while pulling a cover out of the zip needs
-        // deflate's 32 KB window -- so the thumbnail fails, the store is marked "no cover",
-        // and the book never gets one again. The list screens release for the same reason
-        // (UiListActivity::onEnter); the home screen is not one of them and had no release
-        // of its own. Once per visit, and only when there is a thumbnail to build.
-        if (!releasedFontCachesForCovers) {
-          releasedFontCachesForCovers = true;
-          if (auto* fcm = renderer.getFontCacheManager()) {
-            fcm->releaseSdFontCaches();
-          }
-        }
         // If epub, try to load the metadata for title/author and cover
         if (FsHelpers::hasEpubExtension(book.path)) {
           Epub epub(book.path, "/.crosspoint");
@@ -159,6 +145,17 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  // Hand back every SD-card glyph cache on entry, the reading font's included, the same way
+  // the list screens do (UiListActivity::onEnter). The reader retains its page arena by
+  // design so the next page turn is cheap; nothing on this screen draws from it, and with an
+  // 18 pt CJK font that arena is ~35 KB -- measured 2026-09-17: home ran at 20 KB free with a
+  // 7 KB largest block after one page, so the next book opened into 12 KB and aborted mid
+  // build. Thumbnails also need deflate's 32 KB window, which this used to release for only
+  // when one had to be built; now it is unconditional and the cost is one re-warm on the
+  // way back into a book.
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseSdFontCaches();
+  }
 
   hasOpdsServers = OPDS_STORE.hasServers();
 
