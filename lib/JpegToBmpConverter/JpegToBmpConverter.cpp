@@ -1,5 +1,6 @@
 #include "JpegToBmpConverter.h"
 
+#include <BuildScratch.h>
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <JPEGDEC.h>
@@ -11,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "../../src/util/InputDiag.h"
 #include "BitmapHelpers.h"
 
 // ============================================================================
@@ -165,7 +167,13 @@ namespace {
 // Max MCU height supported by any JPEG (4:2:0 chroma = 16 rows, 4:4:4 = 8 rows)
 constexpr int MAX_MCU_HEIGHT = 16;
 constexpr size_t JPEG_DECODER_SIZE = 20 * 1024;
-constexpr size_t MIN_FREE_HEAP = JPEG_DECODER_SIZE + 32 * 1024;
+// Only the decoder object is a fixed cost. Everything after it scales with the source
+// (MCU row buffer = MAX_MCU_HEIGHT * srcWidth) or with the output (row accumulators,
+// ditherers), and every one of those is a checked makeUniqueNoThrow that fails cleanly --
+// so this gate exists to refuse a hopeless heap, not to pre-reserve the worst case. It
+// used to add a flat 32 KB, which refused a 135x226 cover thumbnail at 51,076 bytes free
+// when the whole job wanted about 43 KB (2026-09-17, 1440-wide cover).
+constexpr size_t MIN_FREE_HEAP = JPEG_DECODER_SIZE + 8 * 1024;
 constexpr uint32_t FP_ONE = 1UL << 16;
 
 // Static file pointer for JPEGDEC open callback.
@@ -229,8 +237,12 @@ struct BmpConvertCtx {
   uint32_t smoothScaleY_fp;
 
   // Accumulates one MCU row (up to MAX_MCU_HEIGHT source rows × srcWidth pixels)
-  // Filled column-by-column as JPEGDEC callbacks arrive for the same MCU row
+  // Filled column-by-column as JPEGDEC callbacks arrive for the same MCU row.
+  // `mcu` is what the callbacks read; it points either into mcuBuf (heap) or at the
+  // lent framebuffer bytes, which is where it comes from whenever a loan is open.
   std::unique_ptr<uint8_t[]> mcuBuf;
+  uint8_t* mcu = nullptr;
+  uint8_t* mcuScratch = nullptr;  // non-null while this holds the build-scratch claim
 
   // Y-axis area averaging accumulators (needsScaling only)
   int currentOutY;
@@ -254,6 +266,11 @@ struct BmpConvertCtx {
   uint8_t rowsSinceYield;
   uint8_t blocksSinceYield;
   bool error;
+
+  // The claim has to come back on every exit, including the error returns below.
+  ~BmpConvertCtx() {
+    if (mcuScratch) buildscratch::release(mcuScratch);
+  }
 };
 
 static void yieldDuringDecode(BmpConvertCtx* ctx) {
@@ -457,7 +474,7 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
   for (int r = 0; r < blockH && r < MAX_MCU_HEIGHT; r++) {
     const int copyW = (blockX + validW <= ctx->srcWidth) ? validW : (ctx->srcWidth - blockX);
     if (copyW <= 0) continue;
-    memcpy(ctx->mcuBuf.get() + r * ctx->srcWidth + blockX, pixels + r * stride, copyW);
+    memcpy(ctx->mcu + r * ctx->srcWidth + blockX, pixels + r * stride, copyW);
   }
 
   // Wait for the last MCU column before processing any rows
@@ -467,7 +484,7 @@ int bmpDrawCallback(JPEGDRAW* pDraw) {
   const int endRow = blockY + blockH;
 
   for (int y = blockY; y < endRow && y < ctx->srcHeight; y++) {
-    const uint8_t* srcRow = ctx->mcuBuf.get() + (y - blockY) * ctx->srcWidth;
+    const uint8_t* srcRow = ctx->mcu + (y - blockY) * ctx->srcWidth;
 
     if (ctx->smoothUpscale) {
       processSmoothSourceRow(ctx, srcRow, y);
@@ -518,6 +535,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
 
   if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
+    InputDiag::noteImageEvent("jpg gate: heap below minimum");
     return false;
   }
 
@@ -526,12 +544,14 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   const auto jpeg = makeUniqueNoThrow<JPEGDEC>();
   if (!jpeg) {
     LOG_ERR("JPG", "OOM: JPEG decoder");
+    InputDiag::noteImageEvent("jpg OOM decoder object");
     return false;
   }
 
   int rc = jpeg->open("", bmpJpegOpen, bmpJpegClose, bmpJpegRead, bmpJpegSeek, bmpDrawCallback);
   if (rc != 1) {
     LOG_ERR("JPG", "JPEG open failed (err=%d)", jpeg->getLastError());
+    InputDiag::noteImageEvent("jpg open FAIL");
     return false;
   }
 
@@ -637,12 +657,30 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   ctx.error = false;
 
   // MCU row buffer: MAX_MCU_HEIGHT rows × decoded srcWidth columns of grayscale
-  ctx.mcuBuf = makeUniqueNoThrow<uint8_t[]>(MAX_MCU_HEIGHT * ctx.srcWidth);
-  if (!ctx.mcuBuf) {
+  // Take the MCU row off the lent framebuffer when a loan is open. It is the largest single
+  // block this converter wants (16 rows x source width: 23,040 bytes for a 1440-wide cover),
+  // and the decoder object allocated just above it has already carved up whatever hole the
+  // heap had -- measured 2026-09-17: a 26,612-byte largest block at entry was down to 10,228
+  // by the time the MCU row was asked for, and the thumbnail failed on a book whose cover had
+  // extracted cleanly. The scratch is free again by now: the extraction released it.
+  const size_t mcuBytes = static_cast<size_t>(MAX_MCU_HEIGHT) * ctx.srcWidth;
+  ctx.mcuScratch = buildscratch::claim(mcuBytes);
+  if (ctx.mcuScratch) {
+    ctx.mcu = ctx.mcuScratch;
+  } else {
+    ctx.mcuBuf = makeUniqueNoThrow<uint8_t[]>(mcuBytes);
+    ctx.mcu = ctx.mcuBuf.get();
+  }
+  if (!ctx.mcu) {
     LOG_ERR("JPG", "OOM: MCU buffer (%d bytes)", MAX_MCU_HEIGHT * ctx.srcWidth);
+    {
+      char buf[48];
+      snprintf(buf, sizeof(buf), "jpg OOM mcu %d", MAX_MCU_HEIGHT * ctx.srcWidth);
+      InputDiag::noteImageEvent(buf);
+    }
     return false;
   }
-  memset(ctx.mcuBuf.get(), 0, MAX_MCU_HEIGHT * ctx.srcWidth);
+  memset(ctx.mcu, 0, mcuBytes);
 
   ctx.bmpRow = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
   if (!ctx.bmpRow) {
