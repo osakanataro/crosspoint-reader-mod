@@ -16,9 +16,9 @@
 #include <new>
 
 #include "../../../../src/fontIds.h"
+#include "../../../../src/util/InputDiag.h"
 #include "../InlineImageToken.h"
 #if INPUT_DIAG
-#include "../../../../src/util/InputDiag.h"
 // Tail of the src attribute, so /image-diag.txt lines identify the image without
 // blowing the 96-byte event budget on directory prefixes.
 #define IMG_DIAG(fmt, ...)                                        \
