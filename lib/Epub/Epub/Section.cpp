@@ -290,6 +290,12 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
 }
 
 bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
+  // A build measures and never draws, so every uncached codepoint's width comes from the glyph
+  // record on the card rather than a bitmap load into the overflow ring (see readAdvanceOnly).
+  // Scoped over the whole build, not just ParsedText's layout: the parser measures too (list
+  // markers, table cells, inline-image decisions), and those calls were still loading bitmaps --
+  // measured 2026-09-18: 58 of a chapter's loads came from outside the layout functions.
+  const GfxRenderer::MeasureOnlyScope measureOnly(renderer);
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
     return false;
@@ -528,6 +534,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 }
 
 bool Section::buildSomeMore(const int maxPages, const unsigned long budgetMs) {
+  const GfxRenderer::MeasureOnlyScope measureOnly(renderer);  // see startBuild()
   if (!build_ || !build_->parser) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;

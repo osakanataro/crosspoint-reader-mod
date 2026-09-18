@@ -2158,6 +2158,14 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
         continue;
       }
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
+      if (advFP == 0 && measureOnly_ && !utf8IsCombiningMark(cp)) {
+        // Layout only: not in the advance table (full, or not yet fetched), and nothing is
+        // about to draw this glyph, so read the advance alone rather than loading a bitmap
+        // into the overflow ring to answer a question about width. A render measures the
+        // same cells (TextBlock::renderVertical) but draws them next, so there the load is
+        // the single SD trip and this path is skipped. See SdCardFont::readAdvanceOnly.
+        advFP = sdIt->second->readAdvanceOnly(cp, styleIdx);
+      }
       if (advFP == 0 && !utf8IsCombiningMark(cp)) {
         const EpdGlyph* glyph = font.getGlyph(cp, style);
         advFP = glyph ? glyph->advanceX : 0;

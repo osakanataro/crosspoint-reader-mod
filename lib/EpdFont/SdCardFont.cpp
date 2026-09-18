@@ -1506,6 +1506,45 @@ bool SdCardFont::hasAdvanceTable() const {
   return false;
 }
 
+// A section build measures text and never draws it, yet once the advance table was full
+// (ADVANCE_CACHE_LIMIT) every uncached codepoint went through the glyph-miss path and pulled
+// its bitmap into the overflow ring just to read advanceX: 48 slots of 18 pt bitmaps is ~17 KB
+// pinned on a heap that was already down to a 2 KB largest block (2026-09-18: build_font table
+// 768/768 full_skips 54, glyph_ondemand 96, then abort in the token push). The glyph record is
+// twelve bytes and sits before the bitmaps in the file, so read that and nothing else.
+uint16_t SdCardFont::readAdvanceOnly(const uint32_t codepoint, uint8_t styleIdx) const {
+  styleIdx &= (MAX_STYLES - 1);
+  if (!loaded_ || !styles_[styleIdx].present) return 0;
+  const auto& s = styles_[styleIdx];
+
+  // Resident arena first: the same interval lookup EpdFont::getGlyph does before it asks for a
+  // load, so a render-time measurement of a prewarmed glyph costs no SD access.
+  if (s.miniData.intervals && s.miniData.intervalCount > 0 && s.miniData.glyph) {
+    const auto* begin = s.miniData.intervals;
+    const auto* end = begin + s.miniData.intervalCount;
+    const auto it = std::upper_bound(
+        begin, end, codepoint, [](const uint32_t value, const EpdUnicodeInterval& iv) { return value < iv.first; });
+    if (it != begin) {
+      const auto& iv = *(it - 1);
+      if (codepoint <= iv.last) return s.miniData.glyph[iv.offset + (codepoint - iv.first)].advanceX;
+    }
+  }
+  for (uint32_t i = 0; i < overflowCount_; i++) {
+    if (overflow_[i].codepoint == codepoint && overflow_[i].styleIdx == styleIdx) return overflow_[i].glyph.advanceX;
+  }
+
+  const int32_t globalIdx = findGlobalGlyphIndex(s, codepoint);
+  if (globalIdx < 0) return 0;
+  HalFile file;
+  if (!Storage.openFileForRead("SDCF", filePath_, file)) return 0;
+  EpdGlyph glyph = {};
+  const uint32_t off = s.glyphsFileOffset + static_cast<uint32_t>(globalIdx) * sizeof(EpdGlyph);
+  if (!file.seekSet(off) || file.read(reinterpret_cast<uint8_t*>(&glyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
+    return 0;
+  }
+  return glyph.advanceX;
+}
+
 uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
   style &= (MAX_STYLES - 1);
   if (!advanceTable_[style]) return 0;

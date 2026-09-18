@@ -76,6 +76,8 @@ class ParsedText {
   // failure, so the chapter is rebuilt on the next open instead of the reader aborting
   // mid-paragraph (observed 2026-09-10 in layoutVerticalColumns at ~1 KB free).
   bool layoutFailed_ = false;
+  // Refuses a token push when the heap cannot take another container growth; sets layoutFailed_.
+  bool hasHeapForToken();
   bool hasRtlWord;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;

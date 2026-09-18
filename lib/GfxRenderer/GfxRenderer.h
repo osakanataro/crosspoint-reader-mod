@@ -85,6 +85,11 @@ class GfxRenderer {
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+  // True while a layout pass is measuring text it will not draw (ParsedText's two layout
+  // functions). getTextAdvanceX then answers an uncached codepoint from the glyph record on the
+  // card instead of loading its bitmap; at render time the bitmap is wanted next anyway, so the
+  // load stays the cheaper path there. Set through MeasureOnlyScope.
+  mutable bool measureOnly_ = false;
   // Extra spacing between cells in vertical (tategaki) layout, as a percent of the
   // cell advance. Set from the reader spec before a vertical section is laid out.
   int _verticalCharSpacing = 0;
@@ -438,6 +443,18 @@ class GfxRenderer {
   // error paths: restores on scope exit (or explicitly via end()). Display the
   // popup/screen the panel should hold BEFORE constructing one. Constructing
   // while the framebuffer is already lent yields an inert loan (nesting-safe).
+  class MeasureOnlyScope {
+   public:
+    explicit MeasureOnlyScope(const GfxRenderer& r) : r_(r), prev_(r.measureOnly_) { r_.measureOnly_ = true; }
+    ~MeasureOnlyScope() { r_.measureOnly_ = prev_; }
+    MeasureOnlyScope(const MeasureOnlyScope&) = delete;
+    MeasureOnlyScope& operator=(const MeasureOnlyScope&) = delete;
+
+   private:
+    const GfxRenderer& r_;
+    bool prev_;
+  };
+
   class FrameBufferLoan {
    public:
     explicit FrameBufferLoan(GfxRenderer& renderer);

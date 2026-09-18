@@ -604,6 +604,7 @@ void ParsedText::ensureTokenCapacity(const size_t additionalTokens) {
 void ParsedText::addVerticalToken(std::string token, const EpdFontFamily::Style fontStyle,
                                   const VerticalTextUtils::VerticalBehavior vb) {
   if (token.empty()) return;
+  if (!hasHeapForToken()) return;
   token = utf8ComposeNfc(token);
   words.push_back(std::move(token));
   wordStyles.push_back(fontStyle);
@@ -625,6 +626,7 @@ void ParsedText::addVerticalToken(std::string token, const EpdFontFamily::Style 
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
                          const bool attachToPrevious, const uint32_t visibleTextOffset, const uint8_t linkId) {
   if (word.empty()) return;
+  if (!hasHeapForToken()) return;
 
   // The device fonts carry no combining-mark positioning, so EPUB text stored in NFD
   // (a base letter followed by separate combining accents -- common for Vietnamese,
@@ -923,6 +925,7 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
 void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fontId, const uint16_t columnHeight,
                                        const std::function<void(std::shared_ptr<TextBlock>)>& processColumn,
                                        int* cjkCellWidthMemo, const bool includeLastColumn) {
+  const GfxRenderer::MeasureOnlyScope measureOnly(renderer);
   if (words.empty()) return;
 
   if (!hasHeapForLayout(words.size(), LAYOUT_BYTES_PER_WORD_VERTICAL)) {
@@ -1153,6 +1156,26 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
   }
 }
 
+// Gate on every token push, not only on the layout pass. The seven parallel containers grow
+// by doubling (the vectors) or by one 512-byte node (the deques), and under -fno-exceptions a
+// growth that cannot be satisfied is a terminate(), not an error: a 15-minute session died in
+// addVerticalToken's deque push with the advance table already unable to grow (2026-09-18,
+// release 2026091801, KADOKAWA volume). The floor covers one doubling of the widest vector at
+// the soft-flush limit plus a deque node; below it the block is marked failed and the token
+// dropped, and the parser then fails the chapter build the same way a layout give-up does.
+constexpr uint32_t TOKEN_PUSH_MIN_FREE_HEAP = 4 * 1024;
+constexpr uint32_t TOKEN_PUSH_MIN_MAX_ALLOC = 2 * 1024;
+
+bool ParsedText::hasHeapForToken() {
+  if (layoutFailed_) return false;
+  if (ESP.getFreeHeap() >= TOKEN_PUSH_MIN_FREE_HEAP && ESP.getMaxAllocHeap() >= TOKEN_PUSH_MIN_MAX_ALLOC) return true;
+  LOG_ERR("PTX", "Token push gave up at %u tokens: %u free, %u largest", static_cast<unsigned>(words.size()),
+          static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+  InputDiag::noteLayoutGiveUp(7, words.size());
+  layoutFailed_ = true;
+  return false;
+}
+
 bool ParsedText::hasHeapForLayout(const size_t wordCount, const size_t bytesPerWord) {
   const size_t needed = wordCount * bytesPerWord + LAYOUT_HEAP_FLOOR;
   return ESP.getFreeHeap() >= needed;
@@ -1161,6 +1184,7 @@ bool ParsedText::hasHeapForLayout(const size_t wordCount, const size_t bytesPerW
 void ParsedText::layoutAndExtractLines(const GfxRenderer& renderer, const int fontId, const uint16_t viewportWidth,
                                        const std::function<void(std::shared_ptr<TextBlock>, uint32_t)>& processLine,
                                        const bool includeLastLine) {
+  const GfxRenderer::MeasureOnlyScope measureOnly(renderer);
   if (words.empty()) {
     return;
   }

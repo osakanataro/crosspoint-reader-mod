@@ -93,6 +93,10 @@ class SdCardFont {
   // Look up advanceX for a codepoint from the advance table.
   // Returns the 12.4 fixed-point advance, or 0 if not found.
   uint16_t getAdvance(uint32_t codepoint, uint8_t style) const;
+  // Advance of one codepoint the table does not hold, without loading its bitmap: the resident
+  // arena, then the overflow ring, then the 12-byte glyph record straight from the card. 0 when
+  // the font has no such glyph (or the read failed), so callers can fall back to a full load.
+  uint16_t readAdvanceOnly(uint32_t codepoint, uint8_t styleIdx) const;
 
   // Returns true if advance table is populated for at least one style.
   bool hasAdvanceTable() const;
