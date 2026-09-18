@@ -131,6 +131,116 @@ bool isNoBreakBeforeCjkPunctuation(const uint32_t cp) {
     case 0xFF1F:  // ？
     case 0xFF3D:  // ］
     case 0xFF5D:  // ｝
+    // The classes below are JLREQ 3.1.7 line-start prohibitions (JIS X 4051) that the
+    // original Korean-driven set did not carry. Without them a Japanese paragraph wraps
+    // with ー, ・ or 々 at the head of a line, which no printed book does.
+    case 0x30FB:  // ・ (cl-05 middle dots)
+    case 0xFF65:  // ･
+    case 0x2010:  // ‐ (cl-03 hyphens)
+    case 0x2013:  // –
+    case 0x301C:  // 〜
+    case 0x30A0:  // ゠
+    case 0xFF5E:  // ～
+    case 0x2014:  // — (cl-08 inseparable; also kept together in pairs below)
+    case 0x2015:  // ―
+    case 0x2025:  // ‥
+    case 0x2026:  // …
+    case 0x3005:  // 々 (cl-09 iteration marks)
+    case 0x303B:  // 〻
+    case 0x309D:  // ゝ
+    case 0x309E:  // ゞ
+    case 0x30FD:  // ヽ
+    case 0x30FE:  // ヾ
+    case 0x30FC:  // ー (cl-10 prolonged sound mark)
+    case 0xFF70:  // ｰ
+    case 0xFF9E:  // ﾞ (halfwidth voiced marks attach to the preceding kana)
+    case 0xFF9F:  // ﾟ
+    case 0x00B0:  // ° (cl-13 postfixed abbreviations)
+    case 0x2030:  // ‰
+    case 0x2032:  // ′
+    case 0x2033:  // ″
+    case 0x2103:  // ℃
+    case 0xFF05:  // ％
+    case 0x301F:  // 〟 (cl-02 closing quotation, missing from the set above)
+    case 0xFF60:  // ｠
+    case 0xFF61:  // ｡ (halfwidth full stop / comma)
+    case 0xFF64:  // ､
+    // cl-11 small kana: JLREQ 3.1.7 lists them in the rule itself; the Note records that some
+    // books relax this together with 々 and ー, but the principle keeps them off the line head.
+    case 0x3041:  // ぁ
+    case 0x3043:  // ぃ
+    case 0x3045:  // ぅ
+    case 0x3047:  // ぇ
+    case 0x3049:  // ぉ
+    case 0x3063:  // っ
+    case 0x3083:  // ゃ
+    case 0x3085:  // ゅ
+    case 0x3087:  // ょ
+    case 0x308E:  // ゎ
+    case 0x3095:  // ゕ
+    case 0x3096:  // ゖ
+    case 0x30A1:  // ァ
+    case 0x30A3:  // ィ
+    case 0x30A5:  // ゥ
+    case 0x30A7:  // ェ
+    case 0x30A9:  // ォ
+    case 0x30C3:  // ッ
+    case 0x30E3:  // ャ
+    case 0x30E5:  // ュ
+    case 0x30E7:  // ョ
+    case 0x30EE:  // ヮ
+    case 0x30F5:  // ヵ
+    case 0x30F6:  // ヶ
+    case 0x31F0:  // ㇰ .. ㇿ (Ainu small katakana)
+    case 0x31F1:
+    case 0x31F2:
+    case 0x31F3:
+    case 0x31F4:
+    case 0x31F5:
+    case 0x31F6:
+    case 0x31F7:
+    case 0x31F8:
+    case 0x31F9:
+    case 0x31FA:
+    case 0x31FB:
+    case 0x31FC:
+    case 0x31FD:
+    case 0x31FE:
+    case 0x31FF:
+    // cl-04 dividing punctuation beyond ! and ?
+    case 0x203C:  // ‼
+    case 0x2047:  // ⁇
+    case 0x2048:  // ⁈
+    case 0x2049:  // ⁉
+    // cl-13 postfixed abbreviations, the rest of Appendix A.13
+    case 0x0025:  // %
+    case 0x00A2:  // ¢
+    case 0xFFE0:  // ￠
+    case 0x2113:  // ℓ
+    case 0x33CB:  // ㏋
+    case 0x3303:  // ㌃ .. ㍄ squared unit symbols
+    case 0x330D:
+    case 0x3314:
+    case 0x3318:
+    case 0x3322:
+    case 0x3323:
+    case 0x3326:
+    case 0x3327:
+    case 0x332B:
+    case 0x3336:
+    case 0x333B:
+    case 0x3349:
+    case 0x334A:
+    case 0x334D:
+    case 0x3351:
+    case 0x3357:
+    case 0x338E:
+    case 0x338F:
+    case 0x339C:
+    case 0x339D:
+    case 0x339E:
+    case 0x33A1:
+    case 0x33C4:
       return true;
     default:
       return false;
@@ -157,6 +267,37 @@ bool isNoBreakAfterCjkPunctuation(const uint32_t cp) {
     case 0xFF08:  // （
     case 0xFF3B:  // ［
     case 0xFF5B:  // ｛
+    case 0x301D:  // 〝 (cl-01 opening quotation, missing from the set above)
+    case 0xFF5F:  // ｟
+    case 0x0024:  // $ (cl-12 prefixed abbreviations, JLREQ 3.1.8 / Appendix A.12: they belong to the number that
+                  // follows)
+    case 0x00A3:  // £
+    case 0x00A5:  // ¥
+    case 0x20AC:  // €
+    case 0x2116:  // №
+    case 0x0023:  // #
+    case 0xFF03:  // ＃
+    case 0xFF04:  // ＄
+    case 0xFFE1:  // ￡
+    case 0xFFE5:  // ￥
+      return true;
+    default:
+      return false;
+  }
+}
+
+// cl-08 inseparable characters: a run of the same leader or dash (…… ――) is one mark and
+// must not be split. Only same-character pairs qualify; a leader followed by text may break.
+bool isCjkInseparablePair(const uint32_t leftCp, const uint32_t rightCp) {
+  if (leftCp != rightCp) return false;
+  switch (leftCp) {
+    case 0x2014:  // —
+    case 0x2015:  // ―
+    case 0x2025:  // ‥
+    case 0x2026:  // …
+    case 0x3033:  // 〳
+    case 0x3034:  // 〴
+    case 0x3035:  // 〵
       return true;
     default:
       return false;
@@ -188,6 +329,7 @@ uint32_t countCodepoints(const std::string_view text) {
 bool hasCjkBreakOpportunityBetween(const uint32_t leftCp, const uint32_t rightCp) {
   if (!utf8IsCjkBreakable(leftCp) && !utf8IsCjkBreakable(rightCp)) return false;
   if (isNoBreakAfterCjkPunctuation(leftCp) || isNoBreakBeforeCjkPunctuation(rightCp)) return false;
+  if (isCjkInseparablePair(leftCp, rightCp)) return false;
   if (utf8IsCombiningMark(rightCp)) return false;
   return true;
 }
@@ -917,8 +1059,12 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
                (words[breakAt] == " " || VerticalTextUtils::isKinsokuHead(firstCodepoint(words[breakAt])))) {
           breakAt--;
         }
-        // Kinsoku-tail pullback: opening brackets cannot end a column.
-        if (breakAt > columnStart + 1 && VerticalTextUtils::isKinsokuTail(firstCodepoint(words[breakAt - 1]))) {
+        // Kinsoku-tail pullback: opening brackets cannot end a column. Bounded loop rather
+        // than a single step: nested quotes (『「, 「『) are common in fiction, and one step
+        // left the outer bracket at the foot of the column.
+        for (int pulled = 0; pulled < 4 && breakAt > columnStart + 1 &&
+                             VerticalTextUtils::isKinsokuTail(firstCodepoint(words[breakAt - 1]));
+             ++pulled) {
           breakAt--;
         }
         columnEnds.push_back(breakAt);

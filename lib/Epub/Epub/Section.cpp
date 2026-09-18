@@ -68,7 +68,7 @@ namespace {
 // v50: An anchor names the page its content lands on, not the page its block started on, and a
 //      paragraph long enough to be laid out in several passes is indented once instead of at
 //      every pass boundary. Both change what a cached section holds (anchor map, line x/y).
-constexpr uint8_t SECTION_FILE_VERSION = 54;  // 2026-09-14: 約物の二分アキ shortens the bracket cells
+constexpr uint8_t SECTION_FILE_VERSION = 55;  // 2026-09-18: JLREQ line-start/end classes glue more CJK pairs
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
