@@ -15,7 +15,8 @@ namespace {
 // v11 (this tree): BookMetadata gains pageProgressionRtl (spine page-progression-direction), for
 //      tategaki auto-detect. Upstream 1.6.5 is still v10.
 // v12: coverItemHref follows an SVG wrapper to the picture inside it
-constexpr uint8_t BOOK_CACHE_VERSION = 12;
+// v13: title and author file-as sort forms (Library reading order)
+constexpr uint8_t BOOK_CACHE_VERSION = 13;
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
@@ -197,9 +198,10 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
 
   constexpr uint32_t headerASize =
       sizeof(BOOK_CACHE_VERSION) + /* LUT Offset */ sizeof(uint32_t) + sizeof(spineCount) + sizeof(tocCount);
-  const uint32_t metadataSize = metadata.title.size() + metadata.author.size() + metadata.language.size() +
+  const uint32_t metadataSize = metadata.title.size() + metadata.author.size() + metadata.titleFileAs.size() +
+                                metadata.authorFileAs.size() + metadata.language.size() +
                                 metadata.coverItemHref.size() + metadata.textReferenceHref.size() +
-                                sizeof(uint32_t) * 5 + sizeof(metadata.pageProgressionRtl);
+                                sizeof(uint32_t) * 7 + sizeof(metadata.pageProgressionRtl);
   const uint32_t lutSize = sizeof(uint32_t) * spineCount + sizeof(uint32_t) * tocCount;
   const uint32_t lutOffset = headerASize + metadataSize;
 
@@ -211,6 +213,8 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // Metadata
   serialization::writeString(bookOut, metadata.title);
   serialization::writeString(bookOut, metadata.author);
+  serialization::writeString(bookOut, metadata.titleFileAs);
+  serialization::writeString(bookOut, metadata.authorFileAs);
   serialization::writeString(bookOut, metadata.language);
   serialization::writeString(bookOut, metadata.coverItemHref);
   serialization::writeString(bookOut, metadata.textReferenceHref);
@@ -482,6 +486,8 @@ bool BookMetadataCache::load() {
 
   serialization::readString(bookFile, coreMetadata.title);
   serialization::readString(bookFile, coreMetadata.author);
+  serialization::readString(bookFile, coreMetadata.titleFileAs);
+  serialization::readString(bookFile, coreMetadata.authorFileAs);
   serialization::readString(bookFile, coreMetadata.language);
   serialization::readString(bookFile, coreMetadata.coverItemHref);
   serialization::readString(bookFile, coreMetadata.textReferenceHref);
