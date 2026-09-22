@@ -289,6 +289,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t readerMenuStyle = READER_MENU_LIST;
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
+  // Keep a copy of the selected SD reader font in the inactive OTA slot and read it from
+  // there (0 = off). See SdCardFontCache. Independent of the family: it stays set across a
+  // switch to a built-in family and applies again when an SD family is selected.
+  uint8_t sdFontFlashCache = 0;
   // Dictionary folder name under /dictionaries (empty = no dictionary)
   char dictionaryName[32] = "";
   // Show hidden files/directories (starting with '.') in the file browser (0 = hidden, 1 = show)

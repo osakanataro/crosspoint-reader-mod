@@ -212,10 +212,18 @@ uint8_t fontStyles = 0;
 uint8_t fontAdvanceY = 0;
 uint32_t fontGlyphs = 0;
 uint32_t fontResidentBytes = 0;
+bool fontFromFlash = false;
+uint32_t fontFlashBytes = 0;
+uint8_t fontScaleNum = 1;
+uint8_t fontScaleDen = 1;
 
 // Grayscale plane loops split into compose-in-RAM and push-to-panel.
 bool aaWorstArmed = false;
 uint32_t sdClockHz = 0;
+
+constexpr uint8_t FONT_COPY_EVENTS = 3;
+char fontCopyEvents[FONT_COPY_EVENTS][112] = {};
+uint32_t fontCopyTotal = 0;
 // Vertical page geometry, sampled once per chapter build (see noteVerticalLayout).
 uint16_t vertCell = 0, vertPitch = 0, vertRubyReserve = 0, vertViewportW = 0, vertViewportH = 0;
 // Layout give-ups: the count, and which check refused last (see noteLayoutGiveUp).
@@ -516,7 +524,8 @@ void InputDiag::noteGlyphMiss(const uint32_t codepoint, const uint8_t style) {
 }
 
 void InputDiag::noteFontChoice(const char* path, const uint8_t styles, const uint8_t advanceY, const uint32_t glyphs,
-                               const uint32_t residentBytes) {
+                               const uint32_t residentBytes, const bool flash, const uint32_t flashBytes,
+                               const uint8_t scaleNum, const uint8_t scaleDen) {
   const char* name = path;
   for (const char* p = path; *p; p++) {
     if (*p == '/' || *p == '\\') name = p + 1;
@@ -527,6 +536,10 @@ void InputDiag::noteFontChoice(const char* path, const uint8_t styles, const uin
   fontAdvanceY = advanceY;
   fontGlyphs = glyphs;
   fontResidentBytes = residentBytes;
+  fontFromFlash = flash;
+  fontFlashBytes = flashBytes;
+  fontScaleNum = scaleNum;
+  fontScaleDen = scaleDen;
 }
 
 void InputDiag::notePrewarmBudget(const uint32_t budgetGlyphs, const uint32_t wantedGlyphs, const uint32_t freeHeap) {
@@ -541,6 +554,12 @@ void InputDiag::notePrewarmBudget(const uint32_t budgetGlyphs, const uint32_t wa
 }
 
 void InputDiag::noteSdClock(const uint32_t hz) { sdClockHz = hz; }
+
+void InputDiag::noteFontCopy(const char* line) {
+  char* slot = fontCopyEvents[fontCopyTotal % FONT_COPY_EVENTS];
+  snprintf(slot, sizeof(fontCopyEvents[0]), "@%lu %s", millis(), line);
+  fontCopyTotal++;
+}
 
 void InputDiag::noteVerticalLayout(const uint16_t cell, const uint16_t pitch, const uint16_t rubyReserve,
                                    const uint16_t viewportWidth, const uint16_t viewportHeight) {
@@ -727,9 +746,10 @@ void InputDiag::flush(const bool inputActive) {
       "glyph_rebuild_last=%u max=%u (%s) total_ms=%u\n"
       "page_scan_last=%ub/%uf zero=%u prewarm_entry_fails=%u font_slots_lost=%u\n"
       "glyph_miss=%u last=%s\n"
-      "font=%s styles=%u advY=%u glyphs=%u resident=%u\n"
+      "font=%s styles=%u advY=%u glyphs=%u resident=%u src=%s flash_kb=%u scale=%u/%u\n"
       "prewarm_budget_min=%u wanted_then=%u free_then=%u clips=%u\n"
       "sd_clock_hz=%u\n"
+      "font_copy=%s | %s | %s\n"
       "vert_layout=cell %u pitch %u ruby_reserve %u viewport %ux%u -> %u cols\n"
       "layout_giveup=%u last=kind%u tokens=%u free=%u max=%u\n"
       "aa_refresh_wait=%ums (max %ums)\n"
@@ -752,9 +772,13 @@ void InputDiag::flush(const bool inputActive) {
       uiPrewarmFailMinAlloc, onDemandGlyphsLast, onDemandGlyphsMax, onDemandGlyphsMaxName, miniRebuildsLast,
       miniRebuildsMax, miniRebuildsMaxName, miniRebuildMsTotal, scanLastBytes, scanLastFonts, scanZeroCount,
       prewarmEntryFailsTotal, scanFontOverflowTotal, glyphMissTotal, glyphMissBuf, fontName, fontStyles, fontAdvanceY,
-      fontGlyphs, fontResidentBytes, prewarmBudgetMin == UINT32_MAX ? 0 : prewarmBudgetMin, prewarmBudgetMinWanted,
-      prewarmBudgetMinFree, prewarmBudgetClips, sdClockHz, vertCell, vertPitch, vertRubyReserve, vertViewportW,
-      vertViewportH,
+      fontGlyphs, fontResidentBytes, fontFromFlash ? "flash" : "sd", fontFlashBytes / 1024, fontScaleNum, fontScaleDen,
+      prewarmBudgetMin == UINT32_MAX ? 0 : prewarmBudgetMin, prewarmBudgetMinWanted, prewarmBudgetMinFree,
+      prewarmBudgetClips, sdClockHz,
+      fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? fontCopyTotal % FONT_COPY_EVENTS : 0],
+      fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? (fontCopyTotal + 1) % FONT_COPY_EVENTS : 1],
+      fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? (fontCopyTotal + 2) % FONT_COPY_EVENTS : 2], vertCell,
+      vertPitch, vertRubyReserve, vertViewportW, vertViewportH,
       (vertPitch > 0 && vertViewportW > vertRubyReserve + vertCell)
           ? static_cast<unsigned>((vertViewportW - vertRubyReserve - vertCell) / vertPitch + 1)
           : 0u,

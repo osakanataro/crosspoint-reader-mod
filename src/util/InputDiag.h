@@ -127,13 +127,24 @@ class InputDiag {
   // the em size and glyph count of the first, and the bytes it holds permanently (coverage
   // intervals, kern classes, ligature pairs) before any page is drawn. A report from a device
   // that "got slow after changing the font" is unreadable without this line.
+  // flash/flashBytes: whether the reads go to the copy in the inactive OTA slot and how many
+  // leading bytes of the file it holds; scaleNum/scaleDen: the glyph scale applied at load (an
+  // 18 pt drawn from the 16 pt file reads 18/16 here and is otherwise indistinguishable from the
+  // real 18 pt file in every other line of this report).
   static void noteFontChoice(const char* path, uint8_t styles, uint8_t advanceY, uint32_t glyphs,
-                             uint32_t residentBytes);
+                             uint32_t residentBytes, bool flash, uint32_t flashBytes, uint8_t scaleNum,
+                             uint8_t scaleDen);
 
   // The SPI clock the SD card was actually opened at. The X3 routes its card through the GPIO
   // matrix, which is rated lower than the SDK's 40 MHz default, so a throughput figure means
   // nothing without knowing which rate produced it.
   static void noteSdClock(uint32_t hz);
+
+  // The font copy in flash: what the boot check and each copy attempt decided. One preformatted
+  // line per event, newest last, three kept. A page that still reads the card with the copy
+  // switched on is unreadable without knowing which of "no candidate", "copy invalid" or
+  // "copy failed" it was.
+  static void noteFontCopy(const char* line);
 
   // The geometry a vertical page was actually laid out with: the full-width cell, the column
   // pitch (cell + gap), the ruby reserve at the right edge, the viewport, and how many columns
@@ -238,9 +249,10 @@ class InputDiag {
   static void noteBuildTotal(int, unsigned long, int) {}
   static void noteBuildHeadroom(uint32_t, uint32_t, uint32_t) {}
   static void noteGlyphMiss(uint32_t, uint8_t) {}
-  static void noteFontChoice(const char*, uint8_t, uint8_t, uint32_t, uint32_t) {}
+  static void noteFontChoice(const char*, uint8_t, uint8_t, uint32_t, uint32_t, bool, uint32_t, uint8_t, uint8_t) {}
   static void notePrewarmBudget(uint32_t, uint32_t, uint32_t) {}
   static void noteSdClock(uint32_t) {}
+  static void noteFontCopy(const char*) {}
   static void noteVerticalLayout(uint16_t, uint16_t, uint16_t, uint16_t, uint16_t) {}
   static void noteLayoutGiveUp(uint8_t, uint32_t) {}
   static void noteRefreshWait(unsigned long) {}

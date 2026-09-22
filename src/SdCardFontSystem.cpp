@@ -1,14 +1,17 @@
 #include "SdCardFontSystem.h"
 
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
+#include <HalPowerManager.h>
 #include <Logging.h>
-#include <OstScaleTest.h>
+#include <SdCardFontCache.h>
 
 #include <iterator>
 
 #include "CrossPointSettings.h"
 #include "ReaderFontSizes.h"
 #include "fontIds.h"
+#include "util/InputDiag.h"
 
 namespace {
 
@@ -51,7 +54,7 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   if (SETTINGS.sdFontFamilyName[0] != '\0') {
     const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
     if (family) {
-      if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize)) {
+      if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize, SETTINGS.sdFontFlashCache != 0)) {
         snapFontPointSizeTo(manager_.currentPointSize());
         setupUiFallbacks(renderer);
         LOG_DBG("SDFS", "Loaded SD card font family: %s", SETTINGS.sdFontFamilyName);
@@ -68,7 +71,7 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   LOG_DBG("SDFS", "SD font system ready (%d families discovered)", registry_.getFamilyCount());
 }
 
-void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
+void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, const bool forceReload) {
   // If the web server (or another task) installed/deleted fonts, re-discover.
   // Track whether we just re-discovered so we can force a reload below even
   // when the wanted family/size still maps to the same point size — the file
@@ -106,20 +109,13 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
       return;
     }
     const auto* selected = family->findNearestSize(SETTINGS.fontPointSize);
-    uint8_t wantedPt = selected ? selected->pointSize : 0;
-#if OST_SCALE_TEST
-    // The virtual scaled size resolves to itself while the base file exists; without this the
-    // nearest real size would win and silently rewrite the setting.
-    if (SETTINGS.fontPointSize == OST_SCALED_18_FROM_16_PT && family->findFile(OST_SCALE_BASE_PT)) {
-      wantedPt = OST_SCALED_18_FROM_16_PT;
-    }
-#endif
+    const uint8_t wantedPt = selected ? selected->pointSize : 0;
     // Snap before the early return: the wanted size can already be loaded while
     // the setting still names a size this family does not ship.
     snapFontPointSizeTo(wantedPt);
-    if (!registryWasDirty && wantedPt == manager_.currentPointSize()) return;
-    LOG_DBG("SDFS", "Reloading %s: size %u -> %u%s", wantedFamily, manager_.currentPointSize(), wantedPt,
-            registryWasDirty ? " [registry dirty]" : "");
+    if (!registryWasDirty && !forceReload && wantedPt == manager_.currentPointSize()) return;
+    LOG_DBG("SDFS", "Reloading %s: size %u -> %u%s%s", wantedFamily, manager_.currentPointSize(), wantedPt,
+            registryWasDirty ? " [registry dirty]" : "", forceReload ? " [forced]" : "");
   }
 
   if (!currentFamily.empty()) {
@@ -128,7 +124,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
 
   const auto* family = registry_.findFamily(wantedFamily);
   if (family) {
-    if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize)) {
+    if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize, SETTINGS.sdFontFlashCache != 0)) {
       snapFontPointSizeTo(manager_.currentPointSize());
       setupUiFallbacks(renderer);
       LOG_DBG("SDFS", "Loaded SD font family: %s", wantedFamily);
@@ -176,6 +172,46 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
       LOG_DBG("SDFS", "No %u pt SD glyphs for UI fallback in %s", ui.pointSize, familyName.c_str());
     }
   }
+}
+
+const SdCardFontFileInfo* SdCardFontSystem::cacheCandidate(uint8_t* scaleNum, uint8_t* scaleDen) const {
+  if (scaleNum) *scaleNum = 1;
+  if (scaleDen) *scaleDen = 1;
+  if (SETTINGS.sdFontFamilyName[0] == '\0') return nullptr;
+  const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
+  if (!family) return nullptr;
+  const auto* selected = family->findNearestSize(SETTINGS.fontPointSize);
+  if (!selected) return nullptr;
+  const auto cand = SdCardFontManager::cacheCandidate(*family, selected->pointSize);
+  if (!cand.file) return nullptr;
+  if (scaleNum) *scaleNum = cand.scaleNum;
+  if (scaleDen) *scaleDen = cand.scaleDen;
+  return cand.file;
+}
+
+bool SdCardFontSystem::cacheRebuildNeeded() const {
+  uint8_t scaleNum = 1;
+  uint8_t scaleDen = 1;
+  const auto* file = cacheCandidate(&scaleNum, &scaleDen);
+  size_t payload = 0;
+  const bool valid = file && SdCardFontCache::isValidFor(file->path.c_str(), &payload);
+  const char* name = file ? file->path.c_str() : "(none)";
+  for (const char* p = name; *p; p++) {
+    if (*p == '/') name = p + 1;
+  }
+  char line[96];
+  snprintf(line, sizeof(line), "check setting=%u cand=%s scale=%u/%u cap_kb=%u valid=%u payload_kb=%u reader=%s",
+           SETTINGS.sdFontFlashCache, name, scaleNum, scaleDen,
+           static_cast<unsigned>(SdCardFontCache::capacity() / 1024), valid ? 1 : 0,
+           static_cast<unsigned>(payload / 1024), manager_.readerFontFromFlash() ? "flash" : "sd");
+  InputDiag::noteFontCopy(line);
+  if (SETTINGS.sdFontFlashCache == 0) return false;
+  return file && !valid;
+}
+
+bool SdCardFontSystem::copyBlockedByBattery() {
+  if (gpio.isUsbConnected()) return false;
+  return powerManager.getBatteryPercentage() < COPY_MIN_BATTERY_PERCENT;
 }
 
 int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*/) const {

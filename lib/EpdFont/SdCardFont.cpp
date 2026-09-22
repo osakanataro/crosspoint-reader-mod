@@ -2,6 +2,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <SdCardFontCache.h>
 #include <Utf8.h>
 
 #include "../../src/util/InputDiag.h"
@@ -23,6 +24,65 @@ static_assert(sizeof(EpdKernClassEntry) == 3, "EpdKernClassEntry must be 3 bytes
 static_assert(sizeof(EpdLigaturePair) == 8, "EpdLigaturePair must be 8 bytes to match .cpfont file layout");
 
 namespace {
+
+// One read cursor over the .cpfont for every parser and hot path. It serves a
+// read from the flash copy (see SdCardFontCache) when the whole range lies in
+// the copied prefix, and from the SD card otherwise -- the copy may hold only
+// the regular style of a two-style file. The SD file is opened on first need,
+// so a page whose glyphs all sit in the copy never touches the card. A flash
+// read failure turns the copy off for the owning font and retries on SD.
+class FontFile {
+ public:
+  FontFile(const char* path, bool* useFlash, size_t flashPayloadBytes)
+      : path_(path), useFlash_(useFlash), flashBytes_(flashPayloadBytes), flash_(useFlash && *useFlash) {
+    if (!flash_) openSd();
+  }
+
+  explicit operator bool() const { return flash_ || static_cast<bool>(sd_); }
+
+  bool seekSet(size_t offset) {
+    position_ = offset;
+    return true;
+  }
+
+  int read(void* data, size_t length) {
+    if (flash_ && position_ + length <= flashBytes_) {
+      if (SdCardFontCache::readAt(position_, data, length, flashBytes_)) {
+        position_ += length;
+        return static_cast<int>(length);
+      }
+      LOG_ERR("SDCF", "Flash font copy read failed at %u; falling back to SD", static_cast<unsigned>(position_));
+      flash_ = false;
+      *useFlash_ = false;
+    }
+    if (!openSd()) return -1;
+    if (sdPosition_ != position_ && !sd_.seekSet(position_)) return -1;
+    const int got = sd_.read(data, length);
+    if (got > 0) position_ += static_cast<size_t>(got);
+    sdPosition_ = position_;
+    return got;
+  }
+
+  bool close() {
+    flash_ = false;
+    return sd_ ? sd_.close() : true;
+  }
+
+ private:
+  bool openSd() {
+    if (sd_) return true;
+    sdPosition_ = 0;
+    return Storage.openFileForRead("SDCF", path_, sd_);
+  }
+
+  const char* path_;
+  bool* useFlash_;
+  size_t flashBytes_;
+  HalFile sd_;
+  size_t position_ = 0;
+  size_t sdPosition_ = 0;
+  bool flash_ = false;
+};
 
 // FNV-1a hash for content-based font ID generation
 constexpr uint32_t FNV_OFFSET = 2166136261u;
@@ -316,8 +376,8 @@ bool SdCardFont::loadStyleKernLigatureData(PerStyle& s) {
     return true;
   }
 
-  HalFile file;
-  if (!Storage.openFileForRead("SDCF", filePath_, file)) {
+  FontFile file(filePath_, &useFlash_, flashPayloadBytes_);
+  if (!file) {
     LOG_ERR("SDCF", "Failed to open .cpfont for kern/lig: %s", filePath_);
     return false;
   }
@@ -507,8 +567,8 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
   // Step 6: read the full matrix's rows for each used left class, keep only
   // columns for used right classes. One SD seek + one read per used left class;
   // a row is kernRightClassCount bytes (~200 for Literata).
-  HalFile file;
-  if (!Storage.openFileForRead("SDCF", filePath_, file)) {
+  FontFile file(filePath_, &useFlash_, flashPayloadBytes_);
+  if (!file) {
     LOG_ERR("SDCF", "Failed to open .cpfont for mini kern: %s", filePath_);
     freeStyleMiniKern(s);
     return false;
@@ -643,10 +703,9 @@ void SdCardFont::resampleBitmap2Bit(const uint8_t* src, const uint32_t srcW, con
   }
 }
 
-bool SdCardFont::load(const char* path, const bool isReaderFont, const uint8_t scaleNum, const uint8_t scaleDen) {
+bool SdCardFont::load(const char* path, const bool isReaderFont, const uint8_t scaleNum, const uint8_t scaleDen,
+                      const bool preferFlash) {
   freeAll();
-  scaleNum_ = (scaleNum == 0 || scaleDen == 0) ? 1 : scaleNum;
-  scaleDen_ = (scaleNum == 0 || scaleDen == 0) ? 1 : scaleDen;
   if (strlen(path) >= sizeof(filePath_)) {
     LOG_ERR("SDCF", "Path too long (%zu bytes, max %zu)", strlen(path), sizeof(filePath_) - 1);
     return false;
@@ -654,8 +713,30 @@ bool SdCardFont::load(const char* path, const bool isReaderFont, const uint8_t s
   strncpy(filePath_, path, sizeof(filePath_) - 1);
   filePath_[sizeof(filePath_) - 1] = '\0';
 
-  HalFile file;
-  if (!Storage.openFileForRead("SDCF", path, file)) {
+  const unsigned long start = millis();
+  flashPayloadBytes_ = 0;
+  useFlash_ = preferFlash && SdCardFontCache::isValidFor(path, &flashPayloadBytes_);
+  if (loadSelectedSource(isReaderFont, scaleNum, scaleDen)) {
+    LOG_INF("SDCF", "Loaded %s from %s in %lu ms", path, useFlash_ ? "flash" : "sd", millis() - start);
+    return true;
+  }
+  if (!useFlash_) return false;
+
+  // The copy claimed to match the file but could not be read through: try the card itself.
+  LOG_ERR("SDCF", "Flash copy of %s is unreadable; retrying from SD", path);
+  freeAll();
+  useFlash_ = false;
+  flashPayloadBytes_ = 0;
+  return loadSelectedSource(isReaderFont, scaleNum, scaleDen);
+}
+
+bool SdCardFont::loadSelectedSource(const bool isReaderFont, const uint8_t scaleNum, const uint8_t scaleDen) {
+  const char* path = filePath_;
+  scaleNum_ = (scaleNum == 0 || scaleDen == 0) ? 1 : scaleNum;
+  scaleDen_ = (scaleNum == 0 || scaleDen == 0) ? 1 : scaleDen;
+
+  FontFile file(filePath_, &useFlash_, flashPayloadBytes_);
+  if (!file) {
     LOG_ERR("SDCF", "Failed to open .cpfont: %s", path);
     return false;
   }
@@ -887,7 +968,8 @@ bool SdCardFont::load(const char* path, const bool isReaderFont, const uint8_t s
             h.kernRightEntryCount, h.ligaturePairCount);
   }
   if (isReaderFont) {
-    InputDiag::noteFontChoice(path, styleCount_, firstAdvanceY, firstGlyphCount, residentBytes);
+    InputDiag::noteFontChoice(path, styleCount_, firstAdvanceY, firstGlyphCount, residentBytes, useFlash_,
+                              flashPayloadBytes_, scaleNum_, scaleDen_);
   }
   return true;
 }
@@ -1303,8 +1385,8 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   std::sort(readOrder, readOrder + validCount,
             [&](uint32_t a, uint32_t b) { return mappings[a].globalIndex < mappings[b].globalIndex; });
 
-  HalFile file;
-  if (!Storage.openFileForRead("SDCF", filePath_, file)) {
+  FontFile file(filePath_, &useFlash_, flashPayloadBytes_);
+  if (!file) {
     LOG_ERR("SDCF", "Failed to reopen .cpfont for prewarm (style %u)", styleIdx);
     delete[] readOrder;
     delete[] mappings;
@@ -1646,8 +1728,8 @@ uint16_t SdCardFont::readAdvanceOnly(const uint32_t codepoint, uint8_t styleIdx)
 
   const int32_t globalIdx = findGlobalGlyphIndex(s, codepoint);
   if (globalIdx < 0) return 0;
-  HalFile file;
-  if (!Storage.openFileForRead("SDCF", filePath_, file)) return 0;
+  FontFile file(filePath_, &useFlash_, flashPayloadBytes_);
+  if (!file) return 0;
   EpdGlyph glyph = {};
   const uint32_t off = s.glyphsFileOffset + static_cast<uint32_t>(globalIdx) * sizeof(EpdGlyph);
   if (!file.seekSet(off) || file.read(reinterpret_cast<uint8_t*>(&glyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
@@ -1740,8 +1822,8 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
               [](const CpIdx& a, const CpIdx& b) { return a.glyphIndex < b.glyphIndex; });
 
     // Open file once and read advanceX for each needed glyph.
-    HalFile file;
-    if (!Storage.openFileForRead("SDCF", filePath_, file)) {
+    FontFile file(filePath_, &useFlash_, flashPayloadBytes_);
+    if (!file) {
       LOG_ERR("SDCF", "buildAdvanceTable: failed to open .cpfont for style %u", si);
       continue;
     }
@@ -1854,8 +1936,9 @@ int SdCardFont::buildAdvanceTable(const std::deque<std::string>& words, bool inc
 // --- Stats ---
 
 void SdCardFont::logStats(const char* label) {
-  LOG_DBG("SDCF", "[%s] total=%ums sd_read=%ums seeks=%u glyphs=%u bitmap=%u bytes", label, stats_.prewarmTotalMs,
-          stats_.sdReadTimeMs, stats_.seekCount, stats_.uniqueGlyphs, stats_.bitmapBytes);
+  LOG_DBG("SDCF", "[%s] source=%s total=%ums read=%ums seeks=%u glyphs=%u bitmap=%u bytes", label,
+          useFlash_ ? "flash" : "sd", stats_.prewarmTotalMs, stats_.sdReadTimeMs, stats_.seekCount, stats_.uniqueGlyphs,
+          stats_.bitmapBytes);
 }
 
 void SdCardFont::resetStats() { stats_ = Stats{}; }
@@ -1938,8 +2021,8 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   bool wasAtCapacity = (self->overflowCount_ == OVERFLOW_CAPACITY);
 
   // Read glyph metadata into temporary
-  HalFile file;
-  if (!Storage.openFileForRead("SDCF", self->filePath_, file)) {
+  FontFile file(self->filePath_, &self->useFlash_, self->flashPayloadBytes_);
+  if (!file) {
     LOG_ERR("SDCF", "Overflow: failed to open .cpfont");
     return nullptr;
   }

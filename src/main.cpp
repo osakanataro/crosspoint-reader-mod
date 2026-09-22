@@ -34,6 +34,7 @@
 #include "SdCardFontSystem.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/settings/FontFlashCacheActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -543,6 +544,21 @@ void setup() {
   } else if (rebootedFromPanic) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
+  } else if (sdFontSystem.cacheRebuildNeeded()) {
+    // The font copy in flash is switched on but the slot does not hold the selected font
+    // (first use, or a firmware update overwrote it): rebuild it now, with a progress page,
+    // then land on Home. Until then the reader would read the font from the card.
+    if (SdCardFontSystem::copyBlockedByBattery()) {
+      // A copy cut short by a dead battery leaves an invalid header, which is harmless, but the
+      // next boot would only try again. Switch the setting off; the user turns it back on later.
+      LOG_INF("SDFCACHE", "Battery at %u%%: font copy switched off", powerManager.getBatteryPercentage());
+      InputDiag::noteFontCopy("boot skipped: battery low, setting off");
+      SETTINGS.sdFontFlashCache = 0;
+      SETTINGS.saveToFile();
+      activityManager.goHome(HomeMenuItem::NONE, needsWakeRefresh);
+    } else {
+      activityManager.replaceActivity(std::make_unique<FontFlashCacheActivity>(renderer, mappedInputManager));
+    }
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);

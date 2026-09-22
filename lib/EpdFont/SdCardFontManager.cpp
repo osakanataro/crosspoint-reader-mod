@@ -3,8 +3,8 @@
 #include <EpdFontFamily.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
-#include <OstScaleTest.h>
 #include <SdCardFont.h>
+#include <SdCardFontCache.h>
 #include <SdCardFontRegistry.h>
 
 SdCardFontManager::~SdCardFontManager() {
@@ -30,7 +30,8 @@ int SdCardFontManager::computeFontId(uint32_t contentHash, const char* familyNam
 }
 
 int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer,
-                                const uint8_t idPointSize, const uint8_t scaleNum, const uint8_t scaleDen) {
+                                const uint8_t idPointSize, const uint8_t scaleNum, const uint8_t scaleDen,
+                                const bool preferFlash) {
   auto* font = new (std::nothrow) SdCardFont();
   if (!font) {
     LOG_ERR("SDMGR", "Failed to allocate SdCardFont for %s", file.path.c_str());
@@ -38,7 +39,7 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
   }
 
   // The family's first load is the body-text size; the UI fallback sizes follow it.
-  if (!font->load(file.path.c_str(), loaded_.empty(), scaleNum, scaleDen)) {
+  if (!font->load(file.path.c_str(), loaded_.empty(), scaleNum, scaleDen, preferFlash)) {
     LOG_ERR("SDMGR", "Failed to load %s", file.path.c_str());
     delete font;
     return 0;
@@ -57,40 +58,68 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
   renderer.registerSdCardFont(fontId, font);
   loaded_.push_back({font, fontId, idPointSize});
 
-  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u", file.path.c_str(), idPointSize, fontId, font->styleCount());
+  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u scale=%u/%u source=%s", file.path.c_str(), idPointSize, fontId,
+          font->styleCount(), scaleNum, scaleDen, font->usingFlash() ? "flash" : "sd");
 
   EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
   renderer.insertFont(fontId, fontFamily);
   return fontId;
 }
 
-bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize) {
+SdCardFontManager::CacheCandidate SdCardFontManager::cacheCandidate(const SdCardFontFamilyInfo& family,
+                                                                    const uint8_t pointSize) {
+  CacheCandidate out;
+  const SdCardFontFileInfo* own = family.findFile(pointSize);
+  if (own && SdCardFontCache::sourceFits(own->path.c_str())) {
+    out.file = own;
+    return out;
+  }
+  // Largest smaller size within the upscale limit (base * 9 >= pointSize * 8, i.e. at most 9/8).
+  const SdCardFontFileInfo* base = nullptr;
+  for (const auto& f : family.files) {
+    if (f.style != 0 || f.pointSize >= pointSize) continue;
+    if (static_cast<unsigned>(f.pointSize) * 9 < static_cast<unsigned>(pointSize) * 8) continue;
+    if (!base || f.pointSize > base->pointSize) base = &f;
+  }
+  if (base && SdCardFontCache::sourceFits(base->path.c_str())) {
+    out.file = base;
+    out.scaleNum = pointSize;
+    out.scaleDen = base->pointSize;
+  }
+  return out;
+}
+
+bool SdCardFontManager::readerFontFromFlash() const { return !loaded_.empty() && loaded_.front().font->usingFlash(); }
+
+bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize,
+                                   const bool preferFlash) {
   // Unload any previously loaded family first
   if (!loadedFamilyName_.empty()) {
     unloadAll(renderer);
   }
 
   const SdCardFontFileInfo* selected = family.findNearestSize(pointSize);
-  uint8_t scaleNum = 1;
-  uint8_t scaleDen = 1;
-  uint8_t idPointSize = selected ? selected->pointSize : 0;
-#if OST_SCALE_TEST
-  // The virtual scaled size: the base file, scaled on the way into the caches.
-  if (pointSize == OST_SCALED_18_FROM_16_PT) {
-    if (const auto* base = family.findFile(OST_SCALE_BASE_PT)) {
-      selected = base;
-      scaleNum = OST_SCALE_NUM;
-      scaleDen = OST_SCALE_DEN;
-      idPointSize = OST_SCALED_18_FROM_16_PT;
-    }
-  }
-#endif
   if (!selected) {
     LOG_ERR("SDMGR", "Family %s has no files to load", family.name.c_str());
     return false;
   }
+  // The size is the selected file's own; the file read may be a smaller one drawn scaled
+  // when that is what the flash copy holds for this size.
+  const uint8_t idPointSize = selected->pointSize;
+  uint8_t scaleNum = 1;
+  uint8_t scaleDen = 1;
+  bool fromFlash = false;
+  if (preferFlash) {
+    const CacheCandidate cand = cacheCandidate(family, idPointSize);
+    if (cand.file && SdCardFontCache::isValidFor(cand.file->path.c_str())) {
+      selected = cand.file;
+      scaleNum = cand.scaleNum;
+      scaleDen = cand.scaleDen;
+      fromFlash = true;
+    }
+  }
 
-  if (loadFile(*selected, family.name.c_str(), renderer, idPointSize, scaleNum, scaleDen) == 0) {
+  if (loadFile(*selected, family.name.c_str(), renderer, idPointSize, scaleNum, scaleDen, fromFlash) == 0) {
     return false;
   }
 
@@ -110,6 +139,8 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
     if (lf.size == pointSize) return lf.fontId;
   }
 
+  // The copy holds the reader size; a UI size only ever reads the card. Passing preferFlash
+  // would open the file once per size just to learn that.
   return loadFile(*file, family.name.c_str(), renderer, file->pointSize);
 }
 

@@ -20,7 +20,25 @@ class SdCardFontSystem {
   /// Ensure the correct SD font family is loaded for the current settings.
   /// Call before entering the reader or after settings change.
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
-  void ensureLoaded(GfxRenderer& renderer);
+  /// forceReload: reload even when the same family and size are resident -- the
+  /// flash copy was just written or switched off, so the read source changed.
+  void ensureLoaded(GfxRenderer& renderer, bool forceReload = false);
+
+  /// The file the flash copy must hold for the selected family and size (see
+  /// SdCardFontManager::cacheCandidate), or nullptr when a built-in family is
+  /// selected or nothing of this size fits the slot.
+  const SdCardFontFileInfo* cacheCandidate(uint8_t* scaleNum = nullptr, uint8_t* scaleDen = nullptr) const;
+  /// True when the flash copy is switched on in settings but the slot does not
+  /// hold the candidate file (never built, another size, or wiped by a firmware
+  /// update): the reader falls back to the card until it is rebuilt.
+  bool cacheRebuildNeeded() const;
+  /// True when the battery is too low to start a copy into flash (a copy takes about a
+  /// minute of continuous SD reads and flash writes and must not be cut by a dead battery).
+  /// USB power lifts the limit. When true, callers switch the setting off and read from the card.
+  static bool copyBlockedByBattery();
+  static constexpr uint16_t COPY_MIN_BATTERY_PERCENT = 20;
+  /// True when the resident reader font reads from the flash copy.
+  bool readerFontFromFlash() const { return manager_.readerFontFromFlash(); }
 
   /// Resolve an SD card font ID from family name + reader point size.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().

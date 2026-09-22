@@ -60,7 +60,13 @@ class SdCardFont {
   // load, so the renderer sees a font of the scaled size. 1/1 = the file as it is. Only 2-bit
   // fonts are scaled; a 1-bit font ignores the ratio. Kerning values are not scaled (the CJK
   // fonts this is for carry none).
-  bool load(const char* path, bool isReaderFont = false, uint8_t scaleNum = 1, uint8_t scaleDen = 1);
+  // preferFlash: read through the copy in the inactive OTA slot (SdCardFontCache) when it holds
+  // this very file; otherwise, and for any range the copy does not hold, the SD card is read.
+  bool load(const char* path, bool isReaderFont = false, uint8_t scaleNum = 1, uint8_t scaleDen = 1,
+            bool preferFlash = false);
+  // True while reads are served from the flash copy (a read failure turns it off for good).
+  bool usingFlash() const { return useFlash_; }
+  size_t flashPayloadBytes() const { return flashPayloadBytes_; }
 
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
@@ -345,6 +351,10 @@ class SdCardFont {
   uint8_t styleCount_ = 0;
 
   char filePath_[128] = {};
+  // Flash copy state (see load()). Mutable: the const read paths flip it off on a read failure.
+  mutable bool useFlash_ = false;
+  size_t flashPayloadBytes_ = 0;
+  bool loadSelectedSource(bool isReaderFont, uint8_t scaleNum, uint8_t scaleDen);
 
   // Glyph scale applied on the way into the resident caches (see load()).
   uint8_t scaleNum_ = 1;

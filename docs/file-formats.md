@@ -380,3 +380,37 @@ if (parsedSize != fileSize) {
     std::warning(std::format("Unparsed data detected: {} bytes remaining at offset 0x{:X}", fileSize - parsedSize, parsedSize));
 }
 ```
+
+## SD-card font copy (inactive OTA slot)
+
+The inactive OTA application slot (`app0` or `app1`, whichever is not running) can hold a copy of the
+selected SD reader font so glyph reads come from internal flash instead of the card. Written by
+`SdCardFontCache::preload()`, read through `SdCardFont`'s `FontFile` cursor. Overwritten by any firmware
+update, then rebuilt on the next boot when the setting is on.
+
+```
+Offset      Size    Field
+0x0000      160     Header (below), rest of the 4 KiB sector erased (0xFF)
+0x1000      N       Payload: the leading N bytes of the source .cpfont
+```
+
+Header (`sd_card_font_cache_format::Header`, little-endian):
+
+```
+u8[8]   magic        "OSTSDFC1"
+u16     version      1
+u16     headerSize   160
+u32     payloadSize  N, bytes copied (<= sourceSize, <= slot size - 4096, <= 6,549,504)
+u32     sourceSize   byte size of the source file when copied
+u32     contentHash  FNV-1a of the .cpfont 32-byte header + the 32-byte style TOC entries
+u32     payloadCrc   CRC-32 (IEEE, reflected) of the payload as written
+u32     headerCrc    CRC-32 of this header with headerCrc = 0
+char[128] sourcePath NUL-terminated path of the source file
+```
+
+The payload is a prefix of the file: the whole file when it fits, otherwise as much as fits, and a copy is
+only made when the regular style (style id 0, its intervals through its bitmaps) lies entirely within it.
+A read whose range ends beyond `payloadSize` goes to the SD card. A copy is valid for a file when the path,
+`sourceSize` and `contentHash` all match and `payloadSize` covers the regular style; the payload CRC is
+verified at write time only.
+

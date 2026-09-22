@@ -2,6 +2,7 @@
 
 #include <SdCardFontRegistry.h>
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -25,12 +26,14 @@ class TextSettingsActivity final : public UiTabListActivity {
 
   void onEnter() override;
   void render(RenderLock&&) override;
+  // The copy into flash runs on the main task for up to a minute; keep the device awake and fast.
+  bool preventAutoSleep() override { return flashCopyActive_.load(); }
 
  private:
   // Row indices per tab. enum class (not plain enum) so a LayoutRow can't be
   // silently confused with a StyleRow of equal value.
   enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, Count };
-  enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
+  enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, FlashCache, Count };
 
   // --- UiTabListActivity contract ---
   int listCount() const override;
@@ -46,6 +49,12 @@ class TextSettingsActivity final : public UiTabListActivity {
 
   void applyFamily(int listIndex);
   void applySize(int listIndex);
+  // After a family/size change or a toggle of the Font Copy in Flash row: copies the
+  // selected font into the inactive OTA slot when the copy is on (progress page, see
+  // render()), then reloads the font so reads come from the new source. A failed copy
+  // switches the setting off and reports it in a popup.
+  void applyFlashCacheSetting();
+  bool runFlashCopy();
   // Repopulates sizes_ (and currentSizeIndex_) from the active family's
   // installed point sizes. Call after any family change.
   void rebuildSizeList();
@@ -92,6 +101,14 @@ class TextSettingsActivity final : public UiTabListActivity {
   Tab tab_;
   int currentFamilyIndex_ = 0;
   int currentSizeIndex_ = 0;
+
+  // Progress of the copy into flash, read by render() on the render task.
+  std::atomic<bool> flashCopyActive_{false};
+  std::atomic<size_t> flashCopyDone_{0};
+  std::atomic<size_t> flashCopyTotal_{1};
+  unsigned flashCopyLastPercent_ = 0;
+  std::string flashCopyFamily_;
+  uint8_t flashCopyPointSize_ = 0;
 
   ThemeMetrics metrics_ = {};
   int afterHeader = 0;
