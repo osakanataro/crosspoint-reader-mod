@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <OstScaleTest.h>
 
 #include <iterator>
 
@@ -105,7 +106,14 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
       return;
     }
     const auto* selected = family->findNearestSize(SETTINGS.fontPointSize);
-    const uint8_t wantedPt = selected ? selected->pointSize : 0;
+    uint8_t wantedPt = selected ? selected->pointSize : 0;
+#if OST_SCALE_TEST
+    // The virtual scaled size resolves to itself while the base file exists; without this the
+    // nearest real size would win and silently rewrite the setting.
+    if (SETTINGS.fontPointSize == OST_SCALED_18_FROM_16_PT && family->findFile(OST_SCALE_BASE_PT)) {
+      wantedPt = OST_SCALED_18_FROM_16_PT;
+    }
+#endif
     // Snap before the early return: the wanted size can already be loaded while
     // the setting still names a size this family does not ship.
     snapFontPointSizeTo(wantedPt);

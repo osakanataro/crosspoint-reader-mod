@@ -4,6 +4,7 @@
 #include <HalClock.h>
 #include <HalTiltSensor.h>
 #include <I18n.h>
+#include <OstScaleTest.h>
 #include <SdCardFontRegistry.h>
 
 #include <algorithm>
@@ -111,6 +112,12 @@ inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
   std::vector<std::string> labels;
   labels.reserve(sizes.size());
   for (const uint8_t pt : sizes) {
+#if OST_SCALE_TEST
+    if (pt == OST_SCALED_18_FROM_16_PT) {
+      labels.push_back("18 pt (16 x" + std::to_string(OST_SCALE_NUM) + "/" + std::to_string(OST_SCALE_DEN) + ")");
+      continue;
+    }
+#endif
     labels.push_back(std::to_string(pt) + " pt");
   }
 

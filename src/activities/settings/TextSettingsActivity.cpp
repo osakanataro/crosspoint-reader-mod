@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <OstScaleTest.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -140,8 +141,13 @@ void TextSettingsActivity::rebuildSizeList() {
   for (const uint8_t pt : points) {
     // "pt" is deliberately not translated: it is the typographic unit symbol,
     // written the same way in every language CrossPoint ships.
-    char label[12];
+    char label[24];
     snprintf(label, sizeof(label), "%u pt", pt);
+#if OST_SCALE_TEST
+    if (pt == OST_SCALED_18_FROM_16_PT) {
+      snprintf(label, sizeof(label), "18 pt (16 x%u/%u)", OST_SCALE_NUM, OST_SCALE_DEN);
+    }
+#endif
     if (pt == selectedPt) currentSizeIndex_ = static_cast<int>(sizes_.size());
     sizes_.push_back({label, pt});
   }

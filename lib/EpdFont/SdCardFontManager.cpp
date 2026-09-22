@@ -3,6 +3,7 @@
 #include <EpdFontFamily.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
+#include <OstScaleTest.h>
 #include <SdCardFont.h>
 #include <SdCardFontRegistry.h>
 
@@ -28,7 +29,8 @@ int SdCardFontManager::computeFontId(uint32_t contentHash, const char* familyNam
   return id != 0 ? id : 1;  // 0 is reserved as "not found" sentinel
 }
 
-int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer) {
+int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer,
+                                const uint8_t idPointSize, const uint8_t scaleNum, const uint8_t scaleDen) {
   auto* font = new (std::nothrow) SdCardFont();
   if (!font) {
     LOG_ERR("SDMGR", "Failed to allocate SdCardFont for %s", file.path.c_str());
@@ -36,13 +38,15 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
   }
 
   // The family's first load is the body-text size; the UI fallback sizes follow it.
-  if (!font->load(file.path.c_str(), loaded_.empty())) {
+  if (!font->load(file.path.c_str(), loaded_.empty(), scaleNum, scaleDen)) {
     LOG_ERR("SDMGR", "Failed to load %s", file.path.c_str());
     delete font;
     return 0;
   }
 
-  int fontId = computeFontId(font->contentHash(), familyName, file.pointSize);
+  // A scaled load carries its own size code, so its section caches and font id never
+  // collide with the unscaled file's.
+  int fontId = computeFontId(font->contentHash(), familyName, idPointSize);
   // Guard against collision with built-in font IDs (astronomically unlikely
   // with FNV-1a hashes, but provides a safety net)
   if (renderer.getFontMap().count(fontId) != 0) {
@@ -51,9 +55,9 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
     return 0;
   }
   renderer.registerSdCardFont(fontId, font);
-  loaded_.push_back({font, fontId, file.pointSize});
+  loaded_.push_back({font, fontId, idPointSize});
 
-  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u", file.path.c_str(), file.pointSize, fontId, font->styleCount());
+  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u", file.path.c_str(), idPointSize, fontId, font->styleCount());
 
   EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
   renderer.insertFont(fontId, fontFamily);
@@ -67,17 +71,31 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
   }
 
   const SdCardFontFileInfo* selected = family.findNearestSize(pointSize);
+  uint8_t scaleNum = 1;
+  uint8_t scaleDen = 1;
+  uint8_t idPointSize = selected ? selected->pointSize : 0;
+#if OST_SCALE_TEST
+  // The virtual scaled size: the base file, scaled on the way into the caches.
+  if (pointSize == OST_SCALED_18_FROM_16_PT) {
+    if (const auto* base = family.findFile(OST_SCALE_BASE_PT)) {
+      selected = base;
+      scaleNum = OST_SCALE_NUM;
+      scaleDen = OST_SCALE_DEN;
+      idPointSize = OST_SCALED_18_FROM_16_PT;
+    }
+  }
+#endif
   if (!selected) {
     LOG_ERR("SDMGR", "Family %s has no files to load", family.name.c_str());
     return false;
   }
 
-  if (loadFile(*selected, family.name.c_str(), renderer) == 0) {
+  if (loadFile(*selected, family.name.c_str(), renderer, idPointSize, scaleNum, scaleDen) == 0) {
     return false;
   }
 
   loadedFamilyName_ = family.name;
-  loadedPointSize_ = selected->pointSize;
+  loadedPointSize_ = idPointSize;
   return true;
 }
 
@@ -92,7 +110,7 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
     if (lf.size == pointSize) return lf.fontId;
   }
 
-  return loadFile(*file, family.name.c_str(), renderer);
+  return loadFile(*file, family.name.c_str(), renderer, file->pointSize);
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {

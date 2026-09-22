@@ -53,7 +53,11 @@ class SdCardFontManager {
 
   // Load+register a single .cpfont file and append it to loaded_.
   // Returns the font id, or 0 on failure (allocation, read, or id collision).
-  int loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer);
+  // idPointSize is the size the font is registered and identified as (it is the file's own
+  // size unless the file is loaded scaled, see OstScaleTest.h); scaleNum/scaleDen go to
+  // SdCardFont::load().
+  int loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer, uint8_t idPointSize,
+               uint8_t scaleNum = 1, uint8_t scaleDen = 1);
 
   std::string loadedFamilyName_;
   uint8_t loadedPointSize_ = 0;

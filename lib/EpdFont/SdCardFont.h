@@ -55,7 +55,12 @@ class SdCardFont {
   // UI fallbacks. Only the reader's own size is worth reporting: the diagnostic used to name
   // whichever font loaded last, which was a UI fallback, and a report then said 12 pt while the
   // page was laid out at 18 (2026-09-11).
-  bool load(const char* path, bool isReaderFont = false);
+  // scaleNum/scaleDen: every glyph record (width, height, bearings, advance) and bitmap is
+  // scaled by this ratio as it enters the resident caches, and the style's line metrics at
+  // load, so the renderer sees a font of the scaled size. 1/1 = the file as it is. Only 2-bit
+  // fonts are scaled; a 1-bit font ignores the ratio. Kerning values are not scaled (the CJK
+  // fonts this is for carry none).
+  bool load(const char* path, bool isReaderFont = false, uint8_t scaleNum = 1, uint8_t scaleDen = 1);
 
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
@@ -340,6 +345,22 @@ class SdCardFont {
   uint8_t styleCount_ = 0;
 
   char filePath_[128] = {};
+
+  // Glyph scale applied on the way into the resident caches (see load()).
+  uint8_t scaleNum_ = 1;
+  uint8_t scaleDen_ = 1;
+  bool isScaled() const { return scaleNum_ != scaleDen_; }
+  // Ceiling for pixel dimensions (never clip a glyph), nearest for bearings and advances.
+  uint16_t scaledDim(uint16_t v) const;
+  int16_t scaledBearing(int16_t v) const;
+  uint16_t scaleAdvance(uint16_t advanceFP) const;
+  // width/height/left/top/advanceX only; dataLength/dataOffset are the caller's.
+  void scaleGlyphMetrics(EpdGlyph& g) const;
+  static uint32_t bitmapBytes2Bit(uint32_t w, uint32_t h) { return (w * h + 3) / 4; }
+  // Bilinear resample of a packed 2-bit (4 levels) glyph bitmap into `dst`, which must hold
+  // bitmapBytes2Bit(dstW, dstH) bytes; dst is fully written.
+  static void resampleBitmap2Bit(const uint8_t* src, uint32_t srcW, uint32_t srcH, uint8_t* dst, uint32_t dstW,
+                                 uint32_t dstH);
 
   // Overflow context: glyphMissHandler needs to know which style it's serving
   struct OverflowContext {
