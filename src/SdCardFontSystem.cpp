@@ -199,7 +199,7 @@ bool SdCardFontSystem::cacheRebuildNeeded() const {
   for (const char* p = name; *p; p++) {
     if (*p == '/') name = p + 1;
   }
-  char line[96];
+  char line[144];
   snprintf(line, sizeof(line), "check setting=%u cand=%s scale=%u/%u cap_kb=%u valid=%u payload_kb=%u reader=%s",
            SETTINGS.sdFontFlashCache, name, scaleNum, scaleDen,
            static_cast<unsigned>(SdCardFontCache::capacity() / 1024), valid ? 1 : 0,

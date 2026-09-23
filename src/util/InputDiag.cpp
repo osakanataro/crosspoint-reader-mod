@@ -112,6 +112,39 @@ uint8_t renderLogNext = 0;
 // trailing legend and would have silently dropped whatever line was added next.
 char reportBuf[2304];
 
+// The report is written in parts that reuse reportBuf, so its size bounds one
+// part, not the whole file (the whole file outgrew it once font_copy= arrived,
+// and a full buffer used to skip the write entirely).
+void writeReportPart(HalFile& file, int len) {
+  if (len <= 0) return;
+  if (static_cast<size_t>(len) >= sizeof(reportBuf)) len = static_cast<int>(sizeof(reportBuf) - 1);
+  file.write(reinterpret_cast<const uint8_t*>(reportBuf), static_cast<size_t>(len));
+}
+
+constexpr char kReportNotes[] =
+    "\n"
+    "# render_log entries are name:ms@freeKB/maxAllocKB+consumedKB rRebuilds, oldest first.\n"
+    "# poll_gap_* is the interval between button samples. A press shorter than\n"
+    "# the gap in force at the time cannot be committed at all.\n"
+    "# One clean press = 2 episodes (down, up) and 2 edges. episodes well above\n"
+    "# edges means presses reached the pin and were dropped by the debounce.\n"
+    "# render_* covers drawing plus the panel refresh. The refresh alone is a\n"
+    "# few hundred ms, so a much larger figure is drawing time, not the panel.\n"
+    "# render_log is name:ms per render, oldest first.\n"
+    "# vert_* splits the vertical draw of the last page. cells and groups are counts,\n"
+    "# so ms/cell and ms/group say whether the cost is per call or in one place.\n"
+    "# page_* splits one page render: glyph prewarm from the card, drawing, then the\n"
+    "# panel refresh. Whichever dominates is where a page turn's cost actually is.\n"
+    "# heap_max_alloc is the largest single block still obtainable. A ZIP inflate\n"
+    "# buffer needs one contiguous block, so that number matters more than the total.\n"
+    "# build_chunk_max_ms is the single slowest Section::buildSomeMore() call this\n"
+    "# session -- it has no internal time budget, so one pathological page freezes\n"
+    "# input for its whole duration. pages=X..Y is the watermark before/after the\n"
+    "# call; the slow content is in that page range of the given spine index.\n"
+    "# build_total_max_ms is the worst render's summed buildSomeMore() time across\n"
+    "# all its chunks. A high total with a low build_chunk_max_ms means many small\n"
+    "# chunks, not one slow page -- chunks=N says how many it took to catch up.\n";
+
 // Last and worst page-render phase split.
 // What the last page scope's scan handed to the prewarm, and how often prewarm()
 // bailed at its entry (scratch alloc / zero budget). Together with the rebuild
@@ -222,7 +255,7 @@ bool aaWorstArmed = false;
 uint32_t sdClockHz = 0;
 
 constexpr uint8_t FONT_COPY_EVENTS = 3;
-char fontCopyEvents[FONT_COPY_EVENTS][112] = {};
+char fontCopyEvents[FONT_COPY_EVENTS][160] = {};
 uint32_t fontCopyTotal = 0;
 // Vertical page geometry, sampled once per chapter build (see noteVerticalLayout).
 uint16_t vertCell = 0, vertPitch = 0, vertRubyReserve = 0, vertViewportW = 0, vertViewportH = 0;
@@ -703,6 +736,11 @@ void InputDiag::flush(const bool inputActive) {
   char glyphMissBuf[GLYPH_MISS_EVENTS * 12] = "";
   formatGlyphMisses(glyphMissBuf, sizeof(glyphMissBuf));
 
+  HalFile file;
+  if (!Storage.openFileForWrite("DIAG", DIAG_PATH, file)) {
+    return;
+  }
+
   int len = snprintf(
       reportBuf, sizeof(reportBuf),
       // First line, because every question asked of this file starts with which build wrote it.
@@ -748,16 +786,7 @@ void InputDiag::flush(const bool inputActive) {
       "glyph_miss=%u last=%s\n"
       "font=%s styles=%u advY=%u glyphs=%u resident=%u src=%s flash_kb=%u scale=%u/%u\n"
       "prewarm_budget_min=%u wanted_then=%u free_then=%u clips=%u\n"
-      "sd_clock_hz=%u\n"
-      "font_copy=%s | %s | %s\n"
-      "vert_layout=cell %u pitch %u ruby_reserve %u viewport %ux%u -> %u cols\n"
-      "layout_giveup=%u last=kind%u tokens=%u free=%u max=%u\n"
-      "aa_refresh_wait=%ums (max %ums)\n"
-      "aa_phases=lsb draw %ums push %ums | msb draw %ums push %ums\n"
-      "build_page_write=%u pages %ums\n"
-      "build_font=%u calls %ums table %u/%u full_skips %u\n"
-      "ui_prewarm_heap_max=%d\n"
-      "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
+      "sd_clock_hz=%u\n",
       now, getCpuFrequencyMhz(), cpuMhzMin, pollGapMaxFullMs, pollGapMaxLowMs, samplesLowPower, debounceEpisodes,
       committedEdges, renderLastMs, renderMaxMs, renderMaxName, renderMaxAtMs, renderCount, ESP.getFreeHeap(),
       ESP.getMinFreeHeap(), ESP.getMaxAllocHeap(), pageRenderPrewarmMs, pageRenderPrewarmMaxMs, pageRenderDrawMs,
@@ -774,21 +803,33 @@ void InputDiag::flush(const bool inputActive) {
       prewarmEntryFailsTotal, scanFontOverflowTotal, glyphMissTotal, glyphMissBuf, fontName, fontStyles, fontAdvanceY,
       fontGlyphs, fontResidentBytes, fontFromFlash ? "flash" : "sd", fontFlashBytes / 1024, fontScaleNum, fontScaleDen,
       prewarmBudgetMin == UINT32_MAX ? 0 : prewarmBudgetMin, prewarmBudgetMinWanted, prewarmBudgetMinFree,
-      prewarmBudgetClips, sdClockHz,
-      fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? fontCopyTotal % FONT_COPY_EVENTS : 0],
-      fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? (fontCopyTotal + 1) % FONT_COPY_EVENTS : 1],
-      fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? (fontCopyTotal + 2) % FONT_COPY_EVENTS : 2], vertCell,
-      vertPitch, vertRubyReserve, vertViewportW, vertViewportH,
-      (vertPitch > 0 && vertViewportW > vertRubyReserve + vertCell)
-          ? static_cast<unsigned>((vertViewportW - vertRubyReserve - vertCell) / vertPitch + 1)
-          : 0u,
-      layoutGiveUps, layoutGiveUpKind, layoutGiveUpTokens, layoutGiveUpFree, layoutGiveUpMaxAlloc, aaRefreshWaitMs,
-      aaRefreshWaitMaxMs, aaLsbDrawMs, aaLsbPushMs, aaMsbDrawMs, aaMsbPushMs, buildPageWrites, buildPageWriteMs,
-      buildFontCalls, buildFontMs, buildFontTableMax, buildFontTableLimit, buildFontFullSkips, uiPrewarmHeapMax,
-      listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
-  if (len <= 0 || static_cast<size_t>(len) >= sizeof(reportBuf)) {
-    return;
-  }
+      prewarmBudgetClips, sdClockHz);
+  writeReportPart(file, len);
+
+  len = snprintf(reportBuf, sizeof(reportBuf),
+                 "font_copy=%s | %s | %s\n"
+                 "vert_layout=cell %u pitch %u ruby_reserve %u viewport %ux%u -> %u cols\n"
+                 "layout_giveup=%u last=kind%u tokens=%u free=%u max=%u\n"
+                 "aa_refresh_wait=%ums (max %ums)\n"
+                 "aa_phases=lsb draw %ums push %ums | msb draw %ums push %ums\n"
+                 "build_page_write=%u pages %ums\n"
+                 "build_font=%u calls %ums table %u/%u full_skips %u\n"
+                 "ui_prewarm_heap_max=%d\n"
+                 "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
+                 fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? fontCopyTotal % FONT_COPY_EVENTS : 0],
+                 fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? (fontCopyTotal + 1) % FONT_COPY_EVENTS : 1],
+                 fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? (fontCopyTotal + 2) % FONT_COPY_EVENTS : 2],
+                 vertCell, vertPitch, vertRubyReserve, vertViewportW, vertViewportH,
+                 (vertPitch > 0 && vertViewportW > vertRubyReserve + vertCell)
+                     ? static_cast<unsigned>((vertViewportW - vertRubyReserve - vertCell) / vertPitch + 1)
+                     : 0u,
+                 layoutGiveUps, layoutGiveUpKind, layoutGiveUpTokens, layoutGiveUpFree, layoutGiveUpMaxAlloc,
+                 aaRefreshWaitMs, aaRefreshWaitMaxMs, aaLsbDrawMs, aaLsbPushMs, aaMsbDrawMs, aaMsbPushMs,
+                 buildPageWrites, buildPageWriteMs, buildFontCalls, buildFontMs, buildFontTableMax, buildFontTableLimit,
+                 buildFontFullSkips, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount,
+                 listScreenHeight);
+  if (len < 0) len = 0;
+  if (static_cast<size_t>(len) >= sizeof(reportBuf)) len = static_cast<int>(sizeof(reportBuf) - 1);
 
   // Heap checkpoints across the last book open, in stage order (KB free/KB largest block).
   len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "open_heap=");
@@ -815,42 +856,13 @@ void InputDiag::flush(const bool inputActive) {
     len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u@%u/%u%+d r%u ", entry.name, entry.ms,
                     entry.heapFreeKb, entry.heapMaxAllocKb, entry.heapDeltaKb, entry.miniRebuilds);
   }
-  if (static_cast<size_t>(len) >= sizeof(reportBuf)) {
-    return;
+  if (static_cast<size_t>(len) < sizeof(reportBuf)) {
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "\n");
   }
-
-  len += snprintf(reportBuf + len, sizeof(reportBuf) - len,
-                  "\n\n"
-                  "# render_log entries are name:ms@freeKB/maxAllocKB+consumedKB rRebuilds, oldest first.\n"
-                  "# poll_gap_* is the interval between button samples. A press shorter than\n"
-                  "# the gap in force at the time cannot be committed at all.\n"
-                  "# One clean press = 2 episodes (down, up) and 2 edges. episodes well above\n"
-                  "# edges means presses reached the pin and were dropped by the debounce.\n"
-                  "# render_* covers drawing plus the panel refresh. The refresh alone is a\n"
-                  "# few hundred ms, so a much larger figure is drawing time, not the panel.\n"
-                  "# render_log is name:ms per render, oldest first.\n"
-                  "# vert_* splits the vertical draw of the last page. cells and groups are counts,\n"
-                  "# so ms/cell and ms/group say whether the cost is per call or in one place.\n"
-                  "# page_* splits one page render: glyph prewarm from the card, drawing, then the\n"
-                  "# panel refresh. Whichever dominates is where a page turn's cost actually is.\n"
-                  "# heap_max_alloc is the largest single block still obtainable. A ZIP inflate\n"
-                  "# buffer needs one contiguous block, so that number matters more than the total.\n"
-                  "# build_chunk_max_ms is the single slowest Section::buildSomeMore() call this\n"
-                  "# session -- it has no internal time budget, so one pathological page freezes\n"
-                  "# input for its whole duration. pages=X..Y is the watermark before/after the\n"
-                  "# call; the slow content is in that page range of the given spine index.\n"
-                  "# build_total_max_ms is the worst render's summed buildSomeMore() time across\n"
-                  "# all its chunks. A high total with a low build_chunk_max_ms means many small\n"
-                  "# chunks, not one slow page -- chunks=N says how many it took to catch up.\n");
-  if (len <= 0) {
-    return;
-  }
-
-  HalFile file;
-  if (!Storage.openFileForWrite("DIAG", DIAG_PATH, file)) {
-    return;
-  }
-  file.write(reportBuf, strnlen(reportBuf, sizeof(reportBuf)));
+  writeReportPart(file, len);
+  // The notes are constant, so they go from flash straight to the card and never
+  // compete with the figures above for room in reportBuf.
+  file.write(reinterpret_cast<const uint8_t*>(kReportNotes), sizeof(kReportNotes) - 1);
 
   if (capturedLogsPending) {
     HalFile logFile;
