@@ -1,5 +1,6 @@
 #include "JpegToFramebufferConverter.h"
 
+#include <BuildScratch.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <memory>
 #include <new>
+#include <optional>
 
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
@@ -478,16 +480,44 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
                                                      const RenderConfig& config) {
   LOG_DBG("JPG", "Decoding JPEG: %s", imagePath.c_str());
 
+  // The decoder object (17,884 B on the C3) must be one block. A reader session
+  // fragments the heap until the largest block sits just below that (17,396 B
+  // was measured twice, 2026-09-23), and then every JPEG in the chapter failed
+  // at once and later showed as a placeholder. A cache-only decode draws nothing,
+  // so it can borrow the framebuffer bytes for the object instead -- the way the
+  // PNG streamer and the ZIP inflate already do. Declared before the decoder so
+  // the loan outlives it.
+  std::optional<GfxRenderer::FrameBufferLoan> decoderLoan;
+  uint8_t* decoderScratch = nullptr;
+  if (config.cacheOnly && ESP.getMaxAllocHeap() < sizeof(JPEGDEC) + 1024) {
+    decoderLoan.emplace(renderer);
+    decoderScratch = buildscratch::claim(sizeof(JPEGDEC));
+  }
+
   size_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
+  const size_t minFreeHeap =
+      decoderScratch ? MIN_FREE_HEAP_FOR_JPEG - JPEG_DECODER_APPROX_SIZE : MIN_FREE_HEAP_FOR_JPEG;
+  if (freeHeap < minFreeHeap) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, minFreeHeap);
+    if (decoderScratch) buildscratch::release(decoderScratch);
     return false;
   }
 
-  std::unique_ptr<JPEGDEC> jpeg(new (std::nothrow) JPEGDEC());
+  JPEGDEC* jpeg = decoderScratch ? new (decoderScratch) JPEGDEC() : new (std::nothrow) JPEGDEC();
   if (!jpeg) {
     LOG_ERR("JPG", "Failed to allocate JPEG decoder");
     return false;
+  }
+  const ScopedCleanup freeDecoder{[jpeg, decoderScratch]() {
+    if (decoderScratch) {
+      jpeg->~JPEGDEC();
+      buildscratch::release(decoderScratch);
+    } else {
+      delete jpeg;
+    }
+  }};
+  if (decoderScratch) {
+    IMG_DIAG("jpeg decoder in lent framebuffer max=%u free=%u", ESP.getMaxAllocHeap(), ESP.getFreeHeap());
   }
 
   JpegContext ctx;
