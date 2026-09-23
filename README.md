@@ -36,6 +36,61 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
 - フォントの明朝／ゴシック混植は実施しない
   - 1冊のなかでフォント指定を途中から変える機能について
   - 商業EPUBの91%が指定を持つが1冊あたり中央値40箇所で、2書体常駐のメモリ代償に見合わない
+- 組版やレイアウトについての出典として下記を採用している
+  - EPUB 3.3 仕様書 https://www.w3.org/TR/epub/
+  - EPUB 3.4 テスト仕様 https://w3c.github.io/epub-tests/index.html
+  - 日本語組版処理の要件(JLREQ) https://www.w3.org/TR/jlreq/
+    - 特に JLREQ 3.3.2 ルビの付け方
+  - Unicode Vertical Text Layout(UAX #50) https://www.unicode.org/reports/tr50/
+  - Unicode Line Breaking Algorithm https://www.unicode.org/reports/tr14/
+  - 電書協 EPUB 3 制作ガイド https://dpfj.or.jp/counsel/guide
+  - KADOKAWA-EPUB 制作仕様 および KADOKAWA-EPUB 再現指標 https://kadokawa-epub.bookwalker.co.jp/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89
+- 開発に際して下記URLをClaude codeに読み込ませている(実装内容まとめで使う略語)
+  - 本家 https://github.com/crosspoint-reader/crosspoint-reader
+  - JP版 https://github.com/zrn-ns/crosspoint-jp
+  - CJK版 https://github.com/CrossPoint-CJK/crosspoint-reader-cjk (旧URL https://github.com/aBER0724/crosspoint-reader-cjk )
+  - Yomuka版 https://github.com/ponto1216-ai/crosspoint-jp
+  - 抹茶版 https://github.com/eszter007/matcha-reader
+  - freeink-sdk https://github.com/Free-Ink/freeink-sdk
+  - 以下は日本語縦書きには直接関係しない実装で、UIなどの機能面の参考として読む（2026/09/09 追加。同日、3つとも縦書き・ルビ・禁則・text-orientation などの実装が無いことをソースと履歴で確認済み）
+    - Papyrix版 https://github.com/bigbag/papyrix-reader
+    - Inx版 https://github.com/obijuankenobiii/inx
+    - witchhunt版 https://github.com/jpirnay/witchhunt-reader
+    - crossmux版 https://github.com/0x1abin/crossmux
+
+各フォークが本家のどのリリースまで取り込んでいるか（2026/09/22時点、GitHubの履歴を照合）。
+
+| 版 | 取り込み済みの最新 | 本家との世代差 | 使用しているfreeink-sdk |
+|---|---|---|---|
+| 本家 | 1.6.5rc（2026/09/14 先行版。developの先端はさらに31件先、うち #2332 画像まわりの断片化対策、#3600 一覧の行を必要な分だけ作る、#3618 組み込むUI言語を選べる、#3528 語間・字間の設定、#3608 転送後に Library の索引を作り直す） | ― | ffcbb1c |
+| **OST版 新ツリー** `feat/vertical-1.6.0based` | 1.6.0（2026/09/05） | 1.6.5rc が未取り込み（1.6.0から31件、develop先端までさらに31件）。#2925（段階表示JPEGの分離走査）と #3581（合字表の宙づり参照）は 09/17 に個別に取り込み済み。残りで当版に効きそうなのは断片化対処の連作 #3518／#3521／#3527（章レイアウト前のフォントキャッシュ解放）・#3398（フォント目録を1領域に）・#2332（画像まわり）と、#3439（X3のアンチエイリアス安定化）。いずれも 1.6.5 起点の作り直しで本家のまま採る | fde240f |
+| 抹茶版 | 1.6.0（2026/09/20、安定版。本家 develop 09/20 時点 `8c84ef32` を含む） | 1.5.0 以来の安定版。X4 Pro・X4C・Sticky 対応、辞書引き（長押し・ボタン選択・縦書き対応・ページ跨ぎの語）、漫画の吹き出しの語の引き当て（変換のやり直しが必要）。独自分は辞書引き（漫画の吹き出しの語の引き当て、触れる操作）が中心。#282 は日本語の添え書体の区間表を Regular／Bold で共有して読み込みの山を半分にし、読み込み前に字形の保存を捨てる（20pt NotoSansJP で 26.6KB×2 が入らなかった件。当版の書体は区間が密で1書体3KBのため無縁） | 4b17a7bb |
+| CJK版 | **本家タグを1つも含まない**（0.4.2、2026/09/05） | 本家と共通の祖先を持たない再構成履歴。以後の同期なし | 自前fork 62976c5 |
+| JP版 | 1.2.0（2026/04/03） | 1.3.0 以降すべて未取り込み。独自開発は活発（v0.3.2＝2026/09/19: #149 眠り画面の動的壁紙、#150 ホームの読書進捗率と Vega テーマ。09/08以降: **禁則処理の行分割 #144**、字形の鮮明さ設定 #145、UI書体のディセンダ #146、整形済みブロックの行間 #147、フォルダを開くたびの全走査をやめる #148/#136、横向きUI #138） | e38baecc |
+| Yomuka版 | 1.2.0（2026/04/03） | JP版からの派生のため同じ。独自開発は活発（yomuka-v0.7.6.0＝2026/09/17: SD書体の作業領域をページ間で使い回す（本家の「収まれば保持」方式の移植で当版は既に同等）、ルビ・上付きなどの小さい字に 10pt 専用の書体データを使う、縦中横の桁数を2／3桁で選べる、曲線引用符 ‘’“” を縦の升に正立で置く（`3f631371`／BIZUD向け補正 `9dcfc3dc`）、全冊の事前生成中のSD書き込み失敗を安全に止める） | 30011399 |
+| crossmux版 | 1.6.0（2026/09/05） | 本家 1.6.0 起点（1.6.5rc は未取り込み）で独自 618 件。中国語（簡体字）対応の community fork。Apps（ゲーム・道具）、微信読書、AirPage、読書統計、Bluetooth ページめくり、33 言語を1 firmware に、C3 の読書メモリの上限管理。SD 書体は本家と同じ cpfont v4。**縦書き・禁則なし**（2026/09/22 に確認対象へ追加） | 自前fork 094976e |
+
+各版の最新リリース（先行版を含む。安定版だけを見るとJP版・Yomuka版の日付つき開発版や、
+Inx版・witchhunt版・抹茶版の先行版を取り落とす）:
+
+| 版 | 最新 | 日付 |
+|---|---|---|
+| 本家 | 1.6.5rc（先行版） | 2026/09/14 |
+| Yomuka版 | yomuka-v0.7.6.0 | 2026/09/17 |
+| JP版 | v0.3.2 | 2026/09/19 |
+| 抹茶版 | 1.6.0 | 2026/09/20 |
+| Papyrix版 | v1.31.0 | 2026/09/18 |
+| Inx版 | 1.0.20-BETA（先行版） | 2026/09/11 |
+| witchhunt版 | 2.31（2.31.0-rc.1 も同日） | 2026/09/20 |
+| **OST版** | 20260918-2（先行版） | 2026/09/18 |
+| crossmux版 | 1.6.0（stable／nightly タグは動く先行版） | 2026/09/20 |
+| CJK版 | 0.4.2 | 2026/09/05 |
+
+CJK版だけは freeink-sdk 自体も自前でforkしていて、SSD1677パネル向けの修正を独自に入れている。
+他は本家のfreeink-sdkをそのまま参照している。
+
+# 最近の更新内容について(2026/09/22)
+
 - 章の境目の待ちを減らすため、読書中の待機時間に次の章を先に組み立てる（2026/09/09〜）
   - 商業書籍で章をまたぐたびに7秒前後待つのを、ページを表示して1.5秒以上操作が無い間に少しずつ済ませる
   - ボタンの読み取りを止めないよう1回の作業を25ms以内に区切り、字形の一時記憶を汚さないよう配置計算の前後で空にする
@@ -117,56 +172,7 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
 - 内蔵字形のページ枠は同じ書体で二重に取らない／挿絵の保存が無いページの四角の下書きは描かない（2026/09/10〜、抹茶版から）
   - 前者は読まれない枠が4枠の1つを潰していた分の解消、後者は書き換え1回（約0.5秒）の削減
   - 挿絵ページが白黒→階調の2段階で出るのはX3の階調表示の仕組み上の挙動で、実用上の不都合が無いためこのままとする
-- 組版やレイアウトについての出典として下記を採用している
-  - EPUB 3.3 仕様書 https://www.w3.org/TR/epub/
-  - EPUB 3.4 テスト仕様 https://w3c.github.io/epub-tests/index.html
-  - 日本語組版処理の要件(JLREQ) https://www.w3.org/TR/jlreq/
-    - 特に JLREQ 3.3.2 ルビの付け方
-  - Unicode Vertical Text Layout(UAX #50) https://www.unicode.org/reports/tr50/
-  - 電書協 EPUB 3 制作ガイド https://dpfj.or.jp/counsel/guide
-  - KADOKAWA-EPUB 制作仕様 および KADOKAWA-EPUB 再現指標 https://kadokawa-epub.bookwalker.co.jp/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89
-- 開発に際して下記URLをClaude codeに読み込ませている(実装内容まとめで使う略語)
-  - 本家 https://github.com/crosspoint-reader/crosspoint-reader
-  - JP版 https://github.com/zrn-ns/crosspoint-jp
-  - CJK版 https://github.com/CrossPoint-CJK/crosspoint-reader-cjk (旧URL https://github.com/aBER0724/crosspoint-reader-cjk )
-  - Yomuka版 https://github.com/ponto1216-ai/crosspoint-jp
-  - 抹茶版 https://github.com/eszter007/matcha-reader
-  - freeink-sdk https://github.com/Free-Ink/freeink-sdk
-  - 以下の3つは日本語縦書きには直接関係しない実装で、UIなどの機能面の参考として読む（2026/09/09 追加。同日、3つとも縦書き・ルビ・禁則・text-orientation などの実装が無いことをソースと履歴で確認済み）
-    - Papyrix版 https://github.com/bigbag/papyrix-reader
-    - Inx版 https://github.com/obijuankenobiii/inx
-    - witchhunt版 https://github.com/jpirnay/witchhunt-reader
-
-各フォークが本家のどのリリースまで取り込んでいるか（2026/09/22時点、GitHubの履歴を照合）。
-
-| 版 | 取り込み済みの最新 | 本家との世代差 | 使用しているfreeink-sdk |
-|---|---|---|---|
-| 本家 | 1.6.5rc（2026/09/14 先行版。developの先端はさらに31件先、うち #2332 画像まわりの断片化対策、#3600 一覧の行を必要な分だけ作る、#3618 組み込むUI言語を選べる、#3528 語間・字間の設定、#3608 転送後に Library の索引を作り直す） | ― | ffcbb1c |
-| **OST版 新ツリー** `feat/vertical-1.6.0based` | 1.6.0（2026/09/05） | 1.6.5rc が未取り込み（1.6.0から31件、develop先端までさらに31件）。#2925（段階表示JPEGの分離走査）と #3581（合字表の宙づり参照）は 09/17 に個別に取り込み済み。残りで当版に効きそうなのは断片化対処の連作 #3518／#3521／#3527（章レイアウト前のフォントキャッシュ解放）・#3398（フォント目録を1領域に）・#2332（画像まわり）と、#3439（X3のアンチエイリアス安定化）。いずれも 1.6.5 起点の作り直しで本家のまま採る | fde240f |
-| 抹茶版 | 1.6.0（2026/09/20、安定版。本家 develop 09/20 時点 `8c84ef32` を含む） | 1.5.0 以来の安定版。X4 Pro・X4C・Sticky 対応、辞書引き（長押し・ボタン選択・縦書き対応・ページ跨ぎの語）、漫画の吹き出しの語の引き当て（変換のやり直しが必要）。独自分は辞書引き（漫画の吹き出しの語の引き当て、触れる操作）が中心。#282 は日本語の添え書体の区間表を Regular／Bold で共有して読み込みの山を半分にし、読み込み前に字形の保存を捨てる（20pt NotoSansJP で 26.6KB×2 が入らなかった件。当版の書体は区間が密で1書体3KBのため無縁） | 4b17a7bb |
-| CJK版 | **本家タグを1つも含まない**（0.4.2、2026/09/05） | 本家と共通の祖先を持たない再構成履歴。以後の同期なし | 自前fork 62976c5 |
-| JP版 | 1.2.0（2026/04/03） | 1.3.0 以降すべて未取り込み。独自開発は活発（v0.3.2＝2026/09/19: #149 眠り画面の動的壁紙、#150 ホームの読書進捗率と Vega テーマ。09/08以降: **禁則処理の行分割 #144**、字形の鮮明さ設定 #145、UI書体のディセンダ #146、整形済みブロックの行間 #147、フォルダを開くたびの全走査をやめる #148/#136、横向きUI #138） | e38baecc |
-| Yomuka版 | 1.2.0（2026/04/03） | JP版からの派生のため同じ。独自開発は活発（yomuka-v0.7.6.0＝2026/09/17: SD書体の作業領域をページ間で使い回す（本家の「収まれば保持」方式の移植で当版は既に同等）、ルビ・上付きなどの小さい字に 10pt 専用の書体データを使う、縦中横の桁数を2／3桁で選べる、曲線引用符 ‘’“” を縦の升に正立で置く（`3f631371`／BIZUD向け補正 `9dcfc3dc`）、全冊の事前生成中のSD書き込み失敗を安全に止める） | 30011399 |
-| crossmux版 | 1.6.0（2026/09/05） | 本家 1.6.0 起点（1.6.5rc は未取り込み）で独自 618 件。中国語（簡体字）対応の community fork。Apps（ゲーム・道具）、微信読書、AirPage、読書統計、Bluetooth ページめくり、33 言語を1 firmware に、C3 の読書メモリの上限管理。SD 書体は本家と同じ cpfont v4。**縦書き・禁則なし**（2026/09/22 に確認対象へ追加） | 自前fork 094976e |
-
-各版の最新リリース（先行版を含む。安定版だけを見るとJP版・Yomuka版の日付つき開発版や、
-Inx版・witchhunt版・抹茶版の先行版を取り落とす）:
-
-| 版 | 最新 | 日付 |
-|---|---|---|
-| 本家 | 1.6.5rc（先行版） | 2026/09/14 |
-| Yomuka版 | yomuka-v0.7.6.0 | 2026/09/17 |
-| JP版 | v0.3.2 | 2026/09/19 |
-| 抹茶版 | 1.6.0 | 2026/09/20 |
-| Papyrix版 | v1.31.0 | 2026/09/18 |
-| Inx版 | 1.0.20-BETA（先行版） | 2026/09/11 |
-| witchhunt版 | 2.31（2.31.0-rc.1 も同日） | 2026/09/20 |
-| **OST版** | 20260918-2（先行版） | 2026/09/18 |
-| crossmux版 | 1.6.0（stable／nightly タグは動く先行版） | 2026/09/20 |
-| CJK版 | 0.4.2 | 2026/09/05 |
-
-CJK版だけは freeink-sdk 自体も自前でforkしていて、SSD1677パネル向けの修正を独自に入れている。
-他は本家のfreeink-sdkをそのまま参照している。
+  
 
 ## 1.6.0ベースへの作り直し（2026/09/06〜） by claude code
 
