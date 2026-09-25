@@ -646,9 +646,11 @@ void SdCardFont::computeStyleFileOffsets(PerStyle& s, uint32_t baseOffset) {
 
 // --- Load ---
 
-uint16_t SdCardFont::scaledDim(const uint16_t v) const {
-  return static_cast<uint16_t>((static_cast<uint32_t>(v) * scaleNum_ + scaleDen_ - 1) / scaleDen_);
-}
+namespace {
+// Floor and ceiling of a / b for b > 0 and any sign of a (C++ division truncates toward zero).
+int32_t floorDiv(const int32_t a, const int32_t b) { return a >= 0 ? a / b : -((-a + b - 1) / b); }
+int32_t ceilDiv(const int32_t a, const int32_t b) { return a >= 0 ? (a + b - 1) / b : -((-a) / b); }
+}  // namespace
 
 int16_t SdCardFont::scaledBearing(const int16_t v) const {
   const int32_t mag = (static_cast<int32_t>(v < 0 ? -v : v) * scaleNum_ + scaleDen_ / 2) / scaleDen_;
@@ -660,44 +662,73 @@ uint16_t SdCardFont::scaleAdvance(const uint16_t advanceFP) const {
   return static_cast<uint16_t>((static_cast<uint32_t>(advanceFP) * scaleNum_ + scaleDen_ / 2) / scaleDen_);
 }
 
+// Rounding the box's size and its origin separately (ceiling and nearest) left the ink up to
+// a pixel off its scaled position, and the resample then stretched it to fill the rounded box
+// at 1.13-1.17x instead of 9/8. A turned bracket, centred in its cell by that box, sat a pixel
+// nearer the column axis than the real 18 pt one (2026-09-25). Scaling the edges and rounding
+// outward keeps the ink where the exact scale puts it.
+SdCardFont::ScaledBox SdCardFont::scaledBox(const EpdGlyph& g) const {
+  const int32_t num = scaleNum_;
+  const int32_t den = scaleDen_;
+  ScaledBox box{};
+  if (g.width == 0 || g.height == 0) {
+    box.left = scaledBearing(g.left);
+    box.top = scaledBearing(g.top);
+    return box;
+  }
+  const int32_t x0 = floorDiv(static_cast<int32_t>(g.left) * num, den);
+  const int32_t x1 = ceilDiv((static_cast<int32_t>(g.left) + g.width) * num, den);
+  const int32_t y1 = ceilDiv(static_cast<int32_t>(g.top) * num, den);                // top edge, up is +
+  const int32_t y0 = floorDiv((static_cast<int32_t>(g.top) - g.height) * num, den);  // bottom edge
+  box.left = static_cast<int16_t>(x0);
+  box.top = static_cast<int16_t>(y1);
+  box.width = static_cast<uint16_t>(std::min<int32_t>(x1 - x0, 255));
+  box.height = static_cast<uint16_t>(std::min<int32_t>(y1 - y0, 255));
+  return box;
+}
+
 void SdCardFont::scaleGlyphMetrics(EpdGlyph& g) const {
   if (!isScaled()) return;
-  g.width = static_cast<uint8_t>(std::min<uint16_t>(scaledDim(g.width), 255));
-  g.height = static_cast<uint8_t>(std::min<uint16_t>(scaledDim(g.height), 255));
-  g.left = scaledBearing(g.left);
-  g.top = scaledBearing(g.top);
+  const ScaledBox box = scaledBox(g);
+  g.width = static_cast<uint8_t>(box.width);
+  g.height = static_cast<uint8_t>(box.height);
+  g.left = box.left;
+  g.top = box.top;
   g.advanceX = scaleAdvance(g.advanceX);
 }
 
-// Sample centres map (dst + 0.5) * src/dst - 0.5, in 8.8 fixed point, clamped at the edges;
-// the four neighbours are weighted and the 0..3 result rounded back to a level. Integer only:
-// the ESP32-C3 has no FPU.
-void SdCardFont::resampleBitmap2Bit(const uint8_t* src, const uint32_t srcW, const uint32_t srcH, uint8_t* dst,
-                                    const uint32_t dstW, const uint32_t dstH) {
-  memset(dst, 0, bitmapBytes2Bit(dstW, dstH));
-  if (srcW == 0 || srcH == 0 || dstW == 0 || dstH == 0) return;
-  const auto sample = [&](const uint32_t x, const uint32_t y) -> uint32_t {
-    const uint32_t pos = y * srcW + x;
+// Each destination pixel centre is carried back through the exact ratio into the source
+// glyph's coordinates (source pixel centres at integers, in 8.8 fixed point) and the four
+// neighbours are blended; neighbours outside the source box count as blank ink, which is
+// what they are. Integer only: the ESP32-C3 has no FPU.
+void SdCardFont::resampleBitmap2Bit(const uint8_t* src, const EpdGlyph& g, uint8_t* dst, const ScaledBox& box) const {
+  memset(dst, 0, bitmapBytes2Bit(box.width, box.height));
+  const int32_t srcW = g.width;
+  const int32_t srcH = g.height;
+  if (srcW == 0 || srcH == 0 || box.width == 0 || box.height == 0) return;
+  const int32_t num = scaleNum_;
+  const int32_t den = scaleDen_;
+  const auto sample = [&](const int32_t x, const int32_t y) -> uint32_t {
+    if (x < 0 || y < 0 || x >= srcW || y >= srcH) return 0;
+    const uint32_t pos = static_cast<uint32_t>(y * srcW + x);
     return (src[pos >> 2] >> ((3 - (pos & 3)) * 2)) & 0x3;
   };
-  for (uint32_t dy = 0; dy < dstH; dy++) {
-    int32_t fy = static_cast<int32_t>(((2 * dy + 1) * srcH * 128) / dstH) - 128;  // 8.8
-    if (fy < 0) fy = 0;
-    uint32_t y0 = static_cast<uint32_t>(fy >> 8);
-    if (y0 >= srcH) y0 = srcH - 1;
-    const uint32_t y1 = std::min(y0 + 1, srcH - 1);
-    const uint32_t wy = (y0 == srcH - 1) ? 0 : static_cast<uint32_t>(fy & 255);
-    for (uint32_t dx = 0; dx < dstW; dx++) {
-      int32_t fx = static_cast<int32_t>(((2 * dx + 1) * srcW * 128) / dstW) - 128;
-      if (fx < 0) fx = 0;
-      uint32_t x0 = static_cast<uint32_t>(fx >> 8);
-      if (x0 >= srcW) x0 = srcW - 1;
-      const uint32_t x1 = std::min(x0 + 1, srcW - 1);
-      const uint32_t wx = (x0 == srcW - 1) ? 0 : static_cast<uint32_t>(fx & 255);
-      const uint32_t v = sample(x0, y0) * (256 - wx) * (256 - wy) + sample(x1, y0) * wx * (256 - wy) +
-                         sample(x0, y1) * (256 - wx) * wy + sample(x1, y1) * wx * wy;  // level * 65536
-      const uint32_t level = (v + 32768) >> 16;                                        // 0..3
-      const uint32_t pos = dy * dstW + dx;
+  for (int32_t dy = 0; dy < box.height; dy++) {
+    // Row dy's centre sits (box.top - dy - 0.5) above the baseline in scaled pixels; source
+    // row j's centre sits (g.top - j - 0.5) above it in source pixels.
+    const int32_t fy =
+        static_cast<int32_t>(g.top) * 256 - floorDiv((2 * (box.top - dy) - 1) * den * 128, num) - 128;  // 8.8
+    const int32_t y0 = fy >> 8;
+    const uint32_t wy = static_cast<uint32_t>(fy & 255);
+    for (int32_t dx = 0; dx < box.width; dx++) {
+      const int32_t fx =
+          floorDiv((2 * (box.left + dx) + 1) * den * 128, num) - static_cast<int32_t>(g.left) * 256 - 128;  // 8.8
+      const int32_t x0 = fx >> 8;
+      const uint32_t wx = static_cast<uint32_t>(fx & 255);
+      const uint32_t v = sample(x0, y0) * (256 - wx) * (256 - wy) + sample(x0 + 1, y0) * wx * (256 - wy) +
+                         sample(x0, y0 + 1) * (256 - wx) * wy + sample(x0 + 1, y0 + 1) * wx * wy;  // level * 65536
+      const uint32_t level = (v + 32768) >> 16;                                                    // 0..3
+      const uint32_t pos = static_cast<uint32_t>(dy * box.width + dx);
       dst[pos >> 2] |= static_cast<uint8_t>(level << ((3 - (pos & 3)) * 2));
     }
   }
@@ -1477,9 +1508,8 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       EpdGlyph& glyph = s.miniGlyphs[mapIdx];
       // Source bytes on the card, and the bytes the arena will hold (they differ when scaled).
       const uint32_t srcLen = glyph.dataLength;
-      const uint32_t dstW = isScaled() ? scaledDim(glyph.width) : glyph.width;
-      const uint32_t dstH = isScaled() ? scaledDim(glyph.height) : glyph.height;
-      const uint32_t len = isScaled() ? bitmapBytes2Bit(dstW, dstH) : srcLen;
+      const ScaledBox dstBox = isScaled() ? scaledBox(glyph) : ScaledBox{};
+      const uint32_t len = isScaled() ? bitmapBytes2Bit(dstBox.width, dstBox.height) : srcLen;
 
       if (srcLen == 0) {
         glyph.dataOffset = span;
@@ -1545,8 +1575,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
           freeStyleMiniData(s);
           return static_cast<int>(cpCount);
         }
-        resampleBitmap2Bit(scaleScratch.get(), glyph.width, glyph.height, s.miniBitmapChunks[chunkIdx] + off, dstW,
-                           dstH);
+        resampleBitmap2Bit(scaleScratch.get(), glyph, s.miniBitmapChunks[chunkIdx] + off, dstBox);
         scaleGlyphMetrics(glyph);
         glyph.dataLength = static_cast<uint16_t>(len);
       } else if (file.read(s.miniBitmapChunks[chunkIdx] + off, len) != static_cast<int>(len)) {
@@ -2062,16 +2091,15 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
 
   if (self->isScaled()) {
     if (tempBitmap) {
-      const uint32_t dstW = self->scaledDim(tempGlyph.width);
-      const uint32_t dstH = self->scaledDim(tempGlyph.height);
-      const uint32_t dstLen = bitmapBytes2Bit(dstW, dstH);
+      const ScaledBox dstBox = self->scaledBox(tempGlyph);
+      const uint32_t dstLen = bitmapBytes2Bit(dstBox.width, dstBox.height);
       uint8_t* scaledBitmap = new (std::nothrow) uint8_t[dstLen];
       if (!scaledBitmap) {
         LOG_ERR("SDCF", "Overflow: failed to allocate %u bytes for scaled U+%04X", dstLen, codepoint);
         delete[] tempBitmap;
         return nullptr;
       }
-      resampleBitmap2Bit(tempBitmap, tempGlyph.width, tempGlyph.height, scaledBitmap, dstW, dstH);
+      self->resampleBitmap2Bit(tempBitmap, tempGlyph, scaledBitmap, dstBox);
       delete[] tempBitmap;
       tempBitmap = scaledBitmap;
       tempGlyph.dataLength = static_cast<uint16_t>(dstLen);

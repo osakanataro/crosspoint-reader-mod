@@ -360,17 +360,25 @@ class SdCardFont {
   uint8_t scaleNum_ = 1;
   uint8_t scaleDen_ = 1;
   bool isScaled() const { return scaleNum_ != scaleDen_; }
-  // Ceiling for pixel dimensions (never clip a glyph), nearest for bearings and advances.
-  uint16_t scaledDim(uint16_t v) const;
+  // Nearest for bearings, ascender/descender and advances.
   int16_t scaledBearing(int16_t v) const;
   uint16_t scaleAdvance(uint16_t advanceFP) const;
+  // The scaled glyph box: the source box's edges multiplied by the exact ratio and rounded
+  // outward, so the ink keeps its scaled position inside it (never clipped, never shifted).
+  struct ScaledBox {
+    int16_t left;
+    int16_t top;
+    uint16_t width;
+    uint16_t height;
+  };
+  ScaledBox scaledBox(const EpdGlyph& g) const;
   // width/height/left/top/advanceX only; dataLength/dataOffset are the caller's.
   void scaleGlyphMetrics(EpdGlyph& g) const;
   static uint32_t bitmapBytes2Bit(uint32_t w, uint32_t h) { return (w * h + 3) / 4; }
-  // Bilinear resample of a packed 2-bit (4 levels) glyph bitmap into `dst`, which must hold
-  // bitmapBytes2Bit(dstW, dstH) bytes; dst is fully written.
-  static void resampleBitmap2Bit(const uint8_t* src, uint32_t srcW, uint32_t srcH, uint8_t* dst, uint32_t dstW,
-                                 uint32_t dstH);
+  // Bilinear resample of a packed 2-bit (4 levels) glyph bitmap `src` (box `g`, unscaled) into
+  // `dst` (box `box` = scaledBox(g)) at exactly scaleNum_/scaleDen_; dst must hold
+  // bitmapBytes2Bit(box.width, box.height) bytes and is fully written.
+  void resampleBitmap2Bit(const uint8_t* src, const EpdGlyph& g, uint8_t* dst, const ScaledBox& box) const;
 
   // Overflow context: glyphMissHandler needs to know which style it's serving
   struct OverflowContext {
