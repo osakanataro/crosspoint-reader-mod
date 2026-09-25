@@ -515,8 +515,10 @@ struct HeapWalkCtx {
   uint32_t freeBytes;
   uint32_t dropped;
 };
-constexpr uint32_t HEAP_MAP_MIN_USED = 256;
-constexpr uint32_t HEAP_MAP_MIN_FREE = 1024;
+// Every used block: the fragmentation seen after reading came from ~15 blocks under 256 B left
+// inside the one large free region (2026-09-25), so the small ones are the ones to name.
+constexpr uint32_t HEAP_MAP_MIN_USED = 0;
+constexpr uint32_t HEAP_MAP_MIN_FREE = 256;
 
 // Runs with the heap locked: no allocation, no I/O, only copying into the prepared array.
 bool heapWalkRecord(walker_heap_into_t, walker_block_info_t block, void* user) {
@@ -553,7 +555,7 @@ bool heapWalkRecord(walker_heap_into_t, walker_block_info_t block, void* user) {
 
 void InputDiag::dumpHeapMap(const char* label) {
   static bool bootWritten = false;
-  constexpr uint16_t CAPACITY = 240;
+  constexpr uint16_t CAPACITY = 400;  // 400 x 36 B = 14.4 KB, freed before the file is closed
   const uint32_t freeBefore = ESP.getFreeHeap();
   const uint32_t maxBefore = ESP.getMaxAllocHeap();
   auto* recs = static_cast<HeapBlockRec*>(malloc(sizeof(HeapBlockRec) * CAPACITY));
