@@ -214,6 +214,15 @@ class InputDiag {
   // image failures happen mid-build under RenderLock where the periodic flush never runs. The
   // ring keeps the last 24 events, enough for every image in the diagnostic EPUB.
   static void noteImageEvent(const char* line);
+  // A named point for heap_min_log only: marks where a render or build has got to, so a
+  // fall of the heap low-water mark can be placed between two of them.
+  static void notePoint(const char* tag);
+  // Writes every heap block (used ones of 256 B and more with their first 24 bytes, free
+  // ones of 1 KB and more) to /heap-map-boot.txt the first time in a boot and to
+  // /heap-map.txt after that, so the Home heap after reading can be set beside the Home
+  // heap before any book. The first word of a C++ object is its vtable, which the ELF's
+  // symbol table names; string data reads as text.
+  static void dumpHeapMap(const char* label);
 
   // Snapshot the RTC log ring. A failure capture displaces a pending informational one: the
   // periodic flush is seconds away, and a slow render taken just before a build failed used to
@@ -265,6 +274,8 @@ class InputDiag {
   static void noteAaAborted() {}
   static void noteUiPrewarmFailure() {}
   static void noteImageEvent(const char*) {}
+  static void notePoint(const char*) {}
+  static void dumpHeapMap(const char*) {}
   static void captureLogs(const char*, bool = false) {}
   static void flushNow() {}
   static void flush(bool) {}

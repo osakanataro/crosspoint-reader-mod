@@ -6,7 +6,9 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <SdCardFont.h>
+#include <esp_heap_caps.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -143,7 +145,11 @@ constexpr char kReportNotes[] =
     "# call; the slow content is in that page range of the given spine index.\n"
     "# build_total_max_ms is the worst render's summed buildSomeMore() time across\n"
     "# all its chunks. A high total with a low build_chunk_max_ms means many small\n"
-    "# chunks, not one slow page -- chunks=N says how many it took to catch up.\n";
+    "# chunks, not one slow page -- chunks=N says how many it took to catch up.\n"
+    "# heap_min_log lists each fall of the heap low-water mark (512 B or more), newest\n"
+    "# first. The fall happened after the `after` point and before the `in` hook saw it.\n"
+    "# A page render passes, in order: open:built (start) pg:load pg:prewarm pg:bw pg:disp,\n"
+    "# then pg:planes, or pg:scratch pg:lsb pg:msb, and ends at open:page1.\n";
 
 // Last and worst page-render phase split.
 // What the last page scope's scan handed to the prewarm, and how often prewarm()
@@ -256,6 +262,54 @@ uint32_t sdClockHz = 0;
 
 constexpr uint8_t FONT_COPY_EVENTS = 3;
 char fontCopyEvents[FONT_COPY_EVENTS][160] = {};
+
+// When the heap watermark (ESP.getMinFreeHeap) falls, and what had just run.
+// The watermark is global and says nothing about when; checking it at every
+// hook below brackets the drop between two named points: `in` is the hook that
+// saw it (the work that just finished), `after` the named point before that.
+// A drop seen from the idle loop keeps the last named point as its bracket.
+constexpr uint8_t HEAP_MIN_EVENTS = 6;
+constexpr uint32_t HEAP_MIN_STEP = 512;  // smaller moves are noise, not an event
+struct HeapMinEvent {
+  uint32_t ms;
+  uint32_t minFree;
+  uint32_t freeNow;
+  uint32_t maxNow;
+  char in[20];
+  char after[20];
+};
+HeapMinEvent heapMinEvents[HEAP_MIN_EVENTS] = {};
+uint32_t heapMinEventTotal = 0;
+uint32_t heapMinRecorded = UINT32_MAX;
+char heapLastPoint[20] = "boot";
+
+void formatPoint(char* out, size_t outLen, const char* tag, const char* detail) {
+  if (detail == nullptr || detail[0] == '\0') {
+    snprintf(out, outLen, "%s", tag);
+    return;
+  }
+  // First word of the detail only: image lines carry sizes after it.
+  size_t n = 0;
+  while (detail[n] != '\0' && detail[n] != ' ' && n < 12) n++;
+  snprintf(out, outLen, "%s:%.*s", tag, static_cast<int>(n), detail);
+}
+
+void checkHeapMin(const char* tag, const char* detail = nullptr) {
+  const uint32_t minFree = ESP.getMinFreeHeap();
+  const bool named = strcmp(tag, "loop") != 0;
+  if (heapMinRecorded == UINT32_MAX || minFree + HEAP_MIN_STEP <= heapMinRecorded) {
+    HeapMinEvent& e = heapMinEvents[heapMinEventTotal % HEAP_MIN_EVENTS];
+    e.ms = millis();
+    e.minFree = minFree;
+    e.freeNow = ESP.getFreeHeap();
+    e.maxNow = ESP.getMaxAllocHeap();
+    formatPoint(e.in, sizeof(e.in), tag, detail);
+    snprintf(e.after, sizeof(e.after), "%s", heapLastPoint);
+    heapMinEventTotal++;
+    heapMinRecorded = minFree;
+  }
+  if (named) formatPoint(heapLastPoint, sizeof(heapLastPoint), tag, detail);
+}
 uint32_t fontCopyTotal = 0;
 // Vertical page geometry, sampled once per chapter build (see noteVerticalLayout).
 uint16_t vertCell = 0, vertPitch = 0, vertRubyReserve = 0, vertViewportW = 0, vertViewportH = 0;
@@ -304,6 +358,7 @@ uint32_t lookaheadChunkMaxMhz = 0;
 }  // namespace
 
 void InputDiag::sample(const unsigned long nowMs, const bool committedEdge, const bool debouncePending) {
+  checkHeapMin("loop");
   const uint32_t mhz = getCpuFrequencyMhz();
   if (cpuMhzMin == 0 || mhz < cpuMhzMin) {
     cpuMhzMin = mhz;
@@ -354,6 +409,7 @@ void InputDiag::noteUiPrewarmEnd() {
 
 void InputDiag::noteRender(const char* activityName, const unsigned long durationMs, const uint32_t onDemandGlyphs,
                            const uint32_t miniRebuilds, const uint32_t miniRebuildMs) {
+  checkHeapMin("render", activityName);
   renderLastMs = static_cast<uint32_t>(durationMs);
   if (renderLastMs > renderMaxMs) {
     renderMaxMs = renderLastMs;
@@ -398,12 +454,14 @@ void InputDiag::noteOpenBegin() {
 }
 
 void InputDiag::noteCloseHeap(const uint32_t beforeFreeKb, const uint32_t afterFreeKb, const uint32_t afterMaxKb) {
+  checkHeapMin("close");
   closeBeforeFreeKb = static_cast<uint16_t>(beforeFreeKb);
   closeAfterFreeKb = static_cast<uint16_t>(afterFreeKb);
   closeAfterMaxKb = static_cast<uint16_t>(afterMaxKb);
 }
 
 void InputDiag::noteOpenStage(const uint8_t slot, const char* label) {
+  checkHeapMin("open", label);
   if (slot >= OPEN_STAGE_COUNT) return;
   auto& s = openStages[slot];
   if (s.label[0] != '\0') return;  // write-once until the next noteOpenBegin()
@@ -438,7 +496,131 @@ char imgEvents[IMG_EVENT_COUNT][96];
 uint8_t imgEventCount = 0;  // total recorded; ring position = count % IMG_EVENT_COUNT
 }  // namespace
 
+namespace {
+struct HeapBlockRec {
+  uint32_t addr;
+  uint32_t size;
+  uint8_t used;
+  uint8_t head[24];
+};
+struct HeapWalkCtx {
+  HeapBlockRec* recs;
+  uint16_t count;
+  uint16_t capacity;
+  uint32_t smallUsedCount;
+  uint32_t smallUsedBytes;
+  uint32_t smallFreeCount;
+  uint32_t smallFreeBytes;
+  uint32_t usedBytes;
+  uint32_t freeBytes;
+  uint32_t dropped;
+};
+constexpr uint32_t HEAP_MAP_MIN_USED = 256;
+constexpr uint32_t HEAP_MAP_MIN_FREE = 1024;
+
+// Runs with the heap locked: no allocation, no I/O, only copying into the prepared array.
+bool heapWalkRecord(walker_heap_into_t, walker_block_info_t block, void* user) {
+  auto* ctx = static_cast<HeapWalkCtx*>(user);
+  if (block.used) {
+    ctx->usedBytes += block.size;
+  } else {
+    ctx->freeBytes += block.size;
+  }
+  const bool keep = block.used ? block.size >= HEAP_MAP_MIN_USED : block.size >= HEAP_MAP_MIN_FREE;
+  if (!keep) {
+    if (block.used) {
+      ctx->smallUsedCount++;
+      ctx->smallUsedBytes += block.size;
+    } else {
+      ctx->smallFreeCount++;
+      ctx->smallFreeBytes += block.size;
+    }
+    return true;
+  }
+  if (ctx->count >= ctx->capacity) {
+    ctx->dropped++;
+    return true;
+  }
+  HeapBlockRec& r = ctx->recs[ctx->count++];
+  r.addr = reinterpret_cast<uint32_t>(block.ptr);
+  r.size = block.size;
+  r.used = block.used ? 1 : 0;
+  memset(r.head, 0, sizeof(r.head));
+  if (block.used) memcpy(r.head, block.ptr, block.size < sizeof(r.head) ? block.size : sizeof(r.head));
+  return true;
+}
+}  // namespace
+
+void InputDiag::dumpHeapMap(const char* label) {
+  static bool bootWritten = false;
+  constexpr uint16_t CAPACITY = 240;
+  const uint32_t freeBefore = ESP.getFreeHeap();
+  const uint32_t maxBefore = ESP.getMaxAllocHeap();
+  auto* recs = static_cast<HeapBlockRec*>(malloc(sizeof(HeapBlockRec) * CAPACITY));
+  if (recs == nullptr) return;
+  HeapWalkCtx ctx{};
+  ctx.recs = recs;
+  ctx.capacity = CAPACITY;
+  heap_caps_walk(MALLOC_CAP_8BIT, heapWalkRecord, &ctx);
+
+  const char* path = bootWritten ? "/heap-map.txt" : "/heap-map-boot.txt";
+  bootWritten = true;
+  HalFile file;
+  if (Storage.openFileForWrite("DIAG", path, file)) {
+    char line[256];
+    int n = snprintf(line, sizeof(line),
+                     "# %s build=" OST_BUILD_ID
+                     " uptime_ms=%lu free=%lu max=%lu (before this dump's own %u B array"
+                     " at 0x%08lx)\n# used=%lu free=%lu small_used=%lu/%luB small_free=%lu/%luB dropped=%lu\n",
+                     label ? label : "?", millis(), static_cast<unsigned long>(freeBefore),
+                     static_cast<unsigned long>(maxBefore), static_cast<unsigned>(sizeof(HeapBlockRec) * CAPACITY),
+                     static_cast<unsigned long>(reinterpret_cast<uint32_t>(recs)),
+                     static_cast<unsigned long>(ctx.usedBytes), static_cast<unsigned long>(ctx.freeBytes),
+                     static_cast<unsigned long>(ctx.smallUsedCount), static_cast<unsigned long>(ctx.smallUsedBytes),
+                     static_cast<unsigned long>(ctx.smallFreeCount), static_cast<unsigned long>(ctx.smallFreeBytes),
+                     static_cast<unsigned long>(ctx.dropped));
+    if (n > 0)
+      file.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(std::min<int>(n, sizeof(line) - 1)));
+    // Tasks: the TCB is a heap block of its own and the stack another, so name both here.
+    {
+      constexpr UBaseType_t MAX_TASKS = 16;
+      TaskStatus_t tasks[MAX_TASKS];
+      const UBaseType_t taskCount = uxTaskGetSystemState(tasks, MAX_TASKS, nullptr);
+      for (UBaseType_t t = 0; t < taskCount; t++) {
+        n = snprintf(line, sizeof(line), "T %-16s tcb=0x%08lx stack_base=0x%08lx free_min=%u prio=%u\n",
+                     tasks[t].pcTaskName, static_cast<unsigned long>(reinterpret_cast<uint32_t>(tasks[t].xHandle)),
+                     static_cast<unsigned long>(reinterpret_cast<uint32_t>(tasks[t].pxStackBase)),
+                     static_cast<unsigned>(tasks[t].usStackHighWaterMark),
+                     static_cast<unsigned>(tasks[t].uxCurrentPriority));
+        if (n > 0)
+          file.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(std::min<int>(n, sizeof(line) - 1)));
+      }
+    }
+    for (uint16_t i = 0; i < ctx.count; i++) {
+      const HeapBlockRec& r = recs[i];
+      n = snprintf(line, sizeof(line), "%c 0x%08lx %6lu", r.used ? 'U' : 'F', static_cast<unsigned long>(r.addr),
+                   static_cast<unsigned long>(r.size));
+      if (r.used) {
+        n += snprintf(line + n, sizeof(line) - n, " ");
+        for (size_t k = 0; k < sizeof(r.head); k++) n += snprintf(line + n, sizeof(line) - n, "%02x", r.head[k]);
+        n += snprintf(line + n, sizeof(line) - n, " |");
+        for (size_t k = 0; k < sizeof(r.head); k++) {
+          const char c = static_cast<char>(r.head[k]);
+          line[n++] = (c >= 0x20 && c < 0x7f) ? c : '.';
+        }
+        line[n++] = '|';
+      }
+      line[n++] = '\n';
+      file.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(n));
+    }
+  }
+  free(recs);
+}
+
+void InputDiag::notePoint(const char* tag) { checkHeapMin(tag ? tag : "?"); }
+
 void InputDiag::noteImageEvent(const char* line) {
+  checkHeapMin("img", line);
   if (!line) return;
   snprintf(imgEvents[imgEventCount % IMG_EVENT_COUNT], sizeof(imgEvents[0]), "%s free=%u max=%u", line,
            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
@@ -514,6 +696,7 @@ void InputDiag::noteGrayscaleSplit(const unsigned long lsbMs, const unsigned lon
 
 void InputDiag::noteBuildChunk(const int spineIndex, const uint16_t pageCountBefore, const uint16_t pageCountAfter,
                                const unsigned long durationMs) {
+  checkHeapMin("build");
   if (static_cast<uint32_t>(durationMs) <= buildChunkMaxMs) return;
   buildChunkMaxMs = static_cast<uint32_t>(durationMs);
   buildChunkMaxSpineIndex = spineIndex;
@@ -589,6 +772,7 @@ void InputDiag::notePrewarmBudget(const uint32_t budgetGlyphs, const uint32_t wa
 void InputDiag::noteSdClock(const uint32_t hz) { sdClockHz = hz; }
 
 void InputDiag::noteFontCopy(const char* line) {
+  checkHeapMin("fontcopy");
   char* slot = fontCopyEvents[fontCopyTotal % FONT_COPY_EVENTS];
   snprintf(slot, sizeof(fontCopyEvents[0]), "@%lu %s", millis(), line);
   fontCopyTotal++;
@@ -604,6 +788,7 @@ void InputDiag::noteVerticalLayout(const uint16_t cell, const uint16_t pitch, co
 }
 
 void InputDiag::noteLayoutGiveUp(const uint8_t kind, const uint32_t tokens) {
+  checkHeapMin("giveup");
   layoutGiveUps++;
   layoutGiveUpKind = kind;
   layoutGiveUpTokens = tokens;
@@ -627,6 +812,7 @@ void InputDiag::noteGrayscalePhases(const unsigned long lsbDrawMs, const unsigne
 }
 
 void InputDiag::noteBuildPageWrite(const unsigned long ms) {
+  checkHeapMin("pagewrite");
   buildPageWrites++;
   buildPageWriteMs += static_cast<uint32_t>(ms);
 }
@@ -648,6 +834,7 @@ void InputDiag::noteAaAborted() { aaAborts++; }
 
 void InputDiag::noteLookaheadChunk(const int spineIndex, const uint16_t pagesBuilt, const unsigned long durationMs,
                                    const bool completed) {
+  checkHeapMin("lookahead");
   lookaheadTicks++;
   lookaheadPages += pagesBuilt;
   lookaheadTotalMs += static_cast<uint32_t>(durationMs);
@@ -855,6 +1042,23 @@ void InputDiag::flush(const bool inputActive) {
     if (entry.name[0] == '\0') continue;  // ring not full yet
     len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s:%u@%u/%u%+d r%u ", entry.name, entry.ms,
                     entry.heapFreeKb, entry.heapMaxAllocKb, entry.heapDeltaKb, entry.miniRebuilds);
+  }
+  if (static_cast<size_t>(len) < sizeof(reportBuf)) {
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "\n");
+  }
+  writeReportPart(file, len);
+
+  // Newest first: @ms min=B in=<hook that saw it> after=<named point before> now=freeK/maxK.
+  len = snprintf(reportBuf, sizeof(reportBuf), "heap_min_log=");
+  {
+    const uint32_t shown = heapMinEventTotal < HEAP_MIN_EVENTS ? heapMinEventTotal : HEAP_MIN_EVENTS;
+    for (uint32_t i = 0; i < shown && static_cast<size_t>(len) < sizeof(reportBuf); i++) {
+      const HeapMinEvent& e = heapMinEvents[(heapMinEventTotal - 1 - i) % HEAP_MIN_EVENTS];
+      len +=
+          snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s@%lu min=%lu in=%s after=%s now=%luK/%luK",
+                   i ? " | " : "", static_cast<unsigned long>(e.ms), static_cast<unsigned long>(e.minFree), e.in,
+                   e.after, static_cast<unsigned long>(e.freeNow / 1024), static_cast<unsigned long>(e.maxNow / 1024));
+    }
   }
   if (static_cast<size_t>(len) < sizeof(reportBuf)) {
     len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "\n");

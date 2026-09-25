@@ -1699,6 +1699,7 @@ void EpubReaderActivity::renderBook() {
       return;
     }
     pageLoadRetryCount = 0;
+    InputDiag::notePoint("pg:load");
 
     currentPageVisibleOffset = p->visibleTextOffset;
     currentPageFootnotes = std::move(p->footnotes);
@@ -1850,6 +1851,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // entry, so a fast prewarm that left the draw cold can be attributed without the log ring.
   InputDiag::noteScanOutcome(fcm->lastScanBytes(), fcm->lastScanFonts(), renderer.glyphPrewarmEntryFails(),
                              fcm->scanFontOverflows());
+  InputDiag::notePoint("pg:prewarm");
   const auto tPrewarm = millis();
 
   const bool pageHasImages = page->hasImages();
@@ -1898,6 +1900,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tBlocks = millis();
 #endif
   renderStatusBar();
+  InputDiag::notePoint("pg:bw");
   const auto tBwRender = millis();
   // How much of this page the BW pass had to fetch a glyph at a time. Sampled
   // here because the grayscale passes below repeat the same draw ~20 times
@@ -1959,6 +1962,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
   const auto tDisplay = millis();
   InputDiag::notePageRender(tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender);
+  InputDiag::notePoint("pg:disp");
 
   if (tiledGrayscale) {
     constexpr int STRIP_ROWS = GRAYSCALE_STRIP_ROWS;
@@ -1989,6 +1993,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     if (lsbPlaneBuf) {
       renderPlaneToBuffer(true, lsbPlaneBuf.get());
       if (msbPlaneBuf) renderPlaneToBuffer(false, msbPlaneBuf.get());
+      InputDiag::notePoint("pg:planes");
       const auto tGrayRender = millis();
 
       renderer.waitRefreshComplete();
@@ -2035,6 +2040,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       // cannot be built costs far more than its antialiasing does.
       auto scratch =
           glyphsTooScattered ? nullptr : makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+      InputDiag::notePoint("pg:scratch");
       renderer.waitRefreshComplete();
       // Bracketed apart from the plane loops below. This wait used to sit inside the gray_lsb
       // figure, which made the first plane look ~60x the cost of the second and sent two separate
@@ -2104,6 +2110,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 #endif
         }
         const auto tGrayLsb = millis();
+        InputDiag::notePoint("pg:lsb");
 #ifdef INPUT_DIAG
         const auto lsbImg = ImageBlock::takeCacheRenderStats();
         const uint32_t lsbOnDemand = renderer.glyphOnDemandLoads() - onDemandBeforeLsb;
@@ -2133,6 +2140,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 #endif
         }
         const auto tGrayMsb = millis();
+        InputDiag::notePoint("pg:msb");
 #ifdef INPUT_DIAG
         {
           const auto msbImg = ImageBlock::takeCacheRenderStats();

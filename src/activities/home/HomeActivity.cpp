@@ -186,6 +186,8 @@ void HomeActivity::onEnter() {
   if (auto* fcm = renderer.getFontCacheManager()) {
     fcm->releaseSdFontCaches();
   }
+  // What is still allocated once the reader and its font caches are gone (diag builds only).
+  InputDiag::dumpHeapMap("home-enter");
 
   hasOpdsServers = OPDS_STORE.hasServers();
 
