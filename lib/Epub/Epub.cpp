@@ -211,7 +211,7 @@ bool Epub::parseTocNavFile() const {
   return true;
 }
 
-void Epub::discoverCssFilesFromZip() {
+void Epub::discoverCssFilesFromZip() const {
   const std::string& opfDir = contentBasePath;
   ZipFile zf(filepath);
 
@@ -264,6 +264,14 @@ CssParser::ParseResult Epub::parseCssFilesImpl(const CssParser::CacheStatus exis
   constexpr size_t MIN_HEAP_FOR_FILTERED_CSS_PARSING = 24 * 1024;
   const size_t minHeapForParse = usage != nullptr ? MIN_HEAP_FOR_FILTERED_CSS_PARSING : MIN_HEAP_FOR_CSS_PARSING;
 
+  // A chapter-scoped pass can arrive with no list at all: when the book was opened through the
+  // cached-CSS path, the OPF was never read again and nothing filled it. The pass then parsed
+  // nothing, reported rules=0 and the chapter lost its whole stylesheet -- a 1em gaiji came out
+  // at its 128 px source size (リアデイル 8, 2026-09-25). Find the stylesheets in the ZIP instead.
+  if (cssFiles.empty() && usage != nullptr) {
+    discoverCssFilesFromZip();
+    CSS_DIAG("css list was empty; zip found %u", static_cast<unsigned>(cssFiles.size()));
+  }
   if (cssFiles.empty()) {
     LOG_DBG("EBP", "No CSS files to parse, but CssParser created for inline styles");
   }

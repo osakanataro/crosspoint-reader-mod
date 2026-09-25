@@ -29,13 +29,15 @@ class Epub {
   // CSS parser for styling
   std::unique_ptr<CssParser> cssParser;
   // CSS files
-  std::vector<std::string> cssFiles;
+  // mutable: a chapter-scoped CSS pass (const) fills it on demand when the book was opened
+  // through a path that never listed the stylesheets.
+  mutable std::vector<std::string> cssFiles;
 
   bool findContentOpfFile(std::string* contentOpfFile) const;
   bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true);
   bool parseTocNcxFile() const;
   bool parseTocNavFile() const;
-  void discoverCssFilesFromZip();
+  void discoverCssFilesFromZip() const;
   CssParser::ParseResult parseCssFiles(CssParser::CacheStatus existingCacheStatus) const;
 
   CssParser::ParseResult parseCssFilesImpl(CssParser::CacheStatus existingCacheStatus,
