@@ -533,20 +533,45 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
                                                      bool originalThresholds) {
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
+  // When the caller has lent the framebuffer (the Home thumbnail build does), put the decoder
+  // object at the front of those bytes and give the rest to the MCU row below. The object is
+  // 17,884 bytes in one piece, and after a session of reading Home's largest heap block sits
+  // at 17-23 KB: small leftovers from the book (recent-book strings, lazily created mutexes)
+  // land in the one large free region and split it (heap-map, 2026-09-25), so the thumbnail
+  // failed on the decoder alone. Without a loan both still come from the heap, as before.
+  size_t scratchLen = 0;
+  uint8_t* scratch = buildscratch::claim(sizeof(JPEGDEC), &scratchLen);
+  struct ScratchRelease {
+    uint8_t* p;
+    ~ScratchRelease() {
+      if (p) buildscratch::release(p);
+    }
+  } scratchRelease{scratch};  // declared before the decoder, so released after it is destroyed
+  constexpr size_t DECODER_SLOT = (sizeof(JPEGDEC) + 15) & ~static_cast<size_t>(15);
+
+  const size_t minFreeHeap = scratch ? MIN_FREE_HEAP - JPEG_DECODER_SIZE : MIN_FREE_HEAP;
+  if (ESP.getFreeHeap() < minFreeHeap) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), minFreeHeap);
     InputDiag::noteImageEvent("jpg gate: heap below minimum");
     return false;
   }
 
   s_jpegFile = &jpegFile;
 
-  const auto jpeg = makeUniqueNoThrow<JPEGDEC>();
+  JPEGDEC* const jpeg = scratch ? new (scratch) JPEGDEC() : new (std::nothrow) JPEGDEC();
   if (!jpeg) {
     LOG_ERR("JPG", "OOM: JPEG decoder");
     InputDiag::noteImageEvent("jpg OOM decoder object");
     return false;
   }
+  const ScopedCleanup destroyDecoder{[jpeg, scratch]() {
+    if (scratch) {
+      jpeg->~JPEGDEC();
+    } else {
+      delete jpeg;
+    }
+  }};
+  if (scratch) InputDiag::noteImageEvent("jpg decoder in lent framebuffer");
 
   int rc = jpeg->open("", bmpJpegOpen, bmpJpegClose, bmpJpegRead, bmpJpegSeek, bmpDrawCallback);
   if (rc != 1) {
@@ -555,7 +580,7 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
     return false;
   }
 
-  const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
+  const ScopedCleanup cleanup{[jpeg]() { jpeg->close(); }};
 
   const int srcWidth = jpeg->getWidth();
   const int srcHeight = jpeg->getHeight();
@@ -664,10 +689,15 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
   // by the time the MCU row was asked for, and the thumbnail failed on a book whose cover had
   // extracted cleanly. The scratch is free again by now: the extraction released it.
   const size_t mcuBytes = static_cast<size_t>(MAX_MCU_HEIGHT) * ctx.srcWidth;
-  ctx.mcuScratch = buildscratch::claim(mcuBytes);
+  if (scratch) {
+    // The lent bytes are already this function's: the MCU row takes what the decoder left.
+    if (scratchLen >= DECODER_SLOT + mcuBytes) ctx.mcu = scratch + DECODER_SLOT;
+  } else {
+    ctx.mcuScratch = buildscratch::claim(mcuBytes);
+  }
   if (ctx.mcuScratch) {
     ctx.mcu = ctx.mcuScratch;
-  } else {
+  } else if (!ctx.mcu) {
     ctx.mcuBuf = makeUniqueNoThrow<uint8_t[]>(mcuBytes);
     ctx.mcu = ctx.mcuBuf.get();
   }
