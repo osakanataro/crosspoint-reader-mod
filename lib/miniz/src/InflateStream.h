@@ -71,11 +71,20 @@ class InflateStream {
   // Decompress up to maxLen bytes into dest; *produced gets the byte count.
   Status readAtMost(uint8_t* dest, size_t maxLen, size_t* produced);
 
+  // The unused tail of the claimed build scratch after the state and window, or
+  // nullptr/0 when the stream lives on the heap. Valid until deinit(); the caller
+  // may use it for its own I/O buffers so a lent-framebuffer inflate touches no
+  // heap at all (the framebuffer is ~48 KB, state + window ~41 KB).
+  uint8_t* spare() const { return spareBase; }
+  size_t spareLen() const { return spareSize; }
+
  private:
   tinfl_decompressor_tag* state = nullptr;  // ~8KB: heap, or inside the claimed build scratch
   uint8_t* window = nullptr;                // 32KB ring, streaming mode only
   uint8_t* arenaBase = nullptr;             // non-null when state/window live in lent framebuffer bytes
-  size_t windowPos = 0;                     // ring write cursor
+  uint8_t* spareBase = nullptr;             // tail of the claimed scratch past state/window
+  size_t spareSize = 0;
+  size_t windowPos = 0;  // ring write cursor
   // Decompressed-but-undelivered region of the window (tinfl can overshoot the
   // caller's requested length; the overshoot waits here for the next read).
   size_t pendingStart = 0;

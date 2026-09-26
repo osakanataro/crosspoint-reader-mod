@@ -520,19 +520,41 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
   }
 
   if (fileStat.method == ZIP_METHOD_DEFLATED) {
-    size_t readChunk = 0;
-    auto* fileReadBuffer = allocChunkDownTo(chunkSize, &readChunk);
-    if (!fileReadBuffer) {
-      LOG_ERR("ZIP", "Failed to allocate memory for zip file read buffer");
+    // Inflate first: during a framebuffer loan its state and window come from the lent bytes,
+    // and the ~6.8 KB left over after them holds the read and output chunks too. Taking the
+    // two 8 KB chunks from the heap instead drove a chapter build's heap from 22.7 KB to
+    // 4.8 KB free while an illustration was extracted (2026-09-26). Without a loan (or when
+    // the tail is too small) the chunks come from the heap as before.
+    InflateStream inflate;
+    if (!inflate.init(true)) {
+      LOG_ERR("ZIP", "Failed to init inflate stream for %s", filename);
       return false;
     }
 
+    constexpr size_t SPARE_CHUNK_FLOOR = 1024;
+    uint8_t* fileReadBuffer = nullptr;
+    uint8_t* outputBuffer = nullptr;
+    size_t readChunk = 0;
     size_t outChunk = 0;
-    auto* outputBuffer = allocChunkDownTo(chunkSize, &outChunk);
-    if (!outputBuffer) {
-      LOG_ERR("ZIP", "Failed to allocate memory for output buffer");
-      free(fileReadBuffer);
-      return false;
+    bool buffersOnHeap = false;
+    const size_t spareHalf = (inflate.spareLen() / 2) & ~size_t{511};
+    if (spareHalf >= SPARE_CHUNK_FLOOR) {
+      readChunk = outChunk = std::min(spareHalf, chunkSize);
+      fileReadBuffer = inflate.spare();
+      outputBuffer = inflate.spare() + readChunk;
+    } else {
+      buffersOnHeap = true;
+      fileReadBuffer = allocChunkDownTo(chunkSize, &readChunk);
+      if (!fileReadBuffer) {
+        LOG_ERR("ZIP", "Failed to allocate memory for zip file read buffer");
+        return false;
+      }
+      outputBuffer = allocChunkDownTo(chunkSize, &outChunk);
+      if (!outputBuffer) {
+        LOG_ERR("ZIP", "Failed to allocate memory for output buffer");
+        free(fileReadBuffer);
+        return false;
+      }
     }
 
     ZipInflateCtx ctx;
@@ -541,13 +563,6 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     ctx.readBuf = fileReadBuffer;
     ctx.readBufSize = readChunk;
 
-    InflateStream inflate;
-    if (!inflate.init(true)) {
-      LOG_ERR("ZIP", "Failed to init inflate stream for %s", filename);
-      free(outputBuffer);
-      free(fileReadBuffer);
-      return false;
-    }
     inflate.setFill(zipFillCallback, &ctx);
 
     bool success = false;
@@ -593,9 +608,11 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
       // InflateStream::Status::Ok: output buffer full, continue
     }
 
-    free(outputBuffer);
-    free(fileReadBuffer);
-    return success;  // inflate destructor frees the decompressor state + window
+    if (buffersOnHeap) {
+      free(outputBuffer);
+      free(fileReadBuffer);
+    }
+    return success;  // inflate destructor frees the decompressor state + window (and the spare tail)
   }
 
   LOG_ERR("ZIP", "Unsupported compression method");

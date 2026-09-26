@@ -33,10 +33,15 @@ bool InflateStream::init(const bool streaming) {
   // window (32KB) fit inside it, so a chapter-build inflate costs the heap
   // nothing. Absent (or already claimed): plain heap, freed in deinit().
   const size_t needed = STATE_ALIGNED + (streaming ? WINDOW_SIZE : 0);
-  arenaBase = buildscratch::claim(needed);
+  size_t arenaLen = 0;
+  arenaBase = buildscratch::claim(needed, &arenaLen);
   if (arenaBase) {
     state = reinterpret_cast<tinfl_decompressor*>(arenaBase);
     window = streaming ? arenaBase + STATE_ALIGNED : nullptr;
+    if (arenaLen > needed) {
+      spareBase = arenaBase + needed;
+      spareSize = arenaLen - needed;
+    }
   } else {
     // Raw malloc (not makeUniqueNoThrow): the header keeps tinfl_decompressor
     // an incomplete type so consumers never include miniz; both blocks are
@@ -72,6 +77,8 @@ bool InflateStream::init(const bool streaming) {
 }
 
 void InflateStream::deinit() {
+  spareBase = nullptr;
+  spareSize = 0;
   if (arenaBase) {
     buildscratch::release(arenaBase);
     arenaBase = nullptr;
