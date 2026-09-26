@@ -396,6 +396,12 @@ class SdCardFont {
   // top of every render by clearCache(), so this is a per-render ceiling, not resident memory:
   // 48 glyph headers plus their bitmaps, about 4 KB at 16 pt CJK.
   static constexpr uint32_t OVERFLOW_CAPACITY = 48;
+  // Below this much free heap the ring stops growing and overwrites its oldest entry instead
+  // (once it holds OVERFLOW_MIN_SLOTS). A page that fetched 100+ glyphs one at a time filled all
+  // 48 slots (~17 KB of scaled 18 pt bitmaps) and, with the grayscale strip on top, drove free
+  // heap to 2.7-3.4 KB mid-render (heap_min_log, 2026-09-24/25) -- a crash had come at 1.5 KB.
+  static constexpr uint32_t OVERFLOW_HEAP_RESERVE = 16 * 1024;
+  static constexpr uint32_t OVERFLOW_MIN_SLOTS = 12;
   struct OverflowEntry {
     EpdGlyph glyph;
     uint8_t* bitmap = nullptr;

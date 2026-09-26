@@ -2046,8 +2046,12 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   // Pick overflow slot (ring buffer). Read into temporaries first so the
   // existing slot stays valid if SD I/O fails. Bookkeeping (count/next)
   // is deferred until after all I/O succeeds to avoid inconsistent state.
-  uint32_t slot = self->overflowNext_;
-  bool wasAtCapacity = (self->overflowCount_ == OVERFLOW_CAPACITY);
+  // A full ring overwrites; so does one that has reached its minimum while the heap is short.
+  // Slots [0, count) stay packed either way, and overflowNext_ is the overwrite cursor over them
+  // (a fresh slot is appended at index count). Re-fetching an evicted glyph is a flash read.
+  const bool heapShort = self->overflowCount_ >= OVERFLOW_MIN_SLOTS && ESP.getFreeHeap() < OVERFLOW_HEAP_RESERVE;
+  const bool wasAtCapacity = self->overflowCount_ == OVERFLOW_CAPACITY || heapShort;
+  const uint32_t slot = wasAtCapacity ? self->overflowNext_ % self->overflowCount_ : self->overflowCount_;
 
   // Read glyph metadata into temporary
   FontFile file(self->filePath_, &self->useFlash_, self->flashPayloadBytes_);
@@ -2110,10 +2114,10 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   // All reads succeeded — commit to slot and advance ring buffer
   if (wasAtCapacity) {
     delete[] self->overflow_[slot].bitmap;
+    self->overflowNext_ = (slot + 1) % self->overflowCount_;
   } else {
     self->overflowCount_++;
   }
-  self->overflowNext_ = (slot + 1) % OVERFLOW_CAPACITY;
   self->overflow_[slot].glyph = tempGlyph;
   self->overflow_[slot].bitmap = tempBitmap;
   self->overflow_[slot].codepoint = codepoint;

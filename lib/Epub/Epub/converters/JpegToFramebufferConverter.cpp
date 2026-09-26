@@ -489,7 +489,10 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   // the loan outlives it.
   std::optional<GfxRenderer::FrameBufferLoan> decoderLoan;
   uint8_t* decoderScratch = nullptr;
-  if (config.cacheOnly && ESP.getMaxAllocHeap() < sizeof(JPEGDEC) + 1024) {
+  // Also when the total is short: a decode that the largest block could hold still failed the
+  // free-heap gate below at 35,952 B free (2026-09-26) and fell to the render-time decode.
+  if (config.cacheOnly &&
+      (ESP.getMaxAllocHeap() < sizeof(JPEGDEC) + 1024 || ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_JPEG)) {
     decoderLoan.emplace(renderer);
     decoderScratch = buildscratch::claim(sizeof(JPEGDEC));
   }
