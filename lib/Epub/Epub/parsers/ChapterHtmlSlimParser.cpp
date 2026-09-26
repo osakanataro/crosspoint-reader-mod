@@ -987,7 +987,16 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
         incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lineHeight);
       }
 
-      currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
+      auto merged = style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical);
+      if (isVertical) {
+        // In vertical text the stack already hands every descendant the container's padding
+        // (inheritColumnInsets), so the deposit on the empty block is the same padding again.
+        // The vertical merge sums padding, which put the first child of a padding-top:2em box
+        // 4em down while its siblings sat at 2em (test 25, 2026-09-26). Take the larger instead,
+        // as the merge already does for margins.
+        merged.paddingTop = std::max(style.paddingTop, incoming.paddingTop);
+      }
+      currentTextBlock->setBlockStyle(merged);
 
       flushPendingAnchor();
       return;
@@ -1271,6 +1280,20 @@ void ChapterHtmlSlimParser::finishTableRow() {
   addTableRowSeparator();
   tableRowStacked = false;
   clearLayoutLines();
+}
+
+// Vertical writing turns the physical top and bottom into the line's start and end: every
+// column of every paragraph inside <div class="start-5em"> (margin-top: 5em under .vrtl) starts
+// 5em down. The style stack only carried left/right insets to descendants, as horizontal flow
+// needs, so the top inset reached the first child alone (through the deposit on the empty
+// block) and the rest started at the column head (2026-09-26). Here it accumulates like the
+// horizontal insets do; the first child's deposit merge takes the max, so it is not doubled.
+static BlockStyle inheritColumnInsets(const BlockStyle& parent, BlockStyle child) {
+  child.marginTop = static_cast<int16_t>(child.marginTop + parent.marginTop);
+  child.paddingTop = static_cast<int16_t>(child.paddingTop + parent.paddingTop);
+  child.marginBottom = static_cast<int16_t>(child.marginBottom + parent.marginBottom);
+  child.paddingBottom = static_cast<int16_t>(child.paddingBottom + parent.paddingBottom);
+  return child;
 }
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
@@ -2252,8 +2275,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
     }
-    const auto accumulated =
+    auto accumulated =
         self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle, BlockStyle::CombineAxis::Horizontal);
+    if (self->isVertical) accumulated = inheritColumnInsets(self->blockStyleStack.back(), accumulated);
     self->blockStyleStack.push_back(accumulated);
     self->startNewTextBlock(accumulated.withoutBottom());
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
@@ -2284,8 +2308,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->startNewTextBlock(brStyle);
     } else {
       self->currentCssStyle = cssStyle;
-      const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
-                                                                                  BlockStyle::CombineAxis::Horizontal);
+      auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
+                                                                            BlockStyle::CombineAxis::Horizontal);
+      if (self->isVertical) accumulated = inheritColumnInsets(self->blockStyleStack.back(), accumulated);
       self->blockStyleStack.push_back(accumulated);
       self->startNewTextBlock(accumulated.withoutBottom());
       self->updateEffectiveInlineStyle();

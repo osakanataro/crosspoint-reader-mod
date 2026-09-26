@@ -68,8 +68,8 @@ namespace {
 // v50: An anchor names the page its content lands on, not the page its block started on, and a
 //      paragraph long enough to be laid out in several passes is indented once instead of at
 //      every pass boundary. Both change what a cached section holds (anchor map, line x/y).
-constexpr uint8_t SECTION_FILE_VERSION =
-    56;  // 2026-09-25: chapter-scoped CSS pass no longer runs on an empty stylesheet list
+constexpr uint8_t SECTION_FILE_VERSION = 58;  // 2026-09-26: vertical column start/end insets inherit through
+                                              // containers; padding not doubled on the first child
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
