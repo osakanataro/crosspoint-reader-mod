@@ -2245,8 +2245,9 @@ int GfxRenderer::getLineHeight(const int fontId) const {
 }
 
 int GfxRenderer::getCjkCellWidth(const int fontId) const {
-  const auto memo = cjkCellWidths_.find(fontId);
-  if (memo != cjkCellWidths_.end()) return memo->second;
+  for (const auto& m : cjkCellWidths_) {
+    if (m.width != 0 && m.fontId == fontId) return m.width;
+  }
 
   // U+3000 (ideographic space) is the cheapest full-width probe and every CJK font carries it.
   // The kana and the kanji cover a subset that dropped it; a font with none of them is not a
@@ -2262,7 +2263,8 @@ int GfxRenderer::getCjkCellWidth(const int fontId) const {
   // pin the wrong cell width for the rest of the session.
   if (width <= 0) return getLineHeight(fontId);
 
-  cjkCellWidths_[fontId] = width;
+  cjkCellWidths_[cjkCellWidthsNext_] = CjkCellMemo{fontId, width};
+  cjkCellWidthsNext_ = (cjkCellWidthsNext_ + 1) % CJK_CELL_MEMO_SIZE;
   LOG_DBG("GFX", "CJK cell for font %d: %d px (line height %d)", fontId, width, getLineHeight(fontId));
   return width;
 }

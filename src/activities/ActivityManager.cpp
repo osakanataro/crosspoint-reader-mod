@@ -9,6 +9,7 @@
 #include <esp_task_wdt.h>
 
 #include <algorithm>
+#include <cstdio>
 
 #include "CrossPointSettings.h"
 #include "OpdsServerStore.h"
@@ -76,7 +77,18 @@ void ActivityManager::renderTaskTrampoline(void* param) {
   self->renderTaskLoop();
 }
 
+extern "C" void* __cxa_get_globals();
+
 void ActivityManager::renderTaskLoop() {
+  // Same as setup(): this task's newlib Bigint pool for float formatting, taken now while the
+  // heap is fresh rather than during the first page of a book (heap-map, 2026-09-26).
+  {
+    char primeFloat[8];
+    volatile double primeValue = 0.5;
+    snprintf(primeFloat, sizeof(primeFloat), "%.1f", static_cast<double>(primeValue));
+  }
+  // And this task's C++ exception globals, allocated on its first throw otherwise.
+  (void)__cxa_get_globals();
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 #ifdef DEBUG_RENDER_WATCHDOG

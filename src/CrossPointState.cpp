@@ -57,6 +57,9 @@ void CrossPointState::toJson(JsonDocument& doc) const {
 
 bool CrossPointState::fromJson(JsonVariantConst doc) {
   openEpubPath = doc["openEpubPath"] | "";
+  // Reserved at boot so opening another book rewrites it in place instead of reallocating a new
+  // block mid-session (book paths here run to ~150 bytes).
+  openEpubPath.reserve(256);
 
   memset(recentSleepImages, 0, sizeof(recentSleepImages));
   JsonArrayConst recentArr = doc["recentSleepImages"];

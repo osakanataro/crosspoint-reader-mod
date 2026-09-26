@@ -748,10 +748,14 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     // Draw the estimate marker separately so it can use the next UI font size.
     const bool showEstimate = pageCountEstimated && sb.showChapterPageCount;
 
+    // Integer percent: a "%.0f" here sent every page render through newlib's dtoa, whose Bigint
+    // pool is allocated lazily per task and kept -- mid-book, inside the large free region
+    // Home needs (heap-map allocation tags, 2026-09-26).
+    const int progressPercent = static_cast<int>(bookProgress + 0.5f);
     if (sb.showBookProgressPercent && sb.showChapterPageCount) {
-      snprintf(progressStr, sizeof(progressStr), "%d/%d  %.0f%%", currentPage, pageCount, bookProgress);
+      snprintf(progressStr, sizeof(progressStr), "%d/%d  %d%%", currentPage, pageCount, progressPercent);
     } else if (sb.showBookProgressPercent) {
-      snprintf(progressStr, sizeof(progressStr), "%.0f%%", bookProgress);
+      snprintf(progressStr, sizeof(progressStr), "%d%%", progressPercent);
     } else {
       snprintf(progressStr, sizeof(progressStr), "%d/%d", currentPage, pageCount);
     }

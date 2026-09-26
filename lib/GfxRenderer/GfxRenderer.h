@@ -59,7 +59,23 @@ class GfxRenderer {
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
   // Memo for getCjkCellWidth(). Dropped whenever the font behind an id goes away.
-  mutable std::map<int, int> cjkCellWidths_;
+  // A fixed table, not a map: the map's node was allocated the first time a book asked, which put
+  // it in the middle of a reading session's heap for good (heap-map, 2026-09-26).
+  struct CjkCellMemo {
+    int fontId;
+    int width;
+  };
+  static constexpr int CJK_CELL_MEMO_SIZE = 8;
+  mutable CjkCellMemo cjkCellWidths_[CJK_CELL_MEMO_SIZE] = {};
+  mutable int cjkCellWidthsNext_ = 0;
+  void forgetCjkCellWidth(int fontId) const {
+    for (auto& m : cjkCellWidths_) {
+      if (m.width != 0 && m.fontId == fontId) m = CjkCellMemo{};
+    }
+  }
+  void forgetCjkCellWidths() const {
+    for (auto& m : cjkCellWidths_) m = CjkCellMemo{};
+  }
   mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
 
   // Mutable because drawText() is const but needs to delegate scan-mode
@@ -170,7 +186,7 @@ class GfxRenderer {
     fontMap.erase(fontId);
     sdCardFonts_.erase(fontId);
     sdCardFontScales_.erase(fontId);
-    cjkCellWidths_.erase(fontId);
+    forgetCjkCellWidth(fontId);
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
@@ -196,7 +212,7 @@ class GfxRenderer {
   void clearSdCardFonts() {
     sdCardFonts_.clear();
     sdCardFontScales_.clear();
-    cjkCellWidths_.clear();
+    forgetCjkCellWidths();
   }
   void registerSdCardFontScale(int fontId, uint16_t scale) { sdCardFontScales_[fontId] = scale; }
   void clearSdCardFontScales() { sdCardFontScales_.clear(); }

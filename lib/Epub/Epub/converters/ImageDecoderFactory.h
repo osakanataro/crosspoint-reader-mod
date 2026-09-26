@@ -15,6 +15,6 @@ class ImageDecoderFactory {
   static bool isFormatSupported(const std::string& imagePath);
 
  private:
-  static std::unique_ptr<JpegToFramebufferConverter> jpegDecoder;
-  static std::unique_ptr<PngToFramebufferConverter> pngDecoder;
+  // The decoders are file-scope statics in the .cpp: no heap block, so nothing is left behind in
+  // the middle of the heap by the first image of a reading session.
 };

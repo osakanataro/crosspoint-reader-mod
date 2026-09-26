@@ -8,8 +8,11 @@
 #include "JpegToFramebufferConverter.h"
 #include "PngToFramebufferConverter.h"
 
-std::unique_ptr<JpegToFramebufferConverter> ImageDecoderFactory::jpegDecoder = nullptr;
-std::unique_ptr<PngToFramebufferConverter> ImageDecoderFactory::pngDecoder = nullptr;
+namespace {
+// Built at startup with the other statics: no heap block, and no first-use guard.
+JpegToFramebufferConverter jpegDecoder;
+PngToFramebufferConverter pngDecoder;
+}  // namespace
 
 ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& imagePath) {
   std::string ext = imagePath;
@@ -24,15 +27,9 @@ ImageToFramebufferDecoder* ImageDecoderFactory::getDecoder(const std::string& im
   }
 
   if (JpegToFramebufferConverter::supportsFormat(ext)) {
-    if (!jpegDecoder) {
-      jpegDecoder.reset(new JpegToFramebufferConverter());
-    }
-    return jpegDecoder.get();
+    return &jpegDecoder;
   } else if (PngToFramebufferConverter::supportsFormat(ext)) {
-    if (!pngDecoder) {
-      pngDecoder.reset(new PngToFramebufferConverter());
-    }
-    return pngDecoder.get();
+    return &pngDecoder;
   }
 
   LOG_ERR("DEC", "No decoder found for image: %s", imagePath.c_str());

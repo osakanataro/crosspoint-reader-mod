@@ -19,6 +19,9 @@
 #include <WiFi.h>
 #include <XteinkDetect.h>
 #include <builtinFonts/all.h>
+#include <sys/time.h>
+
+#include <memory>
 #if FREEINK_CAP_TOUCH
 #include <esp_sntp.h>
 #endif
@@ -344,8 +347,34 @@ void setupDisplayAndFonts(bool seamless = false) {
   LOG_DBG("MAIN", "Fonts setup");
 }
 
+extern "C" void* __cxa_get_globals();
+
 void setup() {
   BoardConfig::holdPowerRails();
+  // newlib keeps a per-task Bigint pool for float formatting, allocated on the first "%f" and
+  // never returned. Take it here, at the bottom of a fresh heap, instead of in the middle of
+  // the first book that happens to format a float (heap-map, 2026-09-26).
+  {
+    char primeFloat[8];
+    volatile double primeValue = 0.5;
+    snprintf(primeFloat, sizeof(primeFloat), "%.1f", static_cast<double>(primeValue));
+  }
+  // This libstdc++ counts shared_ptr references under one global mutex, created on the first
+  // copy -- which used to be the reader's, leaving the mutex in Home's large free region.
+  {
+    auto primeShared = std::make_shared<int>(0);
+    auto primeCopy = primeShared;
+    (void)primeCopy;
+  }
+  // gettimeofday()'s two boot-time locks are newlib static locks, created on first use -- by
+  // opening a book, until this call took them here (heap-map mutex_log, 2026-09-26).
+  {
+    struct timeval primeTime;
+    gettimeofday(&primeTime, nullptr);
+  }
+  // The C++ exception globals of this task (pthread TLS + 32 B), allocated when the task first
+  // throws -- a caught exception mid-book left them in Home's large free region.
+  (void)__cxa_get_globals();
 
 #ifdef ENABLE_SERIAL_LOG
 #ifdef CROSSPOINT_WAIT_FOR_USB_SERIAL
