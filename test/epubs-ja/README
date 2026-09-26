@@ -3,11 +3,12 @@ from test/epubs so this fork's own material, with its own provenance, does not
 mix into the upstream set. Nothing here is loaded by the gtest suites; copy a
 file to an SD card and open it.
 
-Four kinds of material live here: four builds of one novel (below), three
-diagnostic suites written by hand (vertical-test-suite.epub,
-vertical-image-test.epub and horizontal-regression-test.epub), two generated
-from measurements (image-size-test.epub and image-format-test.epub), and one
-single-purpose fixture (cover-svg-test.epub).
+Three kinds of material live here: four builds of one novel (below), two
+diagnostic suites written by hand (vertical-test-suite.epub and
+horizontal-regression-test.epub), and one image book (image-test.epub) that
+gathers everything about pictures -- a hand-written vertical part, two parts
+generated from corpus measurements, and a one-page SVG cover fixture. Until
+2026-09-26 those four parts were four separate files.
 
 The four files
 --------------
@@ -99,7 +100,7 @@ vertical-test-suite.epub
 Diagnostic tests merged into one book so they survive as a reusable set. Each
 test is preceded by a guide page in Japanese saying what to look at and what
 counts as a pass, so the book can be judged on the device without consulting
-anything else. Forty-six chapters, in guide/body pairs (test 22 has three
+anything else. Fifty-two chapters, in guide/body pairs (test 22 has three
 bodies):
 
   1  OPF namespace prefixes. The suite's own OPF carries an opf: prefix on
@@ -369,6 +370,33 @@ bodies):
      Every paragraph is a rotation of fourteen sentences about the
      mechanism itself, one with ruby. Section caches persist on the SD
      card, so a re-run needs the cache cleared first.
+ 23  Indent in the middle of a long paragraph (2026-09-10). A paragraph over
+     the word cap (320 words with the book's styles, 750 without) is laid
+     out in several passes, and a continuation pass taken for a paragraph
+     start gets the first-line indent again. One long paragraph with an
+     explicit text-indent:3em and one left to the automatic indent, with
+     〔n〕 markers every forty characters so a visible seam can be told from
+     a real paragraph break. Pass: the indent appears once, at the top of
+     each paragraph, and is as wide as the short reference paragraph's.
+     383 of 3,211 books have a paragraph over 320 characters.
+ 24  In-chapter link targets (2026-09-10). An id's recorded page must be the
+     page its line actually landed on; a paragraph whose first line did not
+     fit and moved to the next page used to record the page before. The body
+     opens with a list of 24 links, followed by 24 numbered paragraphs of
+     stepped length so that some paragraph head meets a page boundary. The
+     X3 has no pointer, so the guide walks through More > Footnotes. Pass:
+     after each jump the 【nn】 marker is on screen without paging forward.
+ 25  Top and bottom insets of a vertical container (2026-09-26). In vertical
+     text margin-top/padding-top is the space at the head of every column and
+     margin-bottom/padding-bottom the space at its foot. A container's inset
+     applies to every column of every paragraph inside it; this tree used to
+     hand the top inset to the first paragraph only, so a commercial book's
+     scene break (div.start-5em holding three "・" paragraphs) dropped the
+     second and third dots to the column head. Six cases: that scene break, a
+     long paragraph in a 3em container, nesting (outer plus inner, then back),
+     a paragraph with its own inset inside a container, a bottom inset, and
+     padding instead of margin; the last check is that nothing leaks past the
+     container. Needs section version 57.
 
 Tests 11-14 and 16 came from closed PRs and issues in the sibling forks rather
 than from a fault seen here: they are cases those projects hit on real books, so
@@ -399,10 +427,42 @@ markup is written by hand and zipped by a throwaway Python script. To change
 it, unzip, edit, and rezip -- with the mimetype entry first and stored
 uncompressed, as EPUB requires.
 
-vertical-image-test.epub
-------------------------
+image-test.epub
+---------------
 
-Images mixed into vertical text, kept as its own book so an image-path crash
+Everything about pictures in one book, so the device needs one file and one
+cache for it. It is kept apart from vertical-test-suite.epub so an image-path
+crash cannot take the main suite down with it. Four parts, each the former
+standalone book of the same name, in this spine order:
+
+  part  folder     former file                 what it varies
+  1     item/cv/   cover-svg-test.epub         the cover is an SVG wrapper
+  2     item/vi/   vertical-image-test.epub    images inside vertical text
+  3     item/sz/   image-size-test.epub        measured pixel dimensions
+  4     item/fm/   image-format-test.epub      formats and markup
+
+Each part keeps its own xhtml/, image/ and style/ folders under its prefix, so
+every relative reference inside its pages is untouched; only manifest ids gain
+the prefix. The heavy pages come after the light ones, and part 4's E1, the
+spine item that is itself an SVG document, stays the last item of the whole
+book for the reason given below. The merged book's cover is part 1's SVG
+wrapper, which is exactly what part 1 tests. The TOC nests each part's entries
+under one heading, 第一部 to 第四部.
+
+Built by test-assets/build_image_test.py from the four former files; rebuild
+the part that changed with its own generator first (named in each part's
+section below), then re-run the merge. The merge also fixes two omissions the
+old generators carried -- a stylesheet link to a file never written in part 1,
+and a missing properties="svg" on part 4's C6 page -- so epubcheck reports
+nothing for the merged book.
+
+The sections below describe each part and keep its history as it was written
+for the standalone book.
+
+Part 2: images in vertical text (formerly vertical-image-test.epub)
+-------------------------------------------------------------------
+
+Images mixed into vertical text, first kept as its own book so an image-path crash
 cannot take the main suite down with it. Another fork (ponto1216-ai) shipped a
 mitigation for paragraph-final inline images sinking to mid-screen in vertical
 mode; this book exists to see whether we inherit that class of bug before any
@@ -510,15 +570,16 @@ forward again (repeated placeholders mean the heap really is short --
 and at the end render with no missing glyphs; the first open of the chapter
 takes 10-20 s to build the pixel caches and the second open does not.
 
-image-size-test.epub
---------------------
+Part 3: image pixel dimensions (formerly image-size-test.epub)
+--------------------------------------------------------------
 
 Image pixel dimensions taken from a survey of the commercial EPUBs on hand --
 1,941 books, 209,273 images as of 2026-09-06 (the first edition, 2026-09-03,
 had 954 books and 107,826 images) -- rather than from round numbers someone
-thought plausible. Its own book, not folded into vertical-image-test.epub, because a
-page holding a 5.87 Mpx picture has no business sitting in a suite that is
-supposed to stay openable when image handling breaks.
+thought plausible. It was first its own book, not folded into the vertical image
+part, because a page holding a 5.87 Mpx picture has no business sitting among
+pages that are supposed to stay openable when image handling breaks; in the
+merged book it comes after that part for the same reason.
 
 What the survey found, and what the book reproduces:
 
@@ -570,7 +631,7 @@ being readable is the practical floor). Line weights and type sizes scale with
 the short edge, so the figure survives a 3x reduction.
 
 Written horizontally throughout. Vertical writing with images is
-vertical-image-test.epub's job; this book holds that variable still and looks
+part 2's job; this book holds that variable still and looks
 only at size, which also makes it useful in other readers.
 
 Generated by test-assets/build_image_size_test.py (kept outside this repo with
@@ -580,10 +641,10 @@ and the patch scripts that produced the suite's tests 17-21 and the image
 book's chapters 10-12 live beside it in test-assets/corpus-survey/.
 
 
-image-format-test.epub, cover-svg-test.epub
--------------------------------------------
+Parts 4 and 1: image formats and the SVG cover (formerly image-format-test.epub, cover-svg-test.epub)
+------------------------------------------------------------------------------------------------------
 
-image-size-test.epub varies pixel dimensions and holds the format fixed
+Part 3 varies pixel dimensions and holds the format fixed
 (grayscale PNG). This pair does the opposite: it varies the format, and the way
 the picture is written into the markup, and keeps dimensions to a handful of
 measured values.
@@ -632,13 +693,13 @@ written inline, renders fine: Epub::load follows xlink:href only for wrappers in
 the body. The 716 wrappers of that kind in the corpus are declared as fallbacks
 and never referenced from the text, so nothing is lost in practice.
 
-cover-svg-test.epub is one page and exists only because a book has one cover. In
-the corpus 56 books name an SVG wrapper as cover-image instead of naming the
-picture, and before the fix for it they showed no cover at all. Open it once and
-look at the shelf, not at the text.
+Part 1 is one page and exists only because a book has one cover. In the corpus
+56 books name an SVG wrapper as cover-image instead of naming the picture, and
+before the fix for it they showed no cover at all. Open the book once and look
+at the Home screen, not at the text.
 
-Generated by test-assets/build_image_format_test.py, which builds both files.
-image-format-test.epub is 3.8 MB, most of it section B's grain; if that ever
+Generated by test-assets/build_image_format_test.py, which builds both former
+files. Part 4 is 3.8 MB, most of it section B's grain; if that ever
 needs to come down, the plate is the thing to shrink, not the dimensions.
 
 
