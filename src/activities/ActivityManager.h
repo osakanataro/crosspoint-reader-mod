@@ -49,6 +49,15 @@ class ActivityManager {
   enum class PendingAction { None, Push, Pop, Replace };
   PendingAction pendingAction = PendingAction::None;
 
+  // A deferred goHome(): Home is built only after the activity it replaces is destroyed.
+  // Built while the reader still lived, the ~200-byte HomeActivity found the small holes
+  // taken by the reader's own objects and landed in the middle of the one large free
+  // region, splitting it for as long as Home stays up (largest block 65.5 KB at boot,
+  // 45-51 KB after reading; heap-map, 2026-09-26).
+  bool pendingHome = false;
+  HomeMenuItem pendingHomeItem = HomeMenuItem::NONE;
+  bool pendingHomeCleanRefresh = false;
+
   // Task to render and display the activity
   TaskHandle_t renderTaskHandle = nullptr;
   static void renderTaskTrampoline(void* param);

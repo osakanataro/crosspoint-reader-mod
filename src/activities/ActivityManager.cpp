@@ -258,7 +258,7 @@ void ActivityManager::loop() {
         continue;
       }
 
-    } else if (pendingActivity) {
+    } else if (pendingActivity || pendingHome) {
       // Current activity has requested a new activity to be launched
       RenderLock lock;
 
@@ -276,7 +276,16 @@ void ActivityManager::loop() {
         LOG_DBG("ACT", "Pushed to activity stack, new size = %zu", stackActivities.size());
       }
       pendingAction = PendingAction::None;
-      currentActivity = std::move(pendingActivity);
+      if (pendingActivity) {
+        pendingHome = false;
+        currentActivity = std::move(pendingActivity);
+      } else {
+        // The replaced activity and the stack are gone by now, so Home is allocated into
+        // the holes they left instead of into the large free region.
+        pendingHome = false;
+        currentActivity =
+            std::make_unique<HomeActivity>(renderer, mappedInput, pendingHomeItem, pendingHomeCleanRefresh);
+      }
 
       lock.unlock();  // onEnter may acquire its own lock
       currentActivity->onEnter();
@@ -308,6 +317,7 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   if (currentActivity) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
     // leading to the "delete this" problem
+    pendingHome = false;
     pendingActivity = std::move(newActivity);
     pendingAction = PendingAction::Replace;
   } else {
@@ -405,6 +415,16 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }
   }
+  if (currentActivity) {
+    // Deferred like replaceActivity(), but the object itself is not built until loop() has
+    // destroyed the current activity (see pendingHome).
+    pendingActivity.reset();
+    pendingHome = true;
+    pendingHomeItem = initialMenuItem;
+    pendingHomeCleanRefresh = cleanInitialRefresh;
+    pendingAction = PendingAction::Replace;
+    return;
+  }
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, initialMenuItem, cleanInitialRefresh));
 }
 void ActivityManager::goToCrashReport() { replaceActivity(std::make_unique<CrashActivity>(renderer, mappedInput)); }
@@ -415,6 +435,7 @@ void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {
     LOG_ERR("ACT", "pendingActivity while pushActivity is not expected");
     pendingActivity.reset();
   }
+  pendingHome = false;
   pendingActivity = std::move(activity);
   pendingAction = PendingAction::Push;
 }
@@ -425,6 +446,7 @@ void ActivityManager::popActivity() {
     LOG_ERR("ACT", "pendingActivity while popActivity is not expected");
     pendingActivity.reset();
   }
+  pendingHome = false;
   pendingAction = PendingAction::Pop;
 }
 
