@@ -7,6 +7,10 @@
 #include <Logging.h>
 #include <SdCardFont.h>
 #include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <pthread.h>
+#include <sys/lock.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -496,12 +500,64 @@ char imgEvents[IMG_EVENT_COUNT][96];
 uint8_t imgEventCount = 0;  // total recorded; ring position = count % IMG_EVENT_COUNT
 }  // namespace
 
+// Allocation tags (diag env links with -Wl,--wrap=malloc/calloc/realloc). Each block is 12 bytes
+// longer than asked and ends with: the malloc caller, then the first two further code addresses
+// found on the caller's stack. operator new and std::string go through malloc, so the first tag
+// names libstdc++ and the stack ones name the code that wanted the memory. dumpHeapMap reads them
+// back from the end of every used block (the poisoning header holds the requested size). Nothing
+// changes for free(): the tag rides inside the block.
+namespace {
+constexpr size_t ALLOC_TAG_BYTES = 12;
+inline bool looksLikeCode(const uint32_t v) {
+  return (v >= 0x42000000u && v < 0x42800000u) || (v >= 0x40380000u && v < 0x403E0000u);
+}
+inline void writeAllocTag(void* p, const size_t n, void* ra) {
+  if (p == nullptr) return;
+  uint32_t tag[3] = {reinterpret_cast<uint32_t>(ra), 0, 0};
+  // Walk the stack above this frame for the next return addresses (no frame pointers on this
+  // build, so this is a heuristic: code addresses spilled by the callers).
+  volatile uint32_t probe = 0;
+  const uint32_t* sp = reinterpret_cast<const uint32_t*>(const_cast<uint32_t*>(&probe));
+  uint8_t found = 1;
+  for (uint32_t i = 0; i < 64 && found < 3; i++) {
+    const uint32_t v = sp[i];
+    if (looksLikeCode(v) && v != tag[0] && v != tag[1]) tag[found++] = v;
+  }
+  memcpy(static_cast<uint8_t*>(p) + n, tag, sizeof(tag));
+}
+}  // namespace
+
+extern "C" {
+void* __real_malloc(size_t n);
+void* __real_calloc(size_t count, size_t n);
+void* __real_realloc(void* p, size_t n);
+void* __wrap_malloc(size_t n) {
+  void* p = __real_malloc(n + ALLOC_TAG_BYTES);
+  writeAllocTag(p, n, __builtin_return_address(0));
+  return p;
+}
+void* __wrap_calloc(size_t count, size_t n) {
+  const size_t total = count * n;
+  if (n != 0 && total / n != count) return nullptr;
+  void* p = __real_calloc(1, total + ALLOC_TAG_BYTES);
+  writeAllocTag(p, total, __builtin_return_address(0));
+  return p;
+}
+void* __wrap_realloc(void* old, size_t n) {
+  if (n == 0) return __real_realloc(old, 0);
+  void* p = __real_realloc(old, n + ALLOC_TAG_BYTES);
+  writeAllocTag(p, n, __builtin_return_address(0));
+  return p;
+}
+}
+
 namespace {
 struct HeapBlockRec {
   uint32_t addr;
   uint32_t size;
   uint8_t used;
-  uint8_t head[24];
+  uint8_t head[16];
+  uint32_t tag[3];
 };
 struct HeapWalkCtx {
   HeapBlockRec* recs;
@@ -548,14 +604,23 @@ bool heapWalkRecord(walker_heap_into_t, walker_block_info_t block, void* user) {
   r.size = block.size;
   r.used = block.used ? 1 : 0;
   memset(r.head, 0, sizeof(r.head));
-  if (block.used) memcpy(r.head, block.ptr, block.size < sizeof(r.head) ? block.size : sizeof(r.head));
+  memset(r.tag, 0, sizeof(r.tag));
+  if (block.used) {
+    memcpy(r.head, block.ptr, block.size < sizeof(r.head) ? block.size : sizeof(r.head));
+    // Poisoning header: 4-byte magic, then the requested size; the tag is its last 12 bytes.
+    uint32_t requested = 0;
+    if (block.size >= 8) memcpy(&requested, static_cast<const uint8_t*>(block.ptr) + 4, sizeof(requested));
+    if (requested >= ALLOC_TAG_BYTES && requested + 8 <= block.size) {
+      memcpy(r.tag, static_cast<const uint8_t*>(block.ptr) + 8 + requested - ALLOC_TAG_BYTES, sizeof(r.tag));
+    }
+  }
   return true;
 }
 }  // namespace
 
 void InputDiag::dumpHeapMap(const char* label) {
   static bool bootWritten = false;
-  constexpr uint16_t CAPACITY = 400;  // 400 x 36 B = 14.4 KB, freed before the file is closed
+  constexpr uint16_t CAPACITY = 360;  // 400 x 36 B = 14.4 KB, freed before the file is closed
   const uint32_t freeBefore = ESP.getFreeHeap();
   const uint32_t maxBefore = ESP.getMaxAllocHeap();
   auto* recs = static_cast<HeapBlockRec*>(malloc(sizeof(HeapBlockRec) * CAPACITY));
@@ -611,12 +676,87 @@ void InputDiag::dumpHeapMap(const char* label) {
           line[n++] = (c >= 0x20 && c < 0x7f) ? c : '.';
         }
         line[n++] = '|';
+        if (looksLikeCode(r.tag[0])) {
+          n += snprintf(line + n, sizeof(line) - n, " by=0x%08lx<0x%08lx<0x%08lx", static_cast<unsigned long>(r.tag[0]),
+                        static_cast<unsigned long>(r.tag[1]), static_cast<unsigned long>(r.tag[2]));
+        }
       }
       line[n++] = '\n';
       file.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(n));
     }
   }
   free(recs);
+}
+
+namespace {
+// Who creates FreeRTOS mutexes, and when. The Home heap after reading holds 104-byte queue
+// blocks (a mutex's control block) created mid-book and left inside the large free region; the
+// linker routes every xQueueCreateMutex through the wrapper below (-Wl,--wrap in the diag env),
+// and the caller's address names the owner via addr2line on the ELF.
+constexpr uint8_t MUTEX_EVENTS = 12;
+struct MutexEvent {
+  uint32_t ms;
+  uint32_t caller;
+  uint32_t handle;
+  uint8_t type;
+};
+MutexEvent mutexEvents[MUTEX_EVENTS] = {};
+uint32_t mutexEventTotal = 0;
+}  // namespace
+
+extern "C" {
+// newlib's static locks are created on first acquire (lock_init_generic), so a lock first taken
+// mid-book puts its mutex in the middle of the heap. The caller of the acquire that finds the
+// lock still zero names the newlib function (localtime, stdio, ...). type 0xF0 / 0xF1.
+void __real__lock_acquire(_lock_t* lock);
+void __real__lock_acquire_recursive(_lock_t* lock);
+static void noteLockInit(_lock_t* lock, const uint8_t type, void* ra) {
+  if (lock == nullptr || *lock != 0) return;
+  MutexEvent& e = mutexEvents[mutexEventTotal % MUTEX_EVENTS];
+  // Tick count, not millis(): newlib takes its locks before the timer service is up.
+  e.ms = static_cast<uint32_t>(xTaskGetTickCount()) * portTICK_PERIOD_MS;
+  e.caller = reinterpret_cast<uint32_t>(ra);
+  e.handle = reinterpret_cast<uint32_t>(lock);
+  e.type = type;
+  mutexEventTotal++;
+}
+void __wrap__lock_acquire(_lock_t* lock) {
+  noteLockInit(lock, 0xF0, __builtin_return_address(0));
+  __real__lock_acquire(lock);
+}
+void __wrap__lock_acquire_recursive(_lock_t* lock) {
+  noteLockInit(lock, 0xF1, __builtin_return_address(0));
+  __real__lock_acquire_recursive(lock);
+}
+QueueHandle_t __real_xQueueGenericCreate(UBaseType_t len, UBaseType_t itemSize, uint8_t ucQueueType);
+// Binary/counting semaphores and plain queues come through here (mutexes do not: xQueueCreateMutex
+// calls it inside queue.c, past the linker's reach). Logged in the same ring, type | 0x80.
+QueueHandle_t __wrap_xQueueGenericCreate(const UBaseType_t len, const UBaseType_t itemSize, const uint8_t ucQueueType) {
+  QueueHandle_t handle = __real_xQueueGenericCreate(len, itemSize, ucQueueType);
+  MutexEvent& e = mutexEvents[mutexEventTotal % MUTEX_EVENTS];
+  e.ms = millis();
+  e.caller = reinterpret_cast<uint32_t>(__builtin_return_address(0));
+  e.handle = reinterpret_cast<uint32_t>(handle);
+  e.type = static_cast<uint8_t>(ucQueueType | 0x80);
+  mutexEventTotal++;
+  return handle;
+}
+QueueHandle_t __real_xQueueCreateMutex(uint8_t ucQueueType);
+QueueHandle_t __wrap_xQueueCreateMutex(const uint8_t ucQueueType) {
+  QueueHandle_t handle = __real_xQueueCreateMutex(ucQueueType);
+  // std::mutex creates and destroys thousands of these while reading (pthread_mutex_init);
+  // they drowned the ring, so only the other creators are kept.
+  const uint32_t caller = reinterpret_cast<uint32_t>(__builtin_return_address(0));
+  const uint32_t pthreadInit = reinterpret_cast<uint32_t>(&pthread_mutex_init);
+  if (caller >= pthreadInit && caller < pthreadInit + 0x100) return handle;
+  MutexEvent& e = mutexEvents[mutexEventTotal % MUTEX_EVENTS];
+  e.ms = millis();
+  e.caller = reinterpret_cast<uint32_t>(__builtin_return_address(0));
+  e.handle = reinterpret_cast<uint32_t>(handle);
+  e.type = ucQueueType;
+  mutexEventTotal++;
+  return handle;
+}
 }
 
 void InputDiag::notePoint(const char* tag) { checkHeapMin(tag ? tag : "?"); }
@@ -1060,6 +1200,22 @@ void InputDiag::flush(const bool inputActive) {
           snprintf(reportBuf + len, sizeof(reportBuf) - len, "%s@%lu min=%lu in=%s after=%s now=%luK/%luK",
                    i ? " | " : "", static_cast<unsigned long>(e.ms), static_cast<unsigned long>(e.minFree), e.in,
                    e.after, static_cast<unsigned long>(e.freeNow / 1024), static_cast<unsigned long>(e.maxNow / 1024));
+    }
+  }
+  if (static_cast<size_t>(len) < sizeof(reportBuf)) {
+    len += snprintf(reportBuf + len, sizeof(reportBuf) - len, "\n");
+  }
+  writeReportPart(file, len);
+
+  // Newest first: @ms caller=<return address> q=<queue handle> type (1 mutex, 4 recursive).
+  len = snprintf(reportBuf, sizeof(reportBuf), "mutex_log=total %lu", static_cast<unsigned long>(mutexEventTotal));
+  {
+    const uint32_t shown = mutexEventTotal < MUTEX_EVENTS ? mutexEventTotal : MUTEX_EVENTS;
+    for (uint32_t i = 0; i < shown && static_cast<size_t>(len) < sizeof(reportBuf); i++) {
+      const MutexEvent& e = mutexEvents[(mutexEventTotal - 1 - i) % MUTEX_EVENTS];
+      len += snprintf(reportBuf + len, sizeof(reportBuf) - len, " | @%lu caller=0x%08lx q=0x%08lx t%u",
+                      static_cast<unsigned long>(e.ms), static_cast<unsigned long>(e.caller),
+                      static_cast<unsigned long>(e.handle), static_cast<unsigned>(e.type));
     }
   }
   if (static_cast<size_t>(len) < sizeof(reportBuf)) {
