@@ -14,7 +14,8 @@ namespace {
 // v10: ignore ambiguous guide text references
 // v11 (this tree): BookMetadata gains pageProgressionRtl (spine page-progression-direction), for
 //      tategaki auto-detect. Upstream 1.6.5 is still v10.
-constexpr uint8_t BOOK_CACHE_VERSION = 11;
+// v12: coverItemHref follows an SVG wrapper to the picture inside it
+constexpr uint8_t BOOK_CACHE_VERSION = 12;
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";

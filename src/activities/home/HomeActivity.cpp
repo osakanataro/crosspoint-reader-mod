@@ -192,7 +192,17 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           }
           GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
           bool success = epub.generateThumbBmp(thumbHeight);
-          if (!success) {
+#if INPUT_DIAG
+          {
+            char line[72];
+            snprintf(line, sizeof(line), "home thumb %s has=%d max=%u", success ? "ok" : "FAIL",
+                     epub.hasCoverImage() ? 1 : 0, static_cast<unsigned>(ESP.getMaxAllocHeap()));
+            InputDiag::noteImageEvent(line);
+          }
+#endif
+          // Clearing the stored path is permanent: the book is never tried again. Only do it when
+          // the book has no cover; a build that failed for want of memory is retried next visit.
+          if (!success && !epub.hasCoverImage()) {
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
             book.coverBmpPath = "";
           }
