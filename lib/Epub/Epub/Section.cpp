@@ -56,7 +56,12 @@ namespace {
 // v48: Hangul words wrap at spaces; with hyphenation on they may also split at a line end.
 //      Justification no longer stretches between syllables.
 // v49: Variation selectors (VS1-VS16, IVS VS17-VS256) are dropped instead of drawn as tofu.
-constexpr uint8_t SECTION_FILE_VERSION = 49;
+// v50: CJK line-break prohibitions cover the JLREQ classes (hyphens, middle dots, iteration marks,
+//      prolonged sound mark, small kana, prefixed/postfixed abbreviations), so cached layouts change.
+// v51: In-chapter anchors name the page their first line lands on; a soft-flushed paragraph
+//      is indented once, and not at all on top of a leading U+3000; its top margin goes before
+//      its first line instead of before the final pass.
+constexpr uint8_t SECTION_FILE_VERSION = 51;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

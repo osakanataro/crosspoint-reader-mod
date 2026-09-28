@@ -1,5 +1,6 @@
 #include "ParsedText.h"
 
+#include <Arduino.h>
 #include <BidiUtils.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
@@ -14,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include "CjkLineBreak.h"
 #include "TokenBoundary.h"
 #include "hyphenation/HyphenationCommon.h"
 #include "hyphenation/Hyphenator.h"
@@ -66,72 +68,6 @@ uint32_t lastCodepoint(const std::string_view word) {
 
 bool containsSoftHyphen(const std::string_view word) { return word.find(SOFT_HYPHEN_UTF8) != std::string_view::npos; }
 
-bool isNoBreakBeforeCjkPunctuation(const uint32_t cp) {
-  switch (cp) {
-    case '.':
-    case ',':
-    case ':':
-    case ';':
-    case '!':
-    case '?':
-    case ')':
-    case ']':
-    case '}':
-    case 0x00BB:  // »
-    case 0x2019:  // ’
-    case 0x201D:  // ”
-    case 0x3001:  // 、
-    case 0x3002:  // 。
-    case 0x3009:  // 〉
-    case 0x300B:  // 》
-    case 0x300D:  // 」
-    case 0x300F:  // 』
-    case 0x3011:  // 】
-    case 0x3015:  // 〕
-    case 0x3017:  // 〗
-    case 0x3019:  // 〙
-    case 0x301B:  // 〛
-    case 0xFF01:  // ！
-    case 0xFF09:  // ）
-    case 0xFF0C:  // ，
-    case 0xFF0E:  // ．
-    case 0xFF1A:  // ：
-    case 0xFF1B:  // ；
-    case 0xFF1F:  // ？
-    case 0xFF3D:  // ］
-    case 0xFF5D:  // ｝
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool isNoBreakAfterCjkPunctuation(const uint32_t cp) {
-  switch (cp) {
-    case '(':
-    case '[':
-    case '{':
-    case 0x00AB:  // «
-    case 0x2018:  // ‘
-    case 0x201C:  // “
-    case 0x3008:  // 〈
-    case 0x300A:  // 《
-    case 0x300C:  // 「
-    case 0x300E:  // 『
-    case 0x3010:  // 【
-    case 0x3014:  // 〔
-    case 0x3016:  // 〖
-    case 0x3018:  // 〘
-    case 0x301A:  // 〚
-    case 0xFF08:  // （
-    case 0xFF3B:  // ［
-    case 0xFF5B:  // ｛
-      return true;
-    default:
-      return false;
-  }
-}
-
 bool containsCjkBreakableCodepoint(const std::string& text) {
   const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
   while (*ptr) {
@@ -154,18 +90,11 @@ uint32_t countCodepoints(const std::string_view text) {
   return count;
 }
 
-bool cjkBoundaryAllowsBreak(const uint32_t leftCp, const uint32_t rightCp) {
-  if (!utf8IsCjkBreakable(leftCp) && !utf8IsCjkBreakable(rightCp)) return false;
-  if (isNoBreakAfterCjkPunctuation(leftCp) || isNoBreakBeforeCjkPunctuation(rightCp)) return false;
-  if (utf8IsCombiningMark(rightCp)) return false;
-  return true;
-}
-
 // Korean separates words with spaces, so a boundary touching Hangul is not a gap-less break inside
 // a line. hangulLineEndBreaks() still lets a Hangul word split there at a line end.
 bool hasCjkBreakOpportunityBetween(const uint32_t leftCp, const uint32_t rightCp) {
   if (utf8IsHangul(leftCp) || utf8IsHangul(rightCp)) return false;
-  return cjkBoundaryAllowsBreak(leftCp, rightCp);
+  return CjkLineBreak::hasCjkBreakOpportunityBetween(leftCp, rightCp);
 }
 
 // Line-end split points inside a Hangul word, using the CJK boundary rules (no hyphen is drawn).
@@ -178,7 +107,7 @@ std::vector<Hyphenator::BreakInfo> hangulLineEndBreaks(const std::string& word) 
   while (*ptr) {
     const size_t offset = static_cast<size_t>(ptr - start);
     const uint32_t cur = utf8NextCodepoint(&ptr);
-    if ((utf8IsHangul(prev) || utf8IsHangul(cur)) && cjkBoundaryAllowsBreak(prev, cur)) {
+    if ((utf8IsHangul(prev) || utf8IsHangul(cur)) && CjkLineBreak::hasCjkBreakOpportunityBetween(prev, cur)) {
       breaks.push_back({offset, false});
     }
     prev = cur;
@@ -187,36 +116,44 @@ std::vector<Hyphenator::BreakInfo> hangulLineEndBreaks(const std::string& word) 
 }
 
 std::vector<size_t> cjkCharacterBreakByteOffsets(const std::string& text) {
-  struct CodepointBoundary {
-    uint32_t cp;
-    size_t endOffset;
-  };
-
-  std::vector<CodepointBoundary> codepoints;
-  codepoints.reserve(text.size());
-  bool hasCjkBreakable = false;
-
+  // Single pass over the codepoints, keeping only the previous one. The break rule
+  // (hasCjkBreakOpportunityBetween) looks at adjacent pairs, so no per-codepoint table
+  // is needed. The earlier form materialised every codepoint as an 8-byte record first,
+  // which for a Japanese paragraph -- one unspaced "word" -- cost 8x the paragraph's
+  // bytes in one block: 20 KB for a 2.5 KB paragraph, requested mid-build where the
+  // largest free block was 5 KB. With -fno-exceptions the failed reserve was a
+  // terminate() (crash 2026-09-17, horizontal-regression-test ch.14). The result vector
+  // is bounded by one entry per codepoint; pure CJK is 3 bytes each, so reserve a third
+  // and let a mixed run grow.
+  std::vector<size_t> allowedOffsets;
   const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
   const auto* const start = ptr;
+  uint32_t prevCp = utf8NextCodepoint(&ptr);
+  if (prevCp == 0) return {};
+  size_t prevEnd = static_cast<size_t>(ptr - start);
+  bool hasCjkBreakable = utf8IsCjkBreakable(prevCp);
+  bool reserved = false;
   while (*ptr) {
     const uint32_t cp = utf8NextCodepoint(&ptr);
     if (cp == 0) break;
-    if (utf8IsCjkBreakable(cp)) {
-      hasCjkBreakable = true;
+    if (utf8IsCjkBreakable(cp)) hasCjkBreakable = true;
+    if (hasCjkBreakOpportunityBetween(prevCp, cp)) {
+      if (!reserved) {
+        // First opportunity found: size the result once. Skip the whole per-character
+        // split when even that block cannot be placed -- the word then stays one token,
+        // and the line pre-check reports the page instead of the allocator aborting.
+        const size_t want = text.size() / 3 + 1;
+        constexpr size_t RESERVE_HEADROOM = 4 * 1024;
+        if (ESP.getMaxAllocHeap() < want * sizeof(size_t) + RESERVE_HEADROOM) return {};
+        allowedOffsets.reserve(want);
+        reserved = true;
+      }
+      allowedOffsets.push_back(prevEnd);
     }
-    codepoints.push_back({cp, static_cast<size_t>(ptr - start)});
+    prevCp = cp;
+    prevEnd = static_cast<size_t>(ptr - start);
   }
-
-  if (!hasCjkBreakable || codepoints.size() < 2) return {};
-
-  std::vector<size_t> allowedOffsets;
-  allowedOffsets.reserve(codepoints.size() - 1);
-  for (size_t i = 0; i + 1 < codepoints.size(); ++i) {
-    const uint32_t current = codepoints[i].cp;
-    const uint32_t next = codepoints[i + 1].cp;
-    if (!hasCjkBreakOpportunityBetween(current, next)) continue;
-    allowedOffsets.push_back(codepoints[i].endOffset);
-  }
+  if (!hasCjkBreakable) return {};
   return allowedOffsets;
 }
 
@@ -709,8 +646,19 @@ void ParsedText::ensureRubyCapacity() {
   // and no large contiguous reallocation to avoid). Kept for call-site stability.
 }
 
+bool ParsedText::beginsWithIdeographicSpace() const { return !words.empty() && firstCodepoint(wordAt(0)) == 0x3000; }
+
 int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer& renderer, const int fontId) const {
-  if (!isFirstLine || !isNaturalAlign) {
+  // lineEmitted: a paragraph past the parser's soft-flush threshold reaches this in several
+  // passes, and every pass would otherwise call its own first line the paragraph's first line
+  // and indent it again mid-paragraph.
+  if (!isFirstLine || lineEmitted || !isNaturalAlign) {
+    return 0;
+  }
+  // A leading U+3000 is the indent. Adding ours would set the line in twice -- the shape most
+  // paperback-derived EPUBs take. An explicit text-indent below still wins: that is the author
+  // asking for a specific measure rather than relying on the default.
+  if (!blockStyle.textIndentDefined && beginsWithIdeographicSpace()) {
     return 0;
   }
   if (blockStyle.textIndentDefined) {
@@ -1735,6 +1683,7 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
       droppedWords = true;
       return;
     }
+    lineEmitted = true;
     processLine(std::move(block), lineVisibleOffset);
     return;
   }
@@ -1760,5 +1709,6 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     droppedWords = true;  // see the non-focus branch above
     return;
   }
+  lineEmitted = true;
   processLine(std::move(block), lineVisibleOffset);
 }
