@@ -52,6 +52,25 @@ bool HalClock::localTime(struct tm& out) const {
   return true;
 }
 
+bool HalClock::getLocalDateTime(Rtc::DateTime& out) const {
+  if (!_available) return false;
+
+  Rtc::DateTime utc;
+  if (!_sdkRtc.now(utc)) return false;
+  const time_t epoch = epochFromUtc(utc);
+  struct tm local;
+  localtime_r(&epoch, &local);
+
+  out.year = static_cast<uint16_t>(local.tm_year + 1900);
+  out.month = static_cast<uint8_t>(local.tm_mon + 1);
+  out.day = static_cast<uint8_t>(local.tm_mday);
+  out.hour = static_cast<uint8_t>(local.tm_hour);
+  out.minute = static_cast<uint8_t>(local.tm_min);
+  out.second = static_cast<uint8_t>(local.tm_sec);
+  out.weekday = static_cast<uint8_t>(local.tm_wday);
+  return true;
+}
+
 bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
   struct tm local;
   if (!localTime(local)) return false;
