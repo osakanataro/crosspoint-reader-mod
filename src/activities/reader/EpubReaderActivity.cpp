@@ -1406,6 +1406,11 @@ void EpubReaderActivity::renderBook() {
 
   if (buildChunkCountThisRender > 0) {
     InputDiag::noteBuildTotal(currentSpineIndex, buildAccumMsThisRender, buildChunkCountThisRender);
+    // Cumulative across the session, not per render: what the report needs is where a build's time
+    // went, not a per-chunk series.
+    uint32_t advCalls = 0, advMs = 0, advTableMax = 0, advTableLimit = 0, advFullSkips = 0;
+    renderer.sdAdvanceStats(advCalls, advMs, advTableMax, advTableLimit, advFullSkips);
+    InputDiag::noteBuildFontWork(advCalls, advMs, advTableMax, advTableLimit, advFullSkips);
   }
   // Section loaded (or built far enough for the requested page).
   InputDiag::noteOpenStage(3, "sect");
@@ -1607,6 +1612,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // its own SD pass after the scope ends.
   renderStatusBar();
   scope.endScanAndPrewarm();
+  // No-op unless built with INPUT_DIAG: what the scan collected and whether any prewarm bailed at
+  // entry, so a fast prewarm that left the draw cold can be attributed without the log ring.
+  InputDiag::noteScanOutcome(fcm->lastScanBytes(), fcm->lastScanFonts(), renderer.glyphPrewarmEntryFails(),
+                             fcm->scanFontOverflows());
   const auto tPrewarm = millis();
   InputDiag::notePoint("pg:prewarm");
 

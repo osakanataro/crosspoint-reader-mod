@@ -184,6 +184,16 @@ class GfxRenderer {
   }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
+
+  // INPUT_DIAG totals across the registered SD-card fonts (see the SdCardFont counters).
+  // On-demand loads and arena rebuilds are the pair that tells "the prewarm is not landing" from
+  // "a caller warms one string at a time"; a warm that covers the text leaves both at zero.
+  uint32_t glyphOnDemandLoads() const;
+  uint32_t glyphMiniRebuilds() const;
+  uint32_t glyphMiniRebuildMs() const;
+  uint32_t glyphPrewarmEntryFails() const;
+  void sdAdvanceStats(uint32_t& calls, uint32_t& ms, uint32_t& tableMax, uint32_t& tableLimit,
+                      uint32_t& fullSkips) const;
   // TTF (vector) fonts rendered via TtfEpdFont/FreeInkFont. Registered like an
   // ordinary EpdFontFamily (insertFont), plus tracked here so ensureSdCardFontReady()
   // rebuilds their per-page glyph set on demand — the eager analogue of the SD

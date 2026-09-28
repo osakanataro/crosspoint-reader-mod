@@ -44,6 +44,59 @@ uint16_t getSdCardSpaceAdvance(SdCardFont& font, const EpdFontFamily::Style styl
 }
 }  // namespace
 
+uint32_t GfxRenderer::glyphOnDemandLoads() const {
+  uint32_t loads = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) loads += font->overflowLoads();
+  }
+  return loads;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuilds() const {
+  uint32_t rebuilds = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) rebuilds += font->miniRebuilds();
+  }
+  return rebuilds;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuildMs() const {
+  uint32_t ms = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) ms += font->miniRebuildMs();
+  }
+  return ms;
+}
+
+uint32_t GfxRenderer::glyphPrewarmEntryFails() const {
+  uint32_t fails = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) fails += font->prewarmEntryFails();
+  }
+  return fails;
+}
+
+void GfxRenderer::sdAdvanceStats(uint32_t& calls, uint32_t& ms, uint32_t& tableMax, uint32_t& tableLimit,
+                                 uint32_t& fullSkips) const {
+  calls = 0;
+  ms = 0;
+  tableMax = 0;
+  fullSkips = 0;
+  tableLimit = SdCardFont::advanceTableLimit();
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font == nullptr) continue;
+    calls += font->advanceFetchCalls();
+    ms += font->advanceFetchMs();
+    fullSkips += font->advanceFullSkips();
+    if (font->advanceTableMax() > tableMax) tableMax = font->advanceTableMax();
+  }
+}
+
 namespace {
 const char* resolveVisualText(const char* text, std::string& visualBuffer, BidiUtils::BidiBaseDir baseDir);
 

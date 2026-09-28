@@ -35,7 +35,8 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
     return 0;
   }
 
-  if (!font->load(file.path.c_str())) {
+  // The family's first load is the body-text size; the UI fallback sizes follow it.
+  if (!font->load(file.path.c_str(), loaded_.empty())) {
     LOG_ERR("SDMGR", "Failed to load %s", file.path.c_str());
     delete font;
     return 0;

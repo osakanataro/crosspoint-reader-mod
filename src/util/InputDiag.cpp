@@ -1277,10 +1277,22 @@ void InputDiag::flush(const bool inputActive) {
     Storage.rename(DIAG_PATH, "/input-diag.prev.txt");
   }
 
-  // SdCardFont's mini-subset free log (caller@ms free=KB g=glyphs s=style m=metadataOnly) comes
-  // back with the font stage of the 1.6.5 re-fork; until then the line reports nothing.
+  // Newest first: caller@ms free=KB g=glyphs s=style m=metadataOnly.
   char miniFreeBuf[4 * 48] = "";
   uint32_t miniFreeTotal = 0;
+  {
+    const auto* ev = SdCardFont::miniFreeEvents(miniFreeTotal);
+    size_t off = 0;
+    const uint32_t shown = miniFreeTotal < SdCardFont::MINI_FREE_EVENTS ? miniFreeTotal : SdCardFont::MINI_FREE_EVENTS;
+    for (uint32_t i = 0; i < shown && off < sizeof(miniFreeBuf); i++) {
+      const auto& e = ev[(miniFreeTotal - 1 - i) % SdCardFont::MINI_FREE_EVENTS];
+      const int n =
+          snprintf(miniFreeBuf + off, sizeof(miniFreeBuf) - off, "%s0x%08x@%u free=%uK g=%u s=%u m=%d", i ? " | " : "",
+                   e.caller, e.ms, e.freeHeap / 1024, e.glyphs, e.style, e.metadataOnly ? 1 : 0);
+      if (n <= 0) break;
+      off += static_cast<size_t>(n);
+    }
+  }
 
   char glyphMissBuf[GLYPH_MISS_EVENTS * 12] = "";
   formatGlyphMisses(glyphMissBuf, sizeof(glyphMissBuf));

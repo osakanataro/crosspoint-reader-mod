@@ -26,6 +26,18 @@ class SdCardFont {
   static constexpr int PREWARM_ARENA_TOO_LARGE = -2;
   static constexpr uint8_t MAX_STYLES = 4;
 
+  // Recent frees of a style's mini arena, for INPUT_DIAG (who dropped the page's glyphs, and when).
+  struct MiniFreeEvent {
+    uint32_t caller = 0;
+    uint32_t ms = 0;
+    uint32_t freeHeap = 0;
+    uint16_t glyphs = 0;
+    uint8_t style = 0;
+    bool metadataOnly = false;
+  };
+  static constexpr uint8_t MINI_FREE_EVENTS = 4;
+  static const MiniFreeEvent* miniFreeEvents(uint32_t& total);
+
   SdCardFont() = default;
   ~SdCardFont();
   // Owns raw buffers freed in dtor — no shallow-copy semantics. Make any
@@ -38,7 +50,8 @@ class SdCardFont {
   // Load .cpfont file: reads header + intervals into RAM, records file layout offsets.
   // Supports v4 (multi-style) format.
   // Returns true on success.
-  bool load(const char* path);
+  // isReaderFont: the family's body-text size (its first load), reported by INPUT_DIAG.
+  bool load(const char* path, bool isReaderFont = false);
 
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
@@ -140,6 +153,26 @@ class SdCardFont {
   void logStats(const char* label = "SDCF");
   void resetStats();
   const Stats& getStats() const { return stats_; }
+
+  // Counters for INPUT_DIAG. Glyphs read one at a time through the overflow ring because no
+  // prewarm covered them; mini-arena rebuilds (the reads go straight into the arena, so no other
+  // figure records them) and their time; prewarms that bailed before any style was touched; and
+  // the advance-table work a section build spends its font time on.
+  uint32_t overflowLoads() const { return overflowLoads_; }
+  uint32_t miniRebuilds() const { return miniRebuilds_; }
+  uint32_t miniRebuildMs() const { return miniRebuildMs_; }
+  uint32_t prewarmEntryFails() const { return prewarmEntryFails_; }
+  uint32_t advanceFetchCalls() const { return advanceFetchCalls_; }
+  uint32_t advanceFetchMs() const { return advanceFetchMs_; }
+  uint32_t advanceFullSkips() const { return advanceFullSkips_; }
+  uint32_t advanceTableMax() const {
+    uint32_t largest = 0;
+    for (uint8_t i = 0; i < MAX_STYLES; i++) {
+      if (advanceTableSize_[i] > largest) largest = advanceTableSize_[i];
+    }
+    return largest;
+  }
+  static constexpr uint32_t advanceTableLimit() { return ADVANCE_CACHE_LIMIT; }
 
   // Content hash of the file header + style TOC entries (computed during load).
   // Used to generate deterministic font IDs for section cache invalidation.
@@ -313,6 +346,13 @@ class SdCardFont {
   void mergeIntoAdvanceTable(uint8_t styleIdx, const AdvanceEntry* sortedNew, uint32_t newCount);
 
   Stats stats_;
+  uint32_t overflowLoads_ = 0;
+  uint32_t miniRebuilds_ = 0;
+  uint32_t miniRebuildMs_ = 0;
+  uint32_t prewarmEntryFails_ = 0;
+  uint32_t advanceFetchCalls_ = 0;
+  uint32_t advanceFetchMs_ = 0;
+  uint32_t advanceFullSkips_ = 0;
   uint32_t contentHash_ = 0;
   bool loaded_ = false;
 

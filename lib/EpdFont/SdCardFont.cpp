@@ -11,6 +11,7 @@
 #include <cstring>
 #include <memory>
 
+#include "../../src/util/InputDiag.h"
 #include "EpdFontFamily.h"
 
 // Resident SD-font buffers (glyph/kern arenas, interval + advance tables, the
@@ -104,7 +105,27 @@ SdCardFont::~SdCardFont() { freeAll(); }
 
 // --- Per-style free/cleanup ---
 
+namespace {
+SdCardFont::MiniFreeEvent miniFreeEventLog[SdCardFont::MINI_FREE_EVENTS];
+uint32_t miniFreeEventTotal = 0;
+}  // namespace
+
+const SdCardFont::MiniFreeEvent* SdCardFont::miniFreeEvents(uint32_t& total) {
+  total = miniFreeEventTotal;
+  return miniFreeEventLog;
+}
+
 void SdCardFont::freeStyleMiniData(PerStyle& s) {
+  if (s.miniGlyphCount > 0) {
+    auto& ev = miniFreeEventLog[miniFreeEventTotal % MINI_FREE_EVENTS];
+    ev.caller = reinterpret_cast<uint32_t>(__builtin_return_address(0));
+    ev.ms = millis();
+    ev.freeHeap = ESP.getFreeHeap();
+    ev.glyphs = static_cast<uint16_t>(s.miniGlyphCount);
+    ev.style = static_cast<uint8_t>(&s - styles_);
+    ev.metadataOnly = s.miniMetadataOnly;
+    miniFreeEventTotal++;
+  }
   psramDeleteArray(s.miniIntervals);
   s.miniIntervals = nullptr;
   psramDeleteArray(s.miniGlyphs);
@@ -523,7 +544,7 @@ void SdCardFont::computeStyleFileOffsets(PerStyle& s, uint32_t baseOffset) {
 
 // --- Load ---
 
-bool SdCardFont::load(const char* path) {
+bool SdCardFont::load(const char* path, const bool isReaderFont) {
   freeAll();
   if (strlen(path) >= sizeof(filePath_)) {
     LOG_ERR("SDCF", "Path too long (%zu bytes, max %zu)", strlen(path), sizeof(filePath_) - 1);
@@ -776,12 +797,25 @@ bool SdCardFont::load(const char* path) {
   loaded_ = true;
 
   LOG_DBG("SDCF", "Loaded: %s (v%u, %u styles)", path, CPFONT_VERSION, styleCount_);
+  uint8_t firstAdvanceY = 0;
+  uint32_t firstGlyphCount = 0;
+  uint32_t residentBytes = 0;
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     if (!styles_[i].present) continue;
     const auto& h = styles_[i].header;
+    residentBytes +=
+        h.intervalCount * static_cast<uint32_t>(styles_[i].intervalsAreBmp16 ? sizeof(PerStyle::BmpInterval16)
+                                                                             : sizeof(EpdUnicodeInterval));
+    if (firstAdvanceY == 0) {
+      firstAdvanceY = h.advanceY;
+      firstGlyphCount = h.glyphCount;
+    }
     LOG_DBG("SDCF", "  style[%u]: %u intervals, %u glyphs, advY=%u, asc=%d, desc=%d, kernL=%u, kernR=%u, ligs=%u", i,
             h.intervalCount, h.glyphCount, h.advanceY, h.ascender, h.descender, h.kernLeftEntryCount,
             h.kernRightEntryCount, h.ligaturePairCount);
+  }
+  if (isReaderFont) {
+    InputDiag::noteFontChoice(path, styleCount_, firstAdvanceY, firstGlyphCount, residentBytes, false, 0, 1, 1);
   }
   return true;
 }
@@ -859,7 +893,10 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
       }
     }
   }
-  if (cpBudget == 0) return -1;
+  if (cpBudget == 0) {
+    prewarmEntryFails_++;
+    return -1;
+  }
 
   // Step 1: Extract unique codepoints from the UTF-8 texts (shared across all styles).
   // Dedup uses O(n^2) linear scan — worst case is MAX_PAGE_GLYPHS (512) unique codepoints
@@ -870,6 +907,7 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
   std::unique_ptr<uint32_t[]> codepoints(new (std::nothrow) uint32_t[MAX_PAGE_GLYPHS]);
   if (!codepoints) {
     LOG_ERR("SDCF", "Failed to allocate codepoint buffer (%u bytes)", MAX_PAGE_GLYPHS * 4);
+    prewarmEntryFails_++;
     return -1;
   }
   uint32_t cpCount = 0;
@@ -1025,6 +1063,16 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       return missedInMini;
     }
   }
+
+  // Past the resident-subset check, so everything below is a rebuild. Counted and timed on the
+  // way out because no other figure records one: the reads go straight into the arena rather
+  // than the overflow ring, and the buffers are reused rather than dropped.
+  struct RebuildTimer {
+    SdCardFont& self;
+    unsigned long startMs;
+    ~RebuildTimer() { self.miniRebuildMs_ += static_cast<uint32_t>(millis() - startMs); }
+  } rebuildTimer{*this, millis()};
+  miniRebuilds_++;
 
   // Trim oversized buffers only on a cache miss. Trimming when a scope closes
   // would discard a freshly prefetched page before its actual draw. Count each
@@ -1477,6 +1525,8 @@ uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
 // Caller owns the codepoints buffer.
 int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask) {
   int totalMissed = 0;
+  const unsigned long fetchStartMs = millis();
+  advanceFetchCalls_++;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
     const auto& s = styles_[si];
@@ -1484,7 +1534,13 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
     // Stop fetching once the cache is full — further inserts would be dropped
     // by the merge anyway. The renderer fast path tolerates missing entries
     // (returns 0); the slow path is still correct for those codepoints.
-    if (advanceTableSize_[si] >= ADVANCE_CACHE_LIMIT) continue;
+    if (advanceTableSize_[si] >= ADVANCE_CACHE_LIMIT) {
+      // Counted, not just skipped: past the cap every measurement of an uncached codepoint
+      // falls through to a per-glyph load, so this is the point where a build's font cost
+      // changes character.
+      advanceFullSkips_++;
+      continue;
+    }
 
     // For each codepoint in `codepoints`, skip those already cached, then
     // resolve to a glyph index. Build a parallel array sorted by glyph index
@@ -1574,6 +1630,7 @@ int SdCardFont::fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCoun
             ADVANCE_CACHE_LIMIT);
   }
 
+  advanceFetchMs_ += static_cast<uint32_t>(millis() - fetchStartMs);
   return totalMissed;
 }
 
@@ -1758,6 +1815,8 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   self->overflow_[slot].codepoint = codepoint;
   self->overflow_[slot].styleIdx = styleIdx;
 
+  self->overflowLoads_++;
+  InputDiag::noteGlyphMiss(codepoint, styleIdx);
   LOG_DBG("SDCF", "Overflow: loaded U+%04X style %u on demand (slot %u/%u)", codepoint, styleIdx, slot,
           OVERFLOW_CAPACITY);
 

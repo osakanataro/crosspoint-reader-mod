@@ -1728,6 +1728,28 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       }
     }
 
+    // Skip variation selectors. These are zero-width hints about which glyph variant to
+    // draw for the preceding character; they have no glyph of their own and no font
+    // carries one. Left unskipped they fall through to the replacement-glyph path and
+    // draw a visible tofu box per occurrence.
+    //  - VS1..VS16 (U+FE00..U+FE0F = 0xEF 0xB8 0x80..0x8F). VS15/VS16 are the text/emoji
+    //    presentation pair; one real book in the Kakuyomu/Narou corpus scan carried 275 of
+    //    them (word-processor autocorrect commonly appends VS15 after ☆ and similar marks).
+    //  - Ideographic variation selectors VS17..VS256 (U+E0100..U+E01EF = 0xF3 0xA0 0x84..0x87
+    //    0x80..0xBF), which the Adobe-Japan1 / Hanyo-Denshi collections use to pick a kanji
+    //    variant. The bitmap fonts have one glyph per codepoint, so the base character is
+    //    drawn and the selector dropped.
+    if (s[i] == static_cast<XML_Char>(0xEF) && i + 2 < len && s[i + 1] == static_cast<XML_Char>(0xB8) &&
+        (static_cast<unsigned char>(s[i + 2]) & 0xF0) == 0x80) {
+      i += 2;
+      continue;
+    }
+    if (s[i] == static_cast<XML_Char>(0xF3) && i + 3 < len && s[i + 1] == static_cast<XML_Char>(0xA0) &&
+        static_cast<unsigned char>(s[i + 2]) >= 0x84 && static_cast<unsigned char>(s[i + 2]) <= 0x87) {
+      i += 3;
+      continue;
+    }
+
     // If we're about to run out of space, then cut the word off and start a new one.
     // For CJK text (no spaces), this is the primary word-breaking mechanism.
     // We must avoid splitting multi-byte UTF-8 sequences across word boundaries,

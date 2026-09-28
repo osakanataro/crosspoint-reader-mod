@@ -90,6 +90,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 49
+
+Version 49 keeps the version 48 serialized layout unchanged. It was bumped
+because variation selectors (U+FE00..U+FE0F and U+E0100..U+E01EF) are now
+dropped while parsing instead of being laid out as replacement glyphs, so
+cached line breaks and word positions from version 48 no longer match.
+
 ### Version 48
 
 Version 48 keeps the version 47 serialized layout unchanged. It was bumped
@@ -200,7 +207,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 48
+#define EXPECTED_VERSION 49
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
