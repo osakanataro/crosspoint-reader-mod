@@ -13,8 +13,10 @@
 #include <sys/lock.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <new>
 #include <string>
 
 #include "activities/RenderLock.h"
@@ -286,6 +288,8 @@ HeapMinEvent heapMinEvents[HEAP_MIN_EVENTS] = {};
 uint32_t heapMinEventTotal = 0;
 uint32_t heapMinRecorded = UINT32_MAX;
 char heapLastPoint[20] = "boot";
+// heap-low.txt is rewritten each time a new low is recorded with this little left.
+constexpr uint32_t HEAP_LOW_SNAPSHOT_BELOW = 16 * 1024;
 
 void formatPoint(char* out, size_t outLen, const char* tag, const char* detail) {
   if (detail == nullptr || detail[0] == '\0') {
@@ -297,6 +301,10 @@ void formatPoint(char* out, size_t outLen, const char* tag, const char* detail) 
   while (detail[n] != '\0' && detail[n] != ' ' && n < 12) n++;
   snprintf(out, outLen, "%s:%.*s", tag, static_cast<int>(n), detail);
 }
+
+void snapshotHeapLow(const char* in, const char* after, uint32_t minFree, uint32_t freeNow);
+void snapshotBuildLowIfLower(const char* point);
+void writeHeapLowIfPending();
 
 void checkHeapMin(const char* tag, const char* detail = nullptr) {
   const uint32_t minFree = ESP.getMinFreeHeap();
@@ -311,6 +319,9 @@ void checkHeapMin(const char* tag, const char* detail = nullptr) {
     snprintf(e.after, sizeof(e.after), "%s", heapLastPoint);
     heapMinEventTotal++;
     heapMinRecorded = minFree;
+    // Low enough to matter: record who holds the heap at this moment. Any task may take the
+    // snapshot (the heap walk touches no storage); flush() writes it once storage is free.
+    if (e.freeNow < HEAP_LOW_SNAPSHOT_BELOW) snapshotHeapLow(e.in, e.after, minFree, e.freeNow);
   }
   if (named) formatPoint(heapLastPoint, sizeof(heapLastPoint), tag, detail);
 }
@@ -511,19 +522,57 @@ constexpr size_t ALLOC_TAG_BYTES = 12;
 inline bool looksLikeCode(const uint32_t v) {
   return (v >= 0x42000000u && v < 0x42800000u) || (v >= 0x40380000u && v < 0x403E0000u);
 }
+// Addresses that name no owner: the malloc wrappers themselves and libstdc++'s operator new
+// family (new, new[], and their nothrow forms sit next to each other). Tags made only of these
+// said "operator new[] (nothrow)" for 65 KB of the heap and nothing more (heap-low, 2026-09-26).
+bool isAllocPlumbing(uint32_t v);
+
 inline void writeAllocTag(void* p, const size_t n, void* ra) {
   if (p == nullptr) return;
-  uint32_t tag[3] = {reinterpret_cast<uint32_t>(ra), 0, 0};
+  uint32_t tag[3] = {0, 0, 0};
+  uint8_t found = 0;
+  const uint32_t first = reinterpret_cast<uint32_t>(ra);
+  if (!isAllocPlumbing(first)) tag[found++] = first;
   // Walk the stack above this frame for the next return addresses (no frame pointers on this
   // build, so this is a heuristic: code addresses spilled by the callers).
   volatile uint32_t probe = 0;
   const uint32_t* sp = reinterpret_cast<const uint32_t*>(const_cast<uint32_t*>(&probe));
-  uint8_t found = 1;
-  for (uint32_t i = 0; i < 64 && found < 3; i++) {
+  for (uint32_t i = 0; i < 96 && found < 3; i++) {
     const uint32_t v = sp[i];
-    if (looksLikeCode(v) && v != tag[0] && v != tag[1]) tag[found++] = v;
+    if (!looksLikeCode(v) || isAllocPlumbing(v)) continue;
+    if (v == tag[0] || v == tag[1]) continue;
+    tag[found++] = v;
   }
   memcpy(static_cast<uint8_t*>(p) + n, tag, sizeof(tag));
+}
+}  // namespace
+
+extern "C" {
+void* __wrap_malloc(size_t n);
+void* __wrap_calloc(size_t count, size_t n);
+void* __wrap_realloc(void* p, size_t n);
+}
+
+namespace {
+bool isAllocPlumbing(const uint32_t v) {
+  static uint32_t newLo = 0, newHi = 0;
+  if (newLo == 0) {
+    const uint32_t a[] = {
+        reinterpret_cast<uint32_t>(static_cast<void* (*)(size_t)>(&::operator new)),
+        reinterpret_cast<uint32_t>(static_cast<void* (*)(size_t)>(&::operator new[])),
+        reinterpret_cast<uint32_t>(static_cast<void* (*)(size_t, const std::nothrow_t&) noexcept>(&::operator new)),
+        reinterpret_cast<uint32_t>(static_cast<void* (*)(size_t, const std::nothrow_t&) noexcept>(&::operator new[])),
+    };
+    newLo = *std::min_element(a, a + 4);
+    newHi = *std::max_element(a, a + 4);
+  }
+  if (v >= newLo && v < newHi + 0x80) return true;
+  const uint32_t w[] = {reinterpret_cast<uint32_t>(&__wrap_malloc), reinterpret_cast<uint32_t>(&__wrap_calloc),
+                        reinterpret_cast<uint32_t>(&__wrap_realloc)};
+  for (const uint32_t f : w) {
+    if (v >= f && v < f + 0x80) return true;
+  }
+  return false;
 }
 }  // namespace
 
@@ -615,6 +664,186 @@ bool heapWalkRecord(walker_heap_into_t, walker_block_info_t block, void* user) {
     }
   }
   return true;
+}
+}  // namespace
+
+namespace {
+// heap-low.txt: who holds the heap when the low-water mark falls below HEAP_LOW_SNAPSHOT_BELOW.
+// dumpHeapMap needs a 14 KB array and cannot run there, so this aggregates used blocks by their
+// allocation tag into a fixed static table during the walk (no allocation, heap locked) and
+// writes the largest owners. The chapter build's heap fell page by page to 6.2 KB free
+// (2026092609, in=pagewrite after=pagewrite): something accumulates across pages.
+constexpr uint8_t HEAP_LOW_OWNERS = 40;
+struct HeapOwner {
+  uint32_t tag[3];
+  uint32_t bytes;
+  uint16_t blocks;
+  uint32_t largest;
+};
+struct HeapLowCtx {
+  HeapOwner owners[HEAP_LOW_OWNERS];
+  uint8_t used;
+  uint32_t overflowBytes;
+  uint16_t overflowBlocks;
+  uint32_t usedBytes;
+  uint32_t freeBytes;
+  uint32_t largestFree;
+};
+HeapLowCtx heapLow;
+
+bool heapLowRecord(walker_heap_into_t, walker_block_info_t block, void* user) {
+  auto* ctx = static_cast<HeapLowCtx*>(user);
+  if (!block.used) {
+    ctx->freeBytes += block.size;
+    if (block.size > ctx->largestFree) ctx->largestFree = block.size;
+    return true;
+  }
+  ctx->usedBytes += block.size;
+  uint32_t tag[3] = {0, 0, 0};
+  uint32_t requested = 0;
+  if (block.size >= 8) memcpy(&requested, static_cast<const uint8_t*>(block.ptr) + 4, sizeof(requested));
+  if (requested >= ALLOC_TAG_BYTES && requested + 8 <= block.size) {
+    memcpy(tag, static_cast<const uint8_t*>(block.ptr) + 8 + requested - ALLOC_TAG_BYTES, sizeof(tag));
+    if (!looksLikeCode(tag[0])) tag[0] = tag[1] = tag[2] = 0;
+  }
+  for (uint8_t i = 0; i < ctx->used; i++) {
+    HeapOwner& o = ctx->owners[i];
+    if (o.tag[0] == tag[0] && o.tag[1] == tag[1] && o.tag[2] == tag[2]) {
+      o.bytes += block.size;
+      o.blocks++;
+      if (block.size > o.largest) o.largest = block.size;
+      return true;
+    }
+  }
+  if (ctx->used < HEAP_LOW_OWNERS) {
+    HeapOwner& o = ctx->owners[ctx->used++];
+    memcpy(o.tag, tag, sizeof(tag));
+    o.bytes = block.size;
+    o.blocks = 1;
+    o.largest = block.size;
+    return true;
+  }
+  // Full: the table filled in address order with small owners and 130 KB went to "other"
+  // (2026092611). Evict the smallest owner when this block alone is bigger than it.
+  uint8_t smallest = 0;
+  for (uint8_t i = 1; i < ctx->used; i++) {
+    if (ctx->owners[i].bytes < ctx->owners[smallest].bytes) smallest = i;
+  }
+  HeapOwner& victim = ctx->owners[smallest];
+  if (block.size > victim.bytes) {
+    ctx->overflowBytes += victim.bytes;
+    ctx->overflowBlocks += victim.blocks;
+    memcpy(victim.tag, tag, sizeof(tag));
+    victim.bytes = block.size;
+    victim.blocks = 1;
+    victim.largest = block.size;
+  } else {
+    ctx->overflowBytes += block.size;
+    ctx->overflowBlocks++;
+  }
+  return true;
+}
+
+constexpr uint8_t HEAP_LOW_TOP = 20;
+struct HeapLowSlot {
+  const char* path;
+  uint32_t ms;
+  uint32_t minFree;
+  uint32_t freeNow;
+  uint32_t maxNow;
+  char in[20];
+  char after[20];
+  uint32_t usedBytes;
+  uint32_t freeBytes;
+  uint32_t largestFree;
+  uint32_t otherBytes;
+  uint16_t otherBlocks;
+  uint8_t count;
+  HeapOwner top[HEAP_LOW_TOP];
+  uint32_t lowestFreeNow;  // this slot re-snapshots only when the heap is 512 B lower still
+  bool pending;
+};
+// [0] the global low-water mark (any phase: in practice the anti-aliasing page render);
+// [1] the chapter build's page boundaries, which never set the global low once a render has.
+HeapLowSlot heapLowSlots[2] = {{"/heap-low.txt"}, {"/heap-low-build.txt"}};
+std::atomic<bool> heapLowBusy{false};
+
+void snapshotHeapLowInto(HeapLowSlot& slot, const char* in, const char* after, const uint32_t minFree,
+                         const uint32_t freeNow) {
+  bool expected = false;
+  if (!heapLowBusy.compare_exchange_strong(expected, true)) return;
+  memset(&heapLow, 0, sizeof(heapLow));
+  heap_caps_walk(MALLOC_CAP_8BIT, heapLowRecord, &heapLow);
+  std::sort(heapLow.owners, heapLow.owners + heapLow.used,
+            [](const HeapOwner& a, const HeapOwner& b) { return a.bytes > b.bytes; });
+  slot.ms = millis();
+  slot.minFree = minFree;
+  slot.freeNow = freeNow;
+  slot.maxNow = ESP.getMaxAllocHeap();
+  snprintf(slot.in, sizeof(slot.in), "%s", in ? in : "?");
+  snprintf(slot.after, sizeof(slot.after), "%s", after ? after : "?");
+  slot.usedBytes = heapLow.usedBytes;
+  slot.freeBytes = heapLow.freeBytes;
+  slot.largestFree = heapLow.largestFree;
+  slot.count = heapLow.used < HEAP_LOW_TOP ? heapLow.used : HEAP_LOW_TOP;
+  memcpy(slot.top, heapLow.owners, sizeof(HeapOwner) * slot.count);
+  slot.otherBytes = heapLow.overflowBytes;
+  slot.otherBlocks = heapLow.overflowBlocks;
+  for (uint8_t i = slot.count; i < heapLow.used; i++) {
+    slot.otherBytes += heapLow.owners[i].bytes;
+    slot.otherBlocks += heapLow.owners[i].blocks;
+  }
+  slot.lowestFreeNow = freeNow;
+  slot.pending = true;
+  heapLowBusy.store(false);
+}
+
+void snapshotHeapLow(const char* in, const char* after, const uint32_t minFree, const uint32_t freeNow) {
+  snapshotHeapLowInto(heapLowSlots[0], in, after, minFree, freeNow);
+}
+
+void writeHeapLowIfPending() {
+  for (HeapLowSlot& slot : heapLowSlots) {
+    if (!slot.pending) continue;
+    bool expected = false;
+    if (!heapLowBusy.compare_exchange_strong(expected, true)) return;
+    slot.pending = false;
+    HalFile file;
+    if (Storage.openFileForWrite("DIAG", slot.path, file)) {
+      char line[256];
+      int n = snprintf(line, sizeof(line),
+                       "# build=" OST_BUILD_ID
+                       " at_ms=%lu in=%s after=%s min=%lu now=%lu max=%lu\n"
+                       "# used=%lu free=%lu largest_free=%lu other=%u/%luB\n",
+                       static_cast<unsigned long>(slot.ms), slot.in, slot.after,
+                       static_cast<unsigned long>(slot.minFree), static_cast<unsigned long>(slot.freeNow),
+                       static_cast<unsigned long>(slot.maxNow), static_cast<unsigned long>(slot.usedBytes),
+                       static_cast<unsigned long>(slot.freeBytes), static_cast<unsigned long>(slot.largestFree),
+                       static_cast<unsigned>(slot.otherBlocks), static_cast<unsigned long>(slot.otherBytes));
+      if (n > 0)
+        file.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(std::min<int>(n, sizeof(line) - 1)));
+      for (uint8_t i = 0; i < slot.count; i++) {
+        const HeapOwner& o = slot.top[i];
+        n = snprintf(line, sizeof(line), "%6lu B %4u blk max %5lu by=0x%08lx<0x%08lx<0x%08lx\n",
+                     static_cast<unsigned long>(o.bytes), static_cast<unsigned>(o.blocks),
+                     static_cast<unsigned long>(o.largest), static_cast<unsigned long>(o.tag[0]),
+                     static_cast<unsigned long>(o.tag[1]), static_cast<unsigned long>(o.tag[2]));
+        if (n > 0)
+          file.write(reinterpret_cast<const uint8_t*>(line), static_cast<size_t>(std::min<int>(n, sizeof(line) - 1)));
+      }
+    }
+    heapLowBusy.store(false);
+  }
+}
+
+// Chapter-build page boundary: snapshot into the build slot whenever the heap is lower than at
+// any earlier boundary (by 512 B), independent of the global low-water mark.
+void snapshotBuildLowIfLower(const char* point) {
+  const uint32_t freeNow = ESP.getFreeHeap();
+  HeapLowSlot& slot = heapLowSlots[1];
+  if (freeNow >= HEAP_LOW_SNAPSHOT_BELOW) return;
+  if (slot.lowestFreeNow != 0 && freeNow + HEAP_MIN_STEP > slot.lowestFreeNow) return;
+  snapshotHeapLowInto(slot, point, heapLastPoint, ESP.getMinFreeHeap(), freeNow);
 }
 }  // namespace
 
@@ -838,6 +1067,7 @@ void InputDiag::noteGrayscaleSplit(const unsigned long lsbMs, const unsigned lon
 
 void InputDiag::noteBuildChunk(const int spineIndex, const uint16_t pageCountBefore, const uint16_t pageCountAfter,
                                const unsigned long durationMs) {
+  snapshotBuildLowIfLower("build");
   checkHeapMin("build");
   if (static_cast<uint32_t>(durationMs) <= buildChunkMaxMs) return;
   buildChunkMaxMs = static_cast<uint32_t>(durationMs);
@@ -954,6 +1184,7 @@ void InputDiag::noteGrayscalePhases(const unsigned long lsbDrawMs, const unsigne
 }
 
 void InputDiag::noteBuildPageWrite(const unsigned long ms) {
+  snapshotBuildLowIfLower("pagewrite");
   checkHeapMin("pagewrite");
   buildPageWrites++;
   buildPageWriteMs += static_cast<uint32_t>(ms);
@@ -1033,6 +1264,7 @@ void InputDiag::flush(const bool inputActive) {
     return;
   }
   lastFlushAt = now;
+  writeHeapLowIfPending();
 
   // The first write of a boot destroys the previous session's trail -- which,
   // after a crash, is the only record of how the heap got to where it died
