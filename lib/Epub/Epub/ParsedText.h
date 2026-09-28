@@ -189,5 +189,6 @@ class ParsedText {
   // wider and used to push such columns' ruby into the neighbouring column.
   void layoutVerticalColumns(const GfxRenderer& renderer, int fontId, uint16_t columnHeight,
                              const std::function<void(std::unique_ptr<TextBlock>, uint32_t)>& processColumn,
-                             int* cjkCellWidthMemo = nullptr, bool includeLastColumn = true);
+                             int* cjkCellWidthMemo = nullptr, bool includeLastColumn = true,
+                             int8_t characterSpacing = 0);
 };

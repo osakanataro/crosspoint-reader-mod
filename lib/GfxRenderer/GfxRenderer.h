@@ -114,9 +114,6 @@ class GfxRenderer {
   // render time the bitmap is wanted next anyway, so the load stays the cheaper path there.
   // Set through MeasureOnlyScope.
   mutable bool measureOnly_ = false;
-  // Extra spacing between cells in vertical (tategaki) layout, as a percent of the
-  // cell advance. Set from the reader spec before a vertical section is laid out.
-  int _verticalCharSpacing = 0;
   mutable int clipLeft_ = 0;
   mutable int clipTop_ = 0;
   mutable int clipRight_ = 32767;
@@ -399,8 +396,6 @@ class GfxRenderer {
   // Memoized per font: resolving it costs one advance lookup, and on an SD font whose advance
   // table has not seen the probe character yet, a single glyph read.
   int getCjkCellWidth(int fontId) const;
-  void setVerticalCharSpacing(int spacingPercent) { _verticalCharSpacing = spacingPercent; }
-  int getVerticalCharSpacing() const { return _verticalCharSpacing; }
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;

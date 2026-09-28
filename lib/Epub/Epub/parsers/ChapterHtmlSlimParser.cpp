@@ -2499,7 +2499,7 @@ void ChapterHtmlSlimParser::maybeSoftFlushTextBlock() {
         [this](std::unique_ptr<TextBlock> column, const uint32_t offset) {
           addColumnToPage(std::move(column), offset);
         },
-        &verticalCellWidthMemo, false);
+        &verticalCellWidthMemo, false, characterSpacing);
     if (currentTextBlock->hadDroppedWords()) layoutOom = true;
     return;
   }
@@ -3143,7 +3143,7 @@ void ChapterHtmlSlimParser::makePages() {
         [this](std::unique_ptr<TextBlock> column, const uint32_t offset) {
           addColumnToPage(std::move(column), offset);
         },
-        &verticalCellWidthMemo);
+        &verticalCellWidthMemo, true, characterSpacing);
     if (currentTextBlock->hadDroppedWords()) {
       layoutOom = true;
     }

@@ -708,8 +708,12 @@ int ParsedText::resolveFirstLineIndent(const bool isFirstLine, const GfxRenderer
 }
 void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fontId, const uint16_t columnHeight,
                                        const std::function<void(std::unique_ptr<TextBlock>, uint32_t)>& processColumn,
-                                       int* cjkCellWidthMemo, const bool includeLastColumn) {
+                                       int* cjkCellWidthMemo, const bool includeLastColumn,
+                                       const int8_t characterSpacing) {
   if (words.empty()) return;
+  // Stamped here rather than at construction, as layoutAndExtractLines does: the parser replaces
+  // blockStyle as CSS resolves, and every column's TextBlock carries it on to the page cache.
+  blockStyle.characterSpacing = characterSpacing;
 
   // Load SD-card font advance metrics (no bitmaps) so getTextAdvanceX needs no per-glyph SD I/O.
   // Same packed-arena handoff as layoutAndExtractLines.
@@ -762,8 +766,13 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     droppedWords = true;
     return;
   }
-  const int sp = renderer.getVerticalCharSpacing();
-  const int cjkSpacing = cjkCharAdvance * sp / 100;
+  // Character spacing (upstream #3528, -2..+2 px) runs along the column in vertical text: the
+  // same pixels the horizontal path adds after every glyph go after every cell, whatever sits in
+  // it. A sideways Latin run is one cell here and takes the spacing once, not per letter --
+  // drawTextSideways sets the run itself without tracking, so per-letter spacing would only
+  // push the next cell away from ink that did not move.
+  const int track = blockStyle.characterSpacing;
+  const auto spaced = [track](const int h) { return static_cast<uint16_t>(std::max(1, h + track)); };
   for (size_t i = 0; i < words.size(); i++) {
     const auto vb = behaviorAt(i);
     const char* text = wordStore.cstr(words[i]);
@@ -771,7 +780,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     if (vb == VerticalTextUtils::VerticalBehavior::InlineImage || InlineImageToken::is(text)) {
       const int adv = InlineImageToken::advance(text);
       baseHeight = static_cast<uint16_t>(adv > 0 ? adv : cjkCharAdvance);
-      wordHeights[i] = static_cast<uint16_t>(baseHeight + cjkSpacing);
+      wordHeights[i] = spaced(baseHeight);
       continue;
     }
     if (vb == VerticalTextUtils::VerticalBehavior::TateChuYoko) {
@@ -788,11 +797,7 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     } else {  // Upright and Sideways both advance by the glyph's own width
       baseHeight = static_cast<uint16_t>(renderer.getTextAdvanceX(fontId, text, wordStyles[i]));
     }
-    if (vb == VerticalTextUtils::VerticalBehavior::Upright) {
-      wordHeights[i] = static_cast<uint16_t>(baseHeight + baseHeight * sp / 100);
-    } else {
-      wordHeights[i] = static_cast<uint16_t>(baseHeight + cjkSpacing);
-    }
+    wordHeights[i] = spaced(baseHeight);
   }
 
   // First-column indent. An explicit text-indent is honoured in both signs: the EBPAJ
