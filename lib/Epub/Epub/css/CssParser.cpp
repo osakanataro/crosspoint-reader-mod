@@ -134,14 +134,15 @@ std::string_view stripTrailingImportant(std::string_view value) {
 }
 
 constexpr std::array STYLE_LENGTH_FIELDS = {
-    &CssStyle::textIndent,   &CssStyle::marginTop,   &CssStyle::marginBottom,  &CssStyle::marginLeft,
-    &CssStyle::marginRight,  &CssStyle::paddingTop,  &CssStyle::paddingBottom, &CssStyle::paddingLeft,
-    &CssStyle::paddingRight, &CssStyle::imageHeight, &CssStyle::imageWidth,
+    &CssStyle::textIndent,    &CssStyle::marginTop,   &CssStyle::marginBottom,  &CssStyle::marginLeft,
+    &CssStyle::marginRight,   &CssStyle::paddingTop,  &CssStyle::paddingBottom, &CssStyle::paddingLeft,
+    &CssStyle::paddingRight,  &CssStyle::imageHeight, &CssStyle::imageWidth,    &CssStyle::imageMaxHeight,
+    &CssStyle::imageMaxWidth,
 };
 constexpr size_t STYLE_LENGTH_FIELD_COUNT = STYLE_LENGTH_FIELDS.size();
 constexpr size_t STYLE_WIRE_BYTES =
     5 + STYLE_LENGTH_FIELD_COUNT * (sizeof(decltype(CssLength::value)) + 1) + 5 + sizeof(uint32_t);
-constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 21) - 1;
+constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 23) - 1;
 
 void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   size_t offset = 0;
@@ -187,6 +188,8 @@ void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   if (style.defined.listStyleType) definedBits |= 1 << 18;
   if (style.defined.textEmphasis) definedBits |= 1 << 19;
   if (style.defined.textOrientation) definedBits |= 1 << 20;
+  if (style.defined.imageMaxHeight) definedBits |= 1 << 21;
+  if (style.defined.imageMaxWidth) definedBits |= 1 << 22;
   memcpy(out + offset, &definedBits, sizeof(definedBits));
 }
 
@@ -263,6 +266,8 @@ bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
   style.defined.listStyleType = (definedBits & 1 << 18) != 0;
   style.defined.textEmphasis = (definedBits & 1 << 19) != 0;
   style.defined.textOrientation = (definedBits & 1 << 20) != 0;
+  style.defined.imageMaxHeight = (definedBits & 1 << 21) != 0;
+  style.defined.imageMaxWidth = (definedBits & 1 << 22) != 0;
   return true;
 }
 
@@ -709,6 +714,18 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     const std::string_view listStyleValue = stripTrailingImportant(value);
     style.listStyleType = iequalsAscii(listStyleValue, "none") ? CssListStyleType::None : CssListStyleType::Disc;
     style.defined.listStyleType = 1;
+  } else if (iequalsAscii(name, "max-height")) {
+    CssLength len;
+    if (tryInterpretLength(value, len)) {
+      style.imageMaxHeight = len;
+      style.defined.imageMaxHeight = 1;
+    }
+  } else if (iequalsAscii(name, "max-width")) {
+    CssLength len;
+    if (tryInterpretLength(value, len)) {
+      style.imageMaxWidth = len;
+      style.defined.imageMaxWidth = 1;
+    }
   } else if (iequalsAscii(name, "text-emphasis-style") || iequalsAscii(name, "text-emphasis") ||
              iequalsAscii(name, "-epub-text-emphasis-style") || iequalsAscii(name, "-epub-text-emphasis") ||
              iequalsAscii(name, "-webkit-text-emphasis-style") || iequalsAscii(name, "-webkit-text-emphasis")) {

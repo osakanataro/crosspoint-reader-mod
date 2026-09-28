@@ -19,6 +19,10 @@ class ImageBlock final : public Block {
   bool hasValidCache() const;
   bool needsDecode() const;
   void renderPlaceholder(GfxRenderer& renderer, int x, int y) const;
+  // The .pxc path for an extracted image, and whether a finished cache of exactly that size exists.
+  // Used by the chapter build to pregenerate the cache while it owns the heap.
+  static std::string cachePathFor(const std::string& imagePath);
+  static bool hasValidCacheFor(const std::string& imagePath, int width, int height);
   static void clearRenderFailures();
 
   // A page render draws its image up to ~13 times (BW double-refresh plus every

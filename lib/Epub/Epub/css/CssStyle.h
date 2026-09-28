@@ -128,6 +128,8 @@ struct CssPropertyFlags {
   uint16_t listStyleType : 1;
   uint16_t textEmphasis : 1;
   uint16_t textOrientation : 1;
+  uint16_t imageMaxHeight : 1;
+  uint16_t imageMaxWidth : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -150,12 +152,15 @@ struct CssPropertyFlags {
         verticalAlign(0),
         listStyleType(0),
         textEmphasis(0),
-        textOrientation(0) {}
+        textOrientation(0),
+        imageMaxHeight(0),
+        imageMaxWidth(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
-           imageWidth || display || direction || verticalAlign || listStyleType || textEmphasis || textOrientation;
+           imageWidth || display || direction || verticalAlign || listStyleType || textEmphasis || textOrientation ||
+           imageMaxHeight || imageMaxWidth;
   }
 
   void clearAll() {
@@ -163,14 +168,14 @@ struct CssPropertyFlags {
     marginTop = marginBottom = marginLeft = marginRight = 0;
     paddingTop = paddingBottom = paddingLeft = paddingRight = 0;
     imageHeight = imageWidth = display = direction = verticalAlign = listStyleType = 0;
-    textEmphasis = textOrientation = 0;
+    textEmphasis = textOrientation = imageMaxHeight = imageMaxWidth = 0;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..20.
+// Cache serializes defined flags as uint32_t with bit indices 0..22.
 static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
               "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
-static_assert(sizeof(CssPropertyFlags) * 8 >= 21,
+static_assert(sizeof(CssPropertyFlags) * 8 >= 23,
               "CssPropertyFlags has fewer bits than properties; update bitfield widths");
 
 // Represents a collection of CSS style properties
@@ -194,6 +199,10 @@ struct CssStyle {
   CssLength paddingRight;   // Padding right
   CssLength imageHeight;    // Height for img (e.g. 2em) – width derived from aspect ratio when only height set
   CssLength imageWidth;     // Width for img when both or only width set
+  // Upper bounds for img. Unlike width/height these only ever shrink a picture: a source smaller
+  // than the bound keeps its own size. This is how commercial EPUBs size their illustrations.
+  CssLength imageMaxHeight;
+  CssLength imageMaxWidth;
   CssDisplay display = CssDisplay::Block;                          // display property (Block or None)
   CssVerticalAlign verticalAlign = CssVerticalAlign::Baseline;     // vertical-align (super/sub positioning)
   CssListStyleType listStyleType = CssListStyleType::Disc;         // list-style-type (Disc or None)
@@ -281,6 +290,14 @@ struct CssStyle {
       listStyleType = base.listStyleType;
       defined.listStyleType = 1;
     }
+    if (base.hasImageMaxHeight()) {
+      imageMaxHeight = base.imageMaxHeight;
+      defined.imageMaxHeight = 1;
+    }
+    if (base.hasImageMaxWidth()) {
+      imageMaxWidth = base.imageMaxWidth;
+      defined.imageMaxWidth = 1;
+    }
     if (base.hasTextEmphasis()) {
       textEmphasis = base.textEmphasis;
       defined.textEmphasis = 1;
@@ -311,6 +328,8 @@ struct CssStyle {
   [[nodiscard]] bool hasVerticalAlign() const { return defined.verticalAlign; }
   [[nodiscard]] bool hasListStyleType() const { return defined.listStyleType; }
   [[nodiscard]] bool hasTextEmphasis() const { return defined.textEmphasis; }
+  [[nodiscard]] bool hasImageMaxHeight() const { return defined.imageMaxHeight; }
+  [[nodiscard]] bool hasImageMaxWidth() const { return defined.imageMaxWidth; }
   [[nodiscard]] bool hasTextOrientation() const { return defined.textOrientation; }
 
   void reset() {
@@ -322,7 +341,7 @@ struct CssStyle {
     textIndent = CssLength{};
     marginTop = marginBottom = marginLeft = marginRight = CssLength{};
     paddingTop = paddingBottom = paddingLeft = paddingRight = CssLength{};
-    imageHeight = imageWidth = CssLength{};
+    imageHeight = imageWidth = imageMaxHeight = imageMaxWidth = CssLength{};
     display = CssDisplay::Block;
     verticalAlign = CssVerticalAlign::Baseline;
     listStyleType = CssListStyleType::Disc;

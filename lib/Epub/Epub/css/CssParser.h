@@ -54,7 +54,8 @@ class CssParser {
   //     text-combine-upright (two enum bytes, defined bits 19-20), and two-part descendant
   //     selectors (".vrtl .start-1em") are stored under a key with a single space. Upstream
   //     1.6.5 is v12 with the shorter record, so the number has to differ.
-  static constexpr uint8_t CSS_CACHE_VERSION = 13;
+  // v14 (this tree): max-width / max-height (two more lengths, defined bits 21-22).
+  static constexpr uint8_t CSS_CACHE_VERSION = 14;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;

@@ -25,6 +25,7 @@
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
+#include "Epub/converters/PngStreamDecoder.h"
 #include "Epub/htmlEntities.h"
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
@@ -1752,9 +1753,24 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   if (displayHeight < 1) displayHeight = 1;
                   LOG_DBG("EHP", "Display size from CSS width: %dx%d", displayWidth, displayHeight);
                 } else {
-                  // Scale to fit container while maintaining aspect ratio
+                  // Scale to fit container while maintaining aspect ratio. max-width and
+                  // max-height tighten those bounds when the author set them -- which is how
+                  // commercial EPUBs size illustrations: of 955 vertical books surveyed the
+                  // sizing came from max-* classes, never from a fixed width. Unlike
+                  // width/height these only shrink: a picture already inside the bound keeps
+                  // its own size.
                   int maxWidth = containerWidth;
                   int maxHeight = self->viewportHeight;
+                  if (imgStyle.hasImageMaxWidth()) {
+                    const int bound = static_cast<int>(
+                        imgStyle.imageMaxWidth.toPixels(emSize, static_cast<float>(containerWidth)) + 0.5f);
+                    if (bound > 0 && bound < maxWidth) maxWidth = bound;
+                  }
+                  if (imgStyle.hasImageMaxHeight()) {
+                    const int bound = static_cast<int>(
+                        imgStyle.imageMaxHeight.toPixels(emSize, static_cast<float>(self->viewportHeight)) + 0.5f);
+                    if (bound > 0 && bound < maxHeight) maxHeight = bound;
+                  }
                   float scaleX = (dims.width > maxWidth) ? (float)maxWidth / dims.width : 1.0f;
                   float scaleY = (dims.height > maxHeight) ? (float)maxHeight / dims.height : 1.0f;
                   float scale = (scaleX < scaleY) ? scaleX : scaleY;
@@ -1765,10 +1781,71 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   LOG_DBG("EHP", "Display size: %dx%d (scale %.2f)", displayWidth, displayHeight, scale);
                 }
 
+                // Pregenerate now, while the build owns the heap. The render path often cannot:
+                // extraction wants a contiguous 32KB inflate window, and a page full of text
+                // holds its glyphs while it draws (measured 24-47KB largest block), so an inline
+                // gaiji on a text page came out as its frame while a picture on a page of its own
+                // drew. Extraction runs on the lent framebuffer; a PNG is also decoded to its
+                // .pxc by the streamed decoder. JPEG decoding stays at render time (its decoder
+                // fits the render heap). Every failure leaves the lazy render-time path as the
+                // fallback.
+                if (!ImageBlock::hasValidCacheFor(cachedImagePath, displayWidth, displayHeight)) {
+                  if (self->popupFn && !self->imagePopupFired) {
+                    self->imagePopupFired = true;
+                    self->popupFn();  // draws, so before the framebuffer is lent
+                  }
+                  bool haveFile = false;
+                  {
+                    HalFile probe;
+                    haveFile = Storage.exists(cachedImagePath.c_str()) &&
+                               Storage.openFileForRead("EHP", cachedImagePath, probe) && probe.size() > 0;
+                  }
+                  if (!haveFile) {
+                    HalFile outFile;
+                    if (Storage.openFileForWrite("EHP", cachedImagePath, outFile)) {
+                      bool extracted;
+                      {
+                        GfxRenderer::FrameBufferLoan loan(self->renderer);
+                        extracted = self->epub->readItemContentsToStream(resolvedPath, outFile, 8192);
+                      }
+                      outFile.flush();
+                      outFile.close();
+                      if (extracted) {
+                        haveFile = true;
+                      } else {
+                        Storage.remove(cachedImagePath.c_str());  // a partial file would pass the probe
+                      }
+                    }
+                  }
+                  if (haveFile && FsHelpers::hasPngExtension(cachedImagePath)) {
+                    GfxRenderer::FrameBufferLoan decodeLoan(self->renderer);
+                    (void)PngStreamDecoder::decodeToCache(cachedImagePath, ImageBlock::cachePathFor(cachedImagePath),
+                                                          displayWidth, displayHeight);
+                  }
+                }
+
                 // Flush any pending text block so it appears before the image
                 if (self->partWordBufferIndex > 0) {
                   self->flushPartWordBuffer();
                 }
+
+                // Vertical text: a character-sized image (a gaiji at 1em, a 3-4em glyph image)
+                // stays in the flow as one token of its own height, in the cell its author put
+                // it in -- also as a ruby base, since the ruby span counts words. Anything
+                // wider than the column pitch would overlap its neighbours and still gets a
+                // column of its own below; so does anything taller than half a column.
+                if (self->isVertical && self->currentTextBlock && displayWidth > 0 && displayHeight > 0) {
+                  const int columnPitch = self->verticalColumnWidth() + self->verticalColumnSpacing();
+                  if (displayWidth <= columnPitch && displayHeight <= self->viewportHeight / 2) {
+                    self->currentTextBlock->addVerticalToken(
+                        InlineImageToken::encode(displayWidth, displayHeight, cachedImagePath, resolvedPath),
+                        EpdFontFamily::REGULAR, VerticalTextUtils::VerticalBehavior::InlineImage,
+                        self->visibleTextOffset);
+                    self->depth += 1;
+                    return;
+                  }
+                }
+
                 if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
                   const BlockStyle parentBlockStyle = self->currentTextBlock->getBlockStyle();
                   self->startNewTextBlock(parentBlockStyle);
@@ -1786,6 +1863,70 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   if (self->blockStyleStack.size() > 1) {
                     imageMarginBottom = self->blockStyleStack.back().bottomInset();
                   }
+                }
+
+                if (self->isVertical) {
+                  // Tategaki: the page fills with columns advancing right-to-left, so an
+                  // image consumes horizontal span from the same cursor the columns use and
+                  // centres on the page's height. CSS vertical margins belong to the
+                  // horizontal model; here the column gap separates image from text. An
+                  // image wider than the space left moves to a fresh page, which is also how
+                  // a full-page illustration naturally becomes a page of its own.
+                  auto imageBlock =
+                      makeUniqueNoThrow<ImageBlock>(cachedImagePath, resolvedPath, displayWidth, displayHeight);
+                  if (!imageBlock) {
+                    LOG_ERR("EHP", "Failed to create ImageBlock");
+                    return;
+                  }
+                  if (!self->currentPage) {
+                    self->currentPage.reset(new Page());
+                    self->currentPageVisibleOffsetSet = false;
+                  }
+                  const int columnWidth = self->verticalColumnWidth();
+                  const int columnSpacing = self->verticalColumnSpacing();
+                  // Same re-anchor rule as addColumnToPage: the cursor belongs to a page
+                  // index, not to a Page object.
+                  if (self->verticalCursorPageIndex != self->completedPageCount) {
+                    self->currentPageNextX =
+                        static_cast<int16_t>(self->viewportWidth - columnWidth - self->verticalRubyReserve());
+                    self->verticalCursorPageIndex = self->completedPageCount;
+                  }
+                  int rightEdge = self->currentPageNextX + columnWidth;
+                  if (displayWidth > rightEdge && !self->currentPage->elements.empty()) {
+                    self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
+                                         self->xpathListItemIndex, self->currentPageVisibleOffset);
+                    self->completedPageCount++;
+                    self->currentPage.reset(new Page());
+                    self->currentPageVisibleOffsetSet = false;
+                    self->currentPageNextX =
+                        static_cast<int16_t>(self->viewportWidth - columnWidth - self->verticalRubyReserve());
+                    self->verticalCursorPageIndex = self->completedPageCount;
+                    rightEdge = self->viewportWidth;
+                  }
+                  int vertX = rightEdge - displayWidth;
+                  if (vertX < 0) vertX = 0;
+                  int vertY = (self->viewportHeight - displayHeight) / 2;
+                  if (vertY < 0) vertY = 0;
+                  auto pageImage = makeUniqueNoThrow<PageImage>(std::move(imageBlock), static_cast<int16_t>(vertX),
+                                                                static_cast<int16_t>(vertY));
+                  if (!pageImage) {
+                    LOG_ERR("EHP", "Failed to create PageImage");
+                    return;
+                  }
+                  self->currentPage->elements.push_back(std::move(pageImage));
+                  self->setCurrentPageVisibleOffset(self->visibleTextOffset);
+                  self->commitAnchorsAwaitingPlacement();
+                  // The next column starts one gap to the image's left.
+                  self->currentPageNextX = static_cast<int16_t>(vertX - columnSpacing - columnWidth);
+                  if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
+                    BlockStyle resetStyle;
+                    resetStyle.alignment = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                                               ? CssTextAlign::Justify
+                                               : static_cast<CssTextAlign>(self->paragraphAlignment);
+                    self->currentTextBlock->setBlockStyle(resetStyle);
+                  }
+                  self->depth += 1;
+                  return;
                 }
 
                 // Create page for image - only break if image won't fit remaining space
@@ -1832,6 +1973,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   LOG_ERR("EHP", "Failed to create ImageBlock");
                   return;
                 }
+
                 int xPos = (self->viewportWidth - displayWidth) / 2;
                 auto pageImage = makeUniqueNoThrow<PageImage>(std::move(imageBlock), xPos, self->currentPageNextY);
                 if (!pageImage) {

@@ -1,6 +1,7 @@
 #include "ImageBlock.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -12,6 +13,7 @@
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PngStreamDecoder.h"
 
 // Cache file format:
 // - uint16_t width
@@ -291,6 +293,18 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
 }  // namespace
 
+std::string ImageBlock::cachePathFor(const std::string& imagePath) { return getCachePath(imagePath); }
+
+bool ImageBlock::hasValidCacheFor(const std::string& imagePath, const int width, const int height) {
+  const auto cachePath = getCachePath(imagePath);
+  HalFile cacheFile;
+  if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
+    return false;
+  }
+  uint16_t cachedWidth, cachedHeight;
+  return readValidCacheHeader(cacheFile, width, height, cachedWidth, cachedHeight);
+}
+
 bool ImageBlock::hasValidCache() const {
   const auto cachePath = getCachePath(imagePath);
   HalFile cacheFile;
@@ -383,6 +397,16 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
+    return;
+  }
+
+  // Streamed PNG path first: its inflate state is two separate heap blocks of 11KB and 32KB,
+  // both available mid-read where PNGdec's single ~62KB object (and its 60KB free-heap gate)
+  // is not -- measured 43-55KB free while a page draws, so every PNG came out as its frame.
+  // On success the .pxc exists and the cache render takes over, for this pass and every future one.
+  if (FsHelpers::hasPngExtension(imagePath) && PngStreamDecoder::decodeToCache(imagePath, cachePath, width, height) &&
+      renderFromCache(renderer, cachePath, x, y, width, height)) {
+    renderer.preserveImagePolarity(x, y, width, height);
     return;
   }
 

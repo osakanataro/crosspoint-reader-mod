@@ -64,7 +64,9 @@ namespace {
 //      is indented once, and not at all on top of a leading U+3000; its top margin goes before
 //      its first line instead of before the final pass.
 // v53: Vertical columns carry link rectangles, so the footnote selector can reach them.
-constexpr uint8_t SECTION_FILE_VERSION = 53;
+// v54: Images honour max-width/max-height; vertical books set images in the column flow.
+// v55: A vertical page holding a single image centres it horizontally.
+constexpr uint8_t SECTION_FILE_VERSION = 55;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -460,8 +462,15 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
       epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
       spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
       spec.focusReadingEnabled, spec.isVertical,
-      [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
-                     const uint32_t visibleTextOffset) {
+      [this, ctxPtr, isVertical = spec.isVertical, viewportWidth = spec.viewportWidth](
+          std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
+          const uint32_t visibleTextOffset) {
+        // Vertical flow places an image at the column cursor, i.e. against the right edge; a
+        // page holding nothing but that image is an illustration page and centres instead.
+        if (isVertical && page->elements.size() == 1 && page->elements[0]->getTag() == TAG_PageImage) {
+          const int width = static_cast<const PageImage&>(*page->elements[0]).getImageBlock().getWidth();
+          if (width < viewportWidth) page->elements[0]->xPos = static_cast<int16_t>((viewportWidth - width) / 2);
+        }
         ctxPtr->lut.push_back(
             {this->onPageComplete(std::move(page)), paragraphIndex, listItemIndex, visibleTextOffset});
       },

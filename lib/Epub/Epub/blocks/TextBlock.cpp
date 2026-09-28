@@ -13,6 +13,7 @@
 #include <cstring>
 
 #include "../InlineImageToken.h"
+#include "ImageBlock.h"
 #ifdef INPUT_DIAG
 #include <Arduino.h>
 #endif
@@ -439,10 +440,18 @@ void TextBlock::renderVertical(const GfxRenderer& renderer, const int fontId, co
     const int cellY = yposArr[i] + y;
 
     if (InlineImageToken::is(word)) {
-      // A character-sized image in the flow keeps its cell. Drawing it waits for the image
-      // work to be rebuilt on upstream's pipeline (re-fork stage 7); until then the parser
-      // does not emit these tokens, so this only guards a stale page cache.
+      // A character-sized image in the flow: centred on the cell like an upright glyph, drawn
+      // through ImageBlock so it comes from the same .pxc cache the page images use (and is
+      // skipped during the font-cache scan like they are). The renderer is only const here
+      // because the text path never mutates it; the image cache state does.
       flushVerticalDecorations();
+      InlineImageToken::Spec spec;
+      if (!scanning && InlineImageToken::decode(word, spec)) {
+        ImageBlock image(spec.imagePath, spec.srcPath, spec.width, spec.height);
+        int drawX = cellX + (cellWidth - spec.width) / 2;
+        if (drawX < 0) drawX = 0;
+        image.render(const_cast<GfxRenderer&>(renderer), drawX, cellY);
+      }
       continue;
     }
 
