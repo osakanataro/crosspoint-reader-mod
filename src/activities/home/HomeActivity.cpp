@@ -24,6 +24,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/InputDiag.h"
 
 int HomeActivity::getMenuItemCount() const {
   int count = 4;  // File Browser, Library, File transfer, Settings
@@ -227,6 +228,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  // What is still allocated once the previous screen is gone (diag builds only).
+  InputDiag::dumpHeapMap("home-enter");
 
   hasOpdsServers = OPDS_STORE.hasServers();
 

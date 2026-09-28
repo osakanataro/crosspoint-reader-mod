@@ -37,6 +37,7 @@
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
+#include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
 #include "util/Timezones.h"
 
@@ -402,6 +403,13 @@ void setup() {
   LOG_INF("MAIN", "Device: %s", BoardConfig::ACTIVE.name);
 #endif
 
+  // The SDK's 40 MHz default stays. The X3 routes its card through the GPIO matrix (GPIO 8/10/7
+  // are not the C3's SPI2 IOMUX pins), which ESP-IDF rates at 26.6 MHz for reads, so asking for
+  // 20 MHz looked like it might remove retries. Measured 2026-09-11 on the same 634 KB cover:
+  // 40 MHz 3,886 ms, 20 MHz 4,342 ms. Halving the clock cost only 10%, so the transfer is about
+  // a tenth of the time and the rest is per-operation overhead -- the clock is not the lever.
+  InputDiag::noteSdClock(BoardConfig::ACTIVE.sd.spiHz != 0 ? BoardConfig::ACTIVE.sd.spiHz : 40000000);
+
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter
   if (!Storage.begin()) {
@@ -588,6 +596,11 @@ void loop() {
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   mappedInputManager.update();
+  // Immediately after the input poll: the gap between consecutive samples is what decides whether a
+  // press can be seen at all. No-op unless built with INPUT_DIAG.
+  const bool diagInputEdge = gpio.wasAnyPressed() || gpio.wasAnyReleased();
+  const bool diagInputPending = gpio.isDebouncePending();
+  InputDiag::sample(loopStartTime, diagInputEdge, diagInputPending);
 
   if (activityManager.requiresExclusiveStorageLoop()) {
     // USB Drive handed the raw SD card to the host. Do not run screenshots,
@@ -798,6 +811,11 @@ void loop() {
       LOG_DBG("LOOP", "New max loop duration: %lu ms (activity: %lu ms)", maxLoopDuration, activityDuration);
     }
   }
+
+  // After the loop duration above, so the SD write it may perform is not counted in it; before the
+  // render-lock check below, which returns early while a render is running (#3652). No-op unless
+  // built with INPUT_DIAG.
+  InputDiag::flush(diagInputEdge || diagInputPending);
 
   bool skipLoopDelay = false;
   {

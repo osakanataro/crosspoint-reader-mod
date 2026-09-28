@@ -75,6 +75,9 @@ class HalGPIO {
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;
   bool wasReleased(uint8_t buttonIndex) const;
+  // A button sample changed but has not been committed yet (InputManager's two-sample debounce).
+  // Consumed by the INPUT_DIAG timing diagnostics.
+  bool isDebouncePending() const;
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
   unsigned long getPowerButtonHeldTime() const;
