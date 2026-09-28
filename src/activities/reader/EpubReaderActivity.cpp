@@ -1411,6 +1411,9 @@ void EpubReaderActivity::renderBook() {
     uint32_t advCalls = 0, advMs = 0, advTableMax = 0, advTableLimit = 0, advFullSkips = 0;
     renderer.sdAdvanceStats(advCalls, advMs, advTableMax, advTableLimit, advFullSkips);
     InputDiag::noteBuildFontWork(advCalls, advMs, advTableMax, advTableLimit, advFullSkips);
+    uint32_t onlyCalls = 0, onlySd = 0, onlyMs = 0;
+    renderer.sdAdvanceOnlyStats(onlyCalls, onlySd, onlyMs);
+    InputDiag::noteBuildAdvanceOnly(onlyCalls, onlySd, onlyMs);
   }
   // Section loaded (or built far enough for the requested page).
   InputDiag::noteOpenStage(3, "sect");

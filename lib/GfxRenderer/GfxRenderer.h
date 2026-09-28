@@ -91,6 +91,11 @@ class GfxRenderer {
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+  // True while a section build is measuring text it will not draw. getTextAdvanceX then answers
+  // an uncached codepoint from the glyph record on the card instead of loading its bitmap; at
+  // render time the bitmap is wanted next anyway, so the load stays the cheaper path there.
+  // Set through MeasureOnlyScope.
+  mutable bool measureOnly_ = false;
   mutable int clipLeft_ = 0;
   mutable int clipTop_ = 0;
   mutable int clipRight_ = 32767;
@@ -194,7 +199,9 @@ class GfxRenderer {
   uint32_t glyphPrewarmEntryFails() const;
   void sdAdvanceStats(uint32_t& calls, uint32_t& ms, uint32_t& tableMax, uint32_t& tableLimit,
                       uint32_t& fullSkips) const;
-  // TTF (vector) fonts rendered via TtfEpdFont/FreeInkFont. Registered like an
+  void sdAdvanceOnlyStats(uint32_t& calls, uint32_t& sdReads, uint32_t& ms) const;
+  // Close the font files readAdvanceOnly held open for the measuring pass that just ended.
+  void closeSdMeasureFiles() const;  // TTF (vector) fonts rendered via TtfEpdFont/FreeInkFont. Registered like an
   // ordinary EpdFontFamily (insertFont), plus tracked here so ensureSdCardFontReady()
   // rebuilds their per-page glyph set on demand — the eager analogue of the SD
   // font prewarm. The TtfEpdFont is owned by the caller (SdCardFontSystem).
@@ -424,6 +431,21 @@ class GfxRenderer {
   void releaseFrameBufferForBuild();
   bool restoreFrameBufferAfterBuild();
   bool hasFrameBuffer() const { return frameBuffer != nullptr; }
+
+  class MeasureOnlyScope {
+   public:
+    explicit MeasureOnlyScope(const GfxRenderer& r) : r_(r), prev_(r.measureOnly_) { r_.measureOnly_ = true; }
+    ~MeasureOnlyScope() {
+      r_.measureOnly_ = prev_;
+      if (!prev_) r_.closeSdMeasureFiles();
+    }
+    MeasureOnlyScope(const MeasureOnlyScope&) = delete;
+    MeasureOnlyScope& operator=(const MeasureOnlyScope&) = delete;
+
+   private:
+    const GfxRenderer& r_;
+    bool prev_;
+  };
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

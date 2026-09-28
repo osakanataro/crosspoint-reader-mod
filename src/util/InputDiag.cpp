@@ -350,6 +350,9 @@ uint32_t buildFontMs = 0;
 uint32_t buildFontTableMax = 0;
 uint32_t buildFontTableLimit = 0;
 uint32_t buildFontFullSkips = 0;
+uint32_t buildAdvOnlyCalls = 0;
+uint32_t buildAdvOnlySdReads = 0;
+uint32_t buildAdvOnlyMs = 0;
 
 // Page-glyph prewarm budgets. The minimum is what the tightest page got; clips count the pages
 // that wanted more glyphs than the heap would pay for.
@@ -519,12 +522,19 @@ uint8_t imgEventCount = 0;  // total recorded; ring position = count % IMG_EVENT
 // changes for free(): the tag rides inside the block.
 namespace {
 constexpr size_t ALLOC_TAG_BYTES = 12;
+// Without the malloc wrappers the last 12 bytes of a block are the caller's data, not a tag.
+#ifdef INPUT_DIAG_ALLOC_TAGS
+constexpr bool ALLOC_TAGS = true;
+#else
+constexpr bool ALLOC_TAGS = false;
+#endif
 inline bool looksLikeCode(const uint32_t v) {
   return (v >= 0x42000000u && v < 0x42800000u) || (v >= 0x40380000u && v < 0x403E0000u);
 }
 // Addresses that name no owner: the malloc wrappers themselves and libstdc++'s operator new
 // family (new, new[], and their nothrow forms sit next to each other). Tags made only of these
 // said "operator new[] (nothrow)" for 65 KB of the heap and nothing more (heap-low, 2026-09-26).
+#ifdef INPUT_DIAG_ALLOC_TAGS
 bool isAllocPlumbing(uint32_t v);
 
 inline void writeAllocTag(void* p, const size_t n, void* ra) {
@@ -545,8 +555,14 @@ inline void writeAllocTag(void* p, const size_t n, void* ra) {
   }
   memcpy(static_cast<uint8_t*>(p) + n, tag, sizeof(tag));
 }
+#endif
 }  // namespace
 
+// Allocation owner tags are opt-in: every malloc/calloc/realloc walks up to 96 stack words and
+// grows the block by 12 bytes, which made a 187-page chapter build take 35.9 s against ~10 s
+// without diagnostics (2026-09-28). Define INPUT_DIAG_ALLOC_TAGS together with
+// -Wl,--wrap=malloc/calloc/realloc when the heap maps need their by= owners.
+#ifdef INPUT_DIAG_ALLOC_TAGS
 extern "C" {
 void* __wrap_malloc(size_t n);
 void* __wrap_calloc(size_t count, size_t n);
@@ -599,6 +615,7 @@ void* __wrap_realloc(void* old, size_t n) {
   return p;
 }
 }
+#endif
 
 namespace {
 struct HeapBlockRec {
@@ -659,7 +676,7 @@ bool heapWalkRecord(walker_heap_into_t, walker_block_info_t block, void* user) {
     // Poisoning header: 4-byte magic, then the requested size; the tag is its last 12 bytes.
     uint32_t requested = 0;
     if (block.size >= 8) memcpy(&requested, static_cast<const uint8_t*>(block.ptr) + 4, sizeof(requested));
-    if (requested >= ALLOC_TAG_BYTES && requested + 8 <= block.size) {
+    if (ALLOC_TAGS && requested >= ALLOC_TAG_BYTES && requested + 8 <= block.size) {
       memcpy(r.tag, static_cast<const uint8_t*>(block.ptr) + 8 + requested - ALLOC_TAG_BYTES, sizeof(r.tag));
     }
   }
@@ -702,7 +719,7 @@ bool heapLowRecord(walker_heap_into_t, walker_block_info_t block, void* user) {
   uint32_t tag[3] = {0, 0, 0};
   uint32_t requested = 0;
   if (block.size >= 8) memcpy(&requested, static_cast<const uint8_t*>(block.ptr) + 4, sizeof(requested));
-  if (requested >= ALLOC_TAG_BYTES && requested + 8 <= block.size) {
+  if (ALLOC_TAGS && requested >= ALLOC_TAG_BYTES && requested + 8 <= block.size) {
     memcpy(tag, static_cast<const uint8_t*>(block.ptr) + 8 + requested - ALLOC_TAG_BYTES, sizeof(tag));
     if (!looksLikeCode(tag[0])) tag[0] = tag[1] = tag[2] = 0;
   }
@@ -1199,6 +1216,12 @@ void InputDiag::noteBuildFontWork(const uint32_t calls, const uint32_t ms, const
   buildFontFullSkips = fullSkips;
 }
 
+void InputDiag::noteBuildAdvanceOnly(const uint32_t calls, const uint32_t sdReads, const uint32_t ms) {
+  buildAdvOnlyCalls = calls;
+  buildAdvOnlySdReads = sdReads;
+  buildAdvOnlyMs = ms;
+}
+
 void InputDiag::noteLookaheadStart() { lookaheadStarts++; }
 
 void InputDiag::noteLookaheadRelease() { lookaheadReleases++; }
@@ -1375,6 +1398,7 @@ void InputDiag::flush(const bool inputActive) {
                  "aa_phases=lsb draw %ums push %ums | msb draw %ums push %ums\n"
                  "build_page_write=%u pages %ums\n"
                  "build_font=%u calls %ums table %u/%u full_skips %u\n"
+                 "build_adv_only=%u calls %u sd %ums\n"
                  "ui_prewarm_heap_max=%d\n"
                  "list_band=y%d+h%d row%d -> %d rows (screen %d)\n",
                  fontCopyEvents[fontCopyTotal >= FONT_COPY_EVENTS ? fontCopyTotal % FONT_COPY_EVENTS : 0],
@@ -1387,8 +1411,8 @@ void InputDiag::flush(const bool inputActive) {
                  layoutGiveUps, layoutGiveUpKind, layoutGiveUpTokens, layoutGiveUpFree, layoutGiveUpMaxAlloc,
                  aaRefreshWaitMs, aaRefreshWaitMaxMs, aaLsbDrawMs, aaLsbPushMs, aaMsbDrawMs, aaMsbPushMs,
                  buildPageWrites, buildPageWriteMs, buildFontCalls, buildFontMs, buildFontTableMax, buildFontTableLimit,
-                 buildFontFullSkips, uiPrewarmHeapMax, listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount,
-                 listScreenHeight);
+                 buildFontFullSkips, buildAdvOnlyCalls, buildAdvOnlySdReads, buildAdvOnlyMs, uiPrewarmHeapMax,
+                 listBandY, listBandHeight, listRowHeightPx, listVisibleRowCount, listScreenHeight);
   if (len < 0) len = 0;
   if (static_cast<size_t>(len) >= sizeof(reportBuf)) len = static_cast<int>(sizeof(reportBuf) - 1);
 

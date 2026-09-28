@@ -183,6 +183,9 @@ class InputDiag {
   // a per-glyph load, so a non-zero full_skips changes what the rest of the build is doing.
   static void noteBuildFontWork(uint32_t calls, uint32_t ms, uint32_t tableMax, uint32_t tableLimit,
                                 uint32_t fullSkips);
+  // Widths measured past the full table without loading bitmaps (SdCardFont::readAdvanceOnly):
+  // calls, how many went to the card, and the time those card reads took. Cumulative.
+  static void noteBuildAdvanceOnly(uint32_t calls, uint32_t sdReads, uint32_t ms);
 
   // One page-glyph prewarm: how many glyphs the heap allowed and how many the page asked for.
   // When the two meet, the budget bit and the rest of the page faults in one glyph at a time --
@@ -268,6 +271,7 @@ class InputDiag {
   static void noteGrayscalePhases(unsigned long, unsigned long, unsigned long, unsigned long) {}
   static void noteBuildPageWrite(unsigned long) {}
   static void noteBuildFontWork(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) {}
+  static void noteBuildAdvanceOnly(uint32_t, uint32_t, uint32_t) {}
   static void noteLookaheadStart() {}
   static void noteLookaheadChunk(int, uint16_t, unsigned long, bool) {}
   static void noteLookaheadRelease() {}

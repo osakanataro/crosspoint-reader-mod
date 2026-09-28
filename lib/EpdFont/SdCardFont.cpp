@@ -1499,6 +1499,80 @@ bool SdCardFont::hasAdvanceTable() const {
   return false;
 }
 
+// A section build measures text and never draws it, yet once the advance table is full
+// (ADVANCE_CACHE_LIMIT) every uncached codepoint went through the glyph-miss path and pulled its
+// bitmap into the overflow ring just to read advanceX. Japanese chapters routinely use more
+// distinct characters than the table holds: one 18 pt chapter build read 2,817 bitmaps in a
+// single render (full_skips 416) and took 34.6 s. The glyph record is twelve bytes and sits
+// before the bitmaps in the file, so read that and nothing else.
+uint16_t SdCardFont::readAdvanceOnly(const uint32_t codepoint, uint8_t styleIdx) const {
+  styleIdx &= (MAX_STYLES - 1);
+  if (!loaded_ || !styles_[styleIdx].present) return 0;
+  const auto& s = styles_[styleIdx];
+  advanceOnlyCalls_++;
+
+  // Resident arena first: the same interval lookup EpdFont::getGlyph does before it asks for a
+  // load, so a measurement of a prewarmed glyph costs no SD access.
+  if (s.miniData.intervals && s.miniData.intervalCount > 0 && s.miniData.glyph) {
+    const auto* begin = s.miniData.intervals;
+    const auto* end = begin + s.miniData.intervalCount;
+    const auto it = std::upper_bound(
+        begin, end, codepoint, [](const uint32_t value, const EpdUnicodeInterval& iv) { return value < iv.first; });
+    if (it != begin) {
+      const auto& iv = *(it - 1);
+      if (codepoint <= iv.last) return s.miniData.glyph[iv.offset + (codepoint - iv.first)].advanceX;
+    }
+  }
+  for (uint32_t i = 0; i < overflowCount_; i++) {
+    if (overflow_[i].codepoint == codepoint && overflow_[i].styleIdx == styleIdx) return overflow_[i].glyph.advanceX;
+  }
+
+  const uint32_t memoKey = codepoint | (static_cast<uint32_t>(styleIdx) << 22) | 0x80000000u;
+  const uint32_t memoSlot = (codepoint ^ (codepoint >> 9)) & (MEASURE_MEMO_SLOTS - 1);
+  if (measureMemoKeys_ && measureMemoKeys_[memoSlot] == memoKey) return measureMemoAdvances_[memoSlot];
+
+  const int32_t globalIdx = findGlobalGlyphIndex(s, codepoint);
+  if (globalIdx < 0) return 0;
+  struct SdTimer {
+    const SdCardFont& self;
+    unsigned long startMs;
+    ~SdTimer() { self.advanceOnlyMs_ += static_cast<uint32_t>(millis() - startMs); }
+  } sdTimer{*this, millis()};
+  advanceOnlySdReads_++;
+  if (!measureFile_) {
+    measureFile_ = makeUniqueNoThrow<HalFile>();
+    if (!measureFile_) return 0;
+  }
+  if (!*measureFile_ && !Storage.openFileForRead("SDCF", filePath_, *measureFile_)) return 0;
+  EpdGlyph glyph = {};
+  const uint32_t off = s.glyphsFileOffset + static_cast<uint32_t>(globalIdx) * sizeof(EpdGlyph);
+  if (!measureFile_->seekSet(off) ||
+      measureFile_->read(reinterpret_cast<uint8_t*>(&glyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
+    return 0;
+  }
+  if (!measureMemoKeys_) {
+    measureMemoKeys_ = makeUniqueNoThrow<uint32_t[]>(MEASURE_MEMO_SLOTS);
+    measureMemoAdvances_ = makeUniqueNoThrow<uint16_t[]>(MEASURE_MEMO_SLOTS);
+    if (!measureMemoKeys_ || !measureMemoAdvances_) {
+      measureMemoKeys_.reset();
+      measureMemoAdvances_.reset();
+    } else {
+      memset(measureMemoKeys_.get(), 0, MEASURE_MEMO_SLOTS * sizeof(uint32_t));
+    }
+  }
+  if (measureMemoKeys_) {
+    measureMemoKeys_[memoSlot] = memoKey;
+    measureMemoAdvances_[memoSlot] = glyph.advanceX;
+  }
+  return glyph.advanceX;
+}
+
+void SdCardFont::closeMeasureFile() const {
+  measureFile_.reset();
+  measureMemoKeys_.reset();
+  measureMemoAdvances_.reset();
+}
+
 uint16_t SdCardFont::getAdvance(uint32_t codepoint, uint8_t style) const {
   style &= (MAX_STYLES - 1);
   if (!advanceTable_[style]) return 0;

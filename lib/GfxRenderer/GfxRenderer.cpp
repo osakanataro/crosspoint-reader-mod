@@ -97,6 +97,26 @@ void GfxRenderer::sdAdvanceStats(uint32_t& calls, uint32_t& ms, uint32_t& tableM
   }
 }
 
+void GfxRenderer::closeSdMeasureFiles() const {
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) font->closeMeasureFile();
+  }
+}
+
+void GfxRenderer::sdAdvanceOnlyStats(uint32_t& calls, uint32_t& sdReads, uint32_t& ms) const {
+  calls = 0;
+  sdReads = 0;
+  ms = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font == nullptr) continue;
+    calls += font->advanceOnlyCalls();
+    sdReads += font->advanceOnlySdReads();
+    ms += font->advanceOnlyMs();
+  }
+}
+
 namespace {
 const char* resolveVisualText(const char* text, std::string& visualBuffer, BidiUtils::BidiBaseDir baseDir);
 
@@ -2186,6 +2206,13 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       }
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
       if (!utf8IsCombiningMark(cp)) {
+        if (advFP == 0 && measureOnly_) {
+          // Layout only: not in the advance table (full, or not yet fetched), and nothing is
+          // about to draw this glyph, so read the advance alone rather than loading a bitmap
+          // into the overflow ring to answer a question about width. A render draws the glyph
+          // next, so there the load is the single SD trip and this path is skipped.
+          advFP = sdIt->second->readAdvanceOnly(cp, styleIdx);
+        }
         if (advFP == 0) {
           const EpdGlyph* glyph = font.getGlyph(cp, style);
           advFP = glyph ? glyph->advanceX : 0;
