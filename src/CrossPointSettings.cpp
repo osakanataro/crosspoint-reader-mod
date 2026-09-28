@@ -300,6 +300,9 @@ ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWid
   spec.embeddedStyle = embeddedStyle != 0;
   spec.imageRendering = imageRendering;
   spec.focusReadingEnabled = focusReadingEnabled != 0;
+  // Set here rather than at the call sites so every build (foreground, extension) lays out
+  // vertical columns with the same ruby reserve, and so the same column count.
+  spec.rightMargin = screenMargin;
   return spec;
 }
 

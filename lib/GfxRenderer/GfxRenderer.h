@@ -63,6 +63,24 @@ class GfxRenderer {
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  // Memo for getCjkCellWidth(). Dropped whenever the font behind an id goes away.
+  // A fixed table, not a map: the map's node was allocated the first time a book asked, which put
+  // it in the middle of a reading session's heap for good (heap-map, 2026-09-26).
+  struct CjkCellMemo {
+    int fontId;
+    int width;
+  };
+  static constexpr int CJK_CELL_MEMO_SIZE = 8;
+  mutable CjkCellMemo cjkCellWidths_[CJK_CELL_MEMO_SIZE] = {};
+  mutable int cjkCellWidthsNext_ = 0;
+  void forgetCjkCellWidth(int fontId) const {
+    for (auto& m : cjkCellWidths_) {
+      if (m.width != 0 && m.fontId == fontId) m = CjkCellMemo{};
+    }
+  }
+  void forgetCjkCellWidths() const {
+    for (auto& m : cjkCellWidths_) m = CjkCellMemo{};
+  }
   mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
   // TTF (vector) fonts: rebuilt per page by ensureSdCardFontReady(). Mutable for
   // the same reason as sdCardFonts_ (const layout path triggers a rebuild).
@@ -96,6 +114,9 @@ class GfxRenderer {
   // render time the bitmap is wanted next anyway, so the load stays the cheaper path there.
   // Set through MeasureOnlyScope.
   mutable bool measureOnly_ = false;
+  // Extra spacing between cells in vertical (tategaki) layout, as a percent of the
+  // cell advance. Set from the reader spec before a vertical section is laid out.
+  int _verticalCharSpacing = 0;
   mutable int clipLeft_ = 0;
   mutable int clipTop_ = 0;
   mutable int clipRight_ = 32767;
@@ -155,6 +176,7 @@ class GfxRenderer {
     fontMap.erase(fontId);
     sdCardFonts_.erase(fontId);
     sdCardFontScales_.erase(fontId);
+    forgetCjkCellWidth(fontId);
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
@@ -180,6 +202,7 @@ class GfxRenderer {
   void clearSdCardFonts() {
     sdCardFonts_.clear();
     sdCardFontScales_.clear();
+    forgetCjkCellWidths();
   }
   void registerSdCardFontScale(int fontId, uint16_t scale) { sdCardFontScales_[fontId] = scale; }
   void clearSdCardFontScales() { sdCardFontScales_.clear(); }
@@ -361,7 +384,23 @@ class GfxRenderer {
                       BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO,
                       TextMeasureMode mode = TextMeasureMode::Layout) const;
   int getFontAscenderSize(int fontId) const;
+  /// Negative, matching the font data. ascender - descender is the line box height.
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
+  // The full-width (em) cell advance of fontId, measured from the font itself.
+  //
+  // Vertical writing sizes its column pitch in ems, not in the font's own line height: JLREQ
+  // 2.3 defines the line pitch as a ratio of the character size, while getLineHeight() returns
+  // whatever the .cpfont baked in from the source font's hhea metrics -- 25 px for
+  // BIZUDGothic_12 but 36 px for NotoSansJP_12, both at the same 12 pt (measured 2026-09-10).
+  // Taking the line height as the column width made the same book lay out 11 columns in one
+  // font and 7 in the other with every setting identical.
+  //
+  // Memoized per font: resolving it costs one advance lookup, and on an SD font whose advance
+  // table has not seen the probe character yet, a single glyph read.
+  int getCjkCellWidth(int fontId) const;
+  void setVerticalCharSpacing(int spacingPercent) { _verticalCharSpacing = spacingPercent; }
+  int getVerticalCharSpacing() const { return _verticalCharSpacing; }
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
                             EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
@@ -374,6 +413,18 @@ class GfxRenderer {
   // Helper for drawing rotated text (90 degrees clockwise, for side buttons)
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // Latin runs inside vertical Japanese text: glyphs turn clockwise and the run
+  // advances downward from (x, y), which is the top-left of the column cell.
+  // `cellWidth` is the full-width character cell; the rotated line box is centred on it.
+  //
+  // `centreInk` centres the glyph's own ink on the cell instead of the font's line box.
+  // For a run of letters the line box is the right thing -- it is what keeps successive
+  // runs on one axis whatever letters they hold. For a single turned punctuation mark it
+  // is not: the box includes the descender depth the mark does not use, so 「 and 」 come
+  // out a few pixels off the axis of the kanji above and below them. Single marks only:
+  // centring each glyph of a run separately would make the run wander.
+  void drawTextSideways(int fontId, int x, int y, const char* text, int cellWidth, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR, bool centreInk = false) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions

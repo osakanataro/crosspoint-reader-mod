@@ -45,10 +45,6 @@ constexpr size_t MAX_RULES = 1500;
 constexpr size_t SELECTOR_POOL_CAP = 32 * 1024;
 constexpr size_t MAX_UNIQUE_STYLES = 256;
 
-// Minimum free heap required to apply CSS during rendering
-// If below this threshold, we skip CSS to avoid display artifacts.
-constexpr size_t MIN_FREE_HEAP_FOR_CSS = 48 * 1024;
-
 // Maximum length for a single selector string
 // Prevents parsing of extremely long or malformed selectors
 constexpr size_t MAX_SELECTOR_LENGTH = 256;
@@ -144,8 +140,8 @@ constexpr std::array STYLE_LENGTH_FIELDS = {
 };
 constexpr size_t STYLE_LENGTH_FIELD_COUNT = STYLE_LENGTH_FIELDS.size();
 constexpr size_t STYLE_WIRE_BYTES =
-    5 + STYLE_LENGTH_FIELD_COUNT * (sizeof(decltype(CssLength::value)) + 1) + 3 + sizeof(uint32_t);
-constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 19) - 1;
+    5 + STYLE_LENGTH_FIELD_COUNT * (sizeof(decltype(CssLength::value)) + 1) + 5 + sizeof(uint32_t);
+constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 21) - 1;
 
 void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   size_t offset = 0;
@@ -166,6 +162,8 @@ void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   out[offset++] = static_cast<uint8_t>(style.display);
   out[offset++] = static_cast<uint8_t>(style.verticalAlign);
   out[offset++] = static_cast<uint8_t>(style.listStyleType);
+  out[offset++] = static_cast<uint8_t>(style.textEmphasis);
+  out[offset++] = static_cast<uint8_t>(style.textOrientation);
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -187,6 +185,8 @@ void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   if (style.defined.direction) definedBits |= 1 << 16;
   if (style.defined.verticalAlign) definedBits |= 1 << 17;
   if (style.defined.listStyleType) definedBits |= 1 << 18;
+  if (style.defined.textEmphasis) definedBits |= 1 << 19;
+  if (style.defined.textOrientation) definedBits |= 1 << 20;
   memcpy(out + offset, &definedBits, sizeof(definedBits));
 }
 
@@ -225,13 +225,19 @@ bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
   const uint8_t display = in[offset++];
   const uint8_t verticalAlign = in[offset++];
   const uint8_t listStyleType = in[offset++];
+  const uint8_t textEmphasis = in[offset++];
+  const uint8_t textOrientation = in[offset++];
   if (display > static_cast<uint8_t>(CssDisplay::None) || verticalAlign > static_cast<uint8_t>(CssVerticalAlign::Sub) ||
-      listStyleType > static_cast<uint8_t>(CssListStyleType::None)) {
+      listStyleType > static_cast<uint8_t>(CssListStyleType::None) ||
+      textEmphasis > static_cast<uint8_t>(CssTextEmphasis::OpenDoubleCircle) ||
+      textOrientation > static_cast<uint8_t>(CssTextOrientation::Combine)) {
     return false;
   }
   style.display = static_cast<CssDisplay>(display);
   style.verticalAlign = static_cast<CssVerticalAlign>(verticalAlign);
   style.listStyleType = static_cast<CssListStyleType>(listStyleType);
+  style.textEmphasis = static_cast<CssTextEmphasis>(textEmphasis);
+  style.textOrientation = static_cast<CssTextOrientation>(textOrientation);
 
   uint32_t definedBits = 0;
   memcpy(&definedBits, in + offset, sizeof(definedBits));
@@ -255,18 +261,19 @@ bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
   style.defined.direction = (definedBits & 1 << 16) != 0;
   style.defined.verticalAlign = (definedBits & 1 << 17) != 0;
   style.defined.listStyleType = (definedBits & 1 << 18) != 0;
+  style.defined.textEmphasis = (definedBits & 1 << 19) != 0;
+  style.defined.textOrientation = (definedBits & 1 << 20) != 0;
   return true;
 }
 
 }  // anonymous namespace
 
-int CssParser::compareEntryToPieces(const SelectorEntry& entry, const std::string_view p0, const std::string_view p1,
-                                    const std::string_view p2) const {
+int CssParser::compareEntryToPieces(const SelectorEntry& entry, const std::string_view* pieces,
+                                    const size_t pieceCount) const {
   const char* stored = selectorPool_.get() + entry.offset;
-  const std::string_view pieces[] = {p0, p1, p2};
   size_t index = 0;
-  for (const std::string_view piece : pieces) {
-    for (const char c : piece) {
+  for (size_t p = 0; p < pieceCount; ++p) {
+    for (const char c : pieces[p]) {
       if (index == entry.length) return -1;
       const auto storedByte = static_cast<unsigned char>(stored[index]);
       const auto probeByte = static_cast<unsigned char>(asciiToLower(c));
@@ -277,26 +284,39 @@ int CssParser::compareEntryToPieces(const SelectorEntry& entry, const std::strin
   return index == entry.length ? 0 : 1;
 }
 
-size_t CssParser::lowerBound(const std::string_view p0, const std::string_view p1, const std::string_view p2,
-                             bool& exact) const {
+size_t CssParser::lowerBound(const std::string_view* pieces, const size_t pieceCount, bool& exact) const {
   size_t low = 0;
   size_t high = entryCount_;
   while (low < high) {
     const size_t middle = low + (high - low) / 2;
-    if (compareEntryToPieces(entries_[middle], p0, p1, p2) < 0) {
+    if (compareEntryToPieces(entries_[middle], pieces, pieceCount) < 0) {
       low = middle + 1;
     } else {
       high = middle;
     }
   }
-  exact = low < entryCount_ && compareEntryToPieces(entries_[low], p0, p1, p2) == 0;
+  exact = low < entryCount_ && compareEntryToPieces(entries_[low], pieces, pieceCount) == 0;
   return low;
+}
+
+size_t CssParser::lowerBound(const std::string_view p0, const std::string_view p1, const std::string_view p2,
+                             bool& exact) const {
+  const std::string_view pieces[] = {p0, p1, p2};
+  return lowerBound(pieces, 3, exact);
 }
 
 const CssStyle* CssParser::findStyle(const std::string_view p0, const std::string_view p1,
                                      const std::string_view p2) const {
   bool exact = false;
   const size_t index = lowerBound(p0, p1, p2, exact);
+  return exact ? &stylePool_[entries_[index].styleIndex] : nullptr;
+}
+
+const CssStyle* CssParser::findDescendantStyle(const std::string_view ancestorPart, const std::string_view p0,
+                                               const std::string_view p1, const std::string_view p2) const {
+  const std::string_view pieces[] = {ancestorPart, " ", p0, p1, p2};
+  bool exact = false;
+  const size_t index = lowerBound(pieces, 5, exact);
   return exact ? &stylePool_[entries_[index].styleIndex] : nullptr;
 }
 
@@ -424,6 +444,7 @@ CssParser::RuleInsertResult CssParser::insertOrMerge(const std::string_view sele
   char* destination = selectorPool_.get() + selectorOffset;
   for (const char c : selector) *destination++ = asciiToLower(c);
   selectorPoolSize_ = static_cast<uint32_t>(requiredSelectorBytes);
+  if (selector.find(' ') != std::string_view::npos) hasDescendantRules_ = true;
 
   SelectorEntry* entries = entries_.get();
   memmove(entries + position + 1, entries + position, (entryCount_ - position) * sizeof(SelectorEntry));
@@ -484,6 +505,56 @@ CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
     }
   });
   return explicitNone ? CssTextDecoration::None : result;
+}
+
+CssTextEmphasis CssParser::interpretTextEmphasis(std::string_view val) {
+  // Shorthand grammar is "<fill> || <shape>" in either order, with the colour of the
+  // text-emphasis shorthand ignored here. An omitted fill is "filled" and an omitted
+  // shape is "sesame", matching what a bare "text-emphasis: dot" or ": open" means.
+  bool none = false;
+  bool open = false;
+  bool haveShape = false;
+  CssTextEmphasis shape = CssTextEmphasis::FilledSesame;
+  forEachDelimitedToken(stripTrailingImportant(val), isCssWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      none = true;
+    } else if (iequalsAscii(token, "open")) {
+      open = true;
+    } else if (iequalsAscii(token, "filled")) {
+      open = false;
+    } else if (iequalsAscii(token, "sesame")) {
+      shape = CssTextEmphasis::FilledSesame;
+      haveShape = true;
+    } else if (iequalsAscii(token, "double-circle")) {
+      shape = CssTextEmphasis::FilledDoubleCircle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "circle")) {
+      shape = CssTextEmphasis::FilledCircle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "triangle")) {
+      shape = CssTextEmphasis::FilledTriangle;
+      haveShape = true;
+    } else if (iequalsAscii(token, "dot")) {
+      shape = CssTextEmphasis::FilledDot;
+      haveShape = true;
+    }
+  });
+
+  if (none) return CssTextEmphasis::None;
+  if (!haveShape) shape = CssTextEmphasis::FilledSesame;
+  if (!open) return shape;
+  switch (shape) {
+    case CssTextEmphasis::FilledDoubleCircle:
+      return CssTextEmphasis::OpenDoubleCircle;
+    case CssTextEmphasis::FilledCircle:
+      return CssTextEmphasis::OpenCircle;
+    case CssTextEmphasis::FilledTriangle:
+      return CssTextEmphasis::OpenTriangle;
+    case CssTextEmphasis::FilledDot:
+      return CssTextEmphasis::OpenDot;
+    default:
+      return CssTextEmphasis::OpenSesame;
+  }
 }
 
 CssLength CssParser::interpretLength(std::string_view val) {
@@ -638,6 +709,35 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     const std::string_view listStyleValue = stripTrailingImportant(value);
     style.listStyleType = iequalsAscii(listStyleValue, "none") ? CssListStyleType::None : CssListStyleType::Disc;
     style.defined.listStyleType = 1;
+  } else if (iequalsAscii(name, "text-emphasis-style") || iequalsAscii(name, "text-emphasis") ||
+             iequalsAscii(name, "-epub-text-emphasis-style") || iequalsAscii(name, "-epub-text-emphasis") ||
+             iequalsAscii(name, "-webkit-text-emphasis-style") || iequalsAscii(name, "-webkit-text-emphasis")) {
+    style.textEmphasis = interpretTextEmphasis(value);
+    style.defined.textEmphasis = 1;
+  } else if (iequalsAscii(name, "text-orientation") || iequalsAscii(name, "-epub-text-orientation") ||
+             iequalsAscii(name, "-webkit-text-orientation")) {
+    // sideways-right is the pre-standard spelling of sideways; use-glyph-orientation and
+    // anything else fall back to mixed, which is what a reader without the property does.
+    if (iequalsAscii(value, "upright")) {
+      style.textOrientation = CssTextOrientation::Upright;
+      style.defined.textOrientation = 1;
+    } else if (iequalsAscii(value, "sideways") || iequalsAscii(value, "sideways-right")) {
+      style.textOrientation = CssTextOrientation::Sideways;
+      style.defined.textOrientation = 1;
+    } else if (iequalsAscii(value, "mixed")) {
+      style.textOrientation = CssTextOrientation::Mixed;
+      style.defined.textOrientation = 1;
+    }
+  } else if (iequalsAscii(name, "text-combine-upright") || iequalsAscii(name, "-epub-text-combine") ||
+             iequalsAscii(name, "-webkit-text-combine") || iequalsAscii(name, "-epub-text-combine-upright") ||
+             iequalsAscii(name, "-webkit-text-combine-upright")) {
+    // "all" is the standard value; "horizontal" the old -webkit- one. "none" is left alone
+    // rather than recorded as Mixed so it cannot cancel an upright text-orientation on the
+    // same element (the two properties share one slot here).
+    if (iequalsAscii(value, "all") || iequalsAscii(value, "horizontal")) {
+      style.textOrientation = CssTextOrientation::Combine;
+      style.defined.textOrientation = 1;
+    }
   }
 }
 
@@ -676,8 +776,9 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         }
 
         // TODO: Support richer CSS selector syntax in the future. For now we only
-        // handle `tag`, `.class`, or `tag.class`. Reject anything containing a
-        // character that introduces unsupported syntax:
+        // handle `tag`, `.class`, or `tag.class`, alone or as the two parts of one
+        // descendant selector (`.a .b`). Reject anything containing a character that
+        // introduces unsupported syntax:
         //   '+'  adjacent sibling combinator
         //   '>'  child combinator
         //   '['  attribute selector
@@ -685,10 +786,24 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         //   '#'  ID selector
         //   '~'  general sibling combinator
         //   '*'  wildcard
-        //   ' '  descendant combinator
-        // Single-pass scan via find_first_of instead of eight sequential find() calls.
-        constexpr std::string_view kUnsupportedSelectorChars = "+>[:#~* ";
+        // Single-pass scan via find_first_of instead of seven sequential find() calls.
+        constexpr std::string_view kUnsupportedSelectorChars = "+>[:#~*";
         if (sel.find_first_of(kUnsupportedSelectorChars) != std::string_view::npos) return;
+
+        // Descendant combinator: keep exactly two simple parts, stored as "<a> <b>" with one
+        // space. Deeper chains are still dropped -- resolveStyle matches one ancestor level
+        // against the first part, which is the shape the EBPAJ writing-mode classes take
+        // (".vrtl .h-indent-1em"; 956 of that template's 1,905 rules).
+        std::string descendantKey;
+        if (sel.find_first_of(" \t\r\n\f") != std::string_view::npos) {
+          size_t parts = 0;
+          forEachDelimitedToken(sel, isCssWhitespace, [&](std::string_view part) {
+            if (parts++ > 0) descendantKey += ' ';
+            descendantKey.append(part.data(), part.size());
+          });
+          if (parts != 2) return;
+          sel = descendantKey;
+        }
 
         if (ruleGrowthStopped_) {
           // Continue the cascade for stored selectors without retrying failed
@@ -870,15 +985,10 @@ CssParser::ParseResult CssParser::loadFromStream(HalFile& source) {
 // Style resolution
 
 CssStyle CssParser::resolveStyle(std::string_view tagName, std::string_view classAttr) const {
-  static bool lowHeapWarningLogged = false;
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_CSS) {
-    if (!lowHeapWarningLogged) {
-      lowHeapWarningLogged = true;
-      LOG_DBG("CSS", "Warning: low heap (%u bytes) below MIN_FREE_HEAP_FOR_CSS (%u), returning empty style",
-              ESP.getFreeHeap(), static_cast<unsigned>(MIN_FREE_HEAP_FOR_CSS));
-    }
-    return CssStyle{};
-  }
+  // No heap guard here: nothing below allocates. result is a stack struct of enums, lengths and
+  // bitfields and findStyle() only reads the bounded store. Upstream returns an empty style below
+  // 48KB free; on the X3 that sits inside the 44-62KB reading range, so a chapter's vertical,
+  // ruby and emphasis classes applied to some paragraphs and silently not to others.
 
   CssStyle result;
 
@@ -905,6 +1015,39 @@ CssStyle CssParser::resolveStyle(std::string_view tagName, std::string_view clas
     }
   });
 
+  return result;
+}
+
+CssStyle CssParser::resolveStyle(const std::string_view tagName, const std::string_view classAttr,
+                                 const AncestorRef* ancestors, const size_t ancestorCount) const {
+  CssStyle result = resolveStyle(tagName, classAttr);
+  if (!hasDescendantRules_ || ancestors == nullptr || ancestorCount == 0) return result;
+
+  // Descendant rules, in CSS specificity order. The single-level lookups above already hold
+  // (0,0,1), (0,1,0) and (0,1,1); a tag-first descendant adds one element, a class-first one
+  // adds one class, so the passes run: "tag x" (0,0,2)/(0,1,1)/(0,1,2), then ".a x"
+  // (0,1,1)/(0,2,0)/(0,2,1). Later passes win, as do nearer ancestors within a pass, which is
+  // how a browser breaks the remaining ties (source order is not tracked here).
+  const auto applyForAncestorPart = [&](const std::string_view part) {
+    if (const CssStyle* style = findDescendantStyle(part, tagName)) result.applyOver(*style);
+    forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) {
+      if (const CssStyle* style = findDescendantStyle(part, ".", cls)) result.applyOver(*style);
+    });
+    forEachDelimitedToken(classAttr, isCssWhitespace, [&](std::string_view cls) {
+      if (const CssStyle* style = findDescendantStyle(part, tagName, ".", cls)) result.applyOver(*style);
+    });
+  };
+  for (size_t a = 0; a < ancestorCount; ++a) {
+    if (!ancestors[a].tag.empty()) applyForAncestorPart(ancestors[a].tag);
+  }
+  std::string part;
+  for (size_t a = 0; a < ancestorCount; ++a) {
+    forEachDelimitedToken(ancestors[a].classAttr, isCssWhitespace, [&](std::string_view cls) {
+      part.assign(".");
+      part.append(cls.data(), cls.size());
+      applyForAncestorPart(part);
+    });
+  }
   return result;
 }
 

@@ -1,5 +1,6 @@
 #include "ChapterHtmlSlimParser.h"
 
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -16,6 +17,8 @@
 #include <new>
 
 #include "../../../../src/fontIds.h"
+#include "../../../../src/util/InputDiag.h"
+#include "../InlineImageToken.h"
 #include "Epub.h"
 #include "Epub/Page.h"
 #include "Epub/VisibleTextUtils.h"
@@ -55,6 +58,19 @@ constexpr int16_t TABLE_ROW_SEPARATOR_GAP = 4;
 constexpr uint8_t TABLE_ROW_SEPARATOR_THICKNESS = 1;
 constexpr int16_t TABLE_MIN_CELL_WIDTH_LINE_HEIGHTS = 3;
 
+// Column pitch in vertical writing, as a multiple of the full-width cell, before the reader's
+// line-spacing setting scales it. JLREQ 2.3 sets the line pitch as a ratio of the character
+// size (body text runs about 1.5 to 1.75 em); the pitch used to be the font's own line height
+// plus a quarter, which is not a fixed ratio at all -- BIZUDGothic_12 came out at 1.25 em and
+// NotoSansJP_12 at 1.8 em from the same setting, so changing font silently changed how much
+// text a page held. With the four line-spacing steps (0.95/1.0/1.1/1.2) this spans 1.43 to
+// 1.8 em, which covers the range JLREQ describes.
+constexpr float VERTICAL_COLUMN_PITCH_EM = 1.5f;
+// Cap on the marks a single horizontal word gets. Japanese bouten runs are short; a longer
+// word is almost always Latin, where the per-character annotation buys nothing and the
+// spacer string would outweigh the word.
+constexpr size_t MAX_EMPHASIS_CODEPOINTS_PER_WORD = 24;
+
 constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
 constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote", "ul", "ol"};
 constexpr const char* BOLD_TAGS[] = {"b", "strong"};
@@ -63,6 +79,119 @@ constexpr const char* UNDERLINE_TAGS[] = {"u", "ins"};
 constexpr const char* LINETHROUGH_TAGS[] = {"del", "s", "strike"};
 constexpr const char* IMAGE_TAGS[] = {"img", "image"};
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
+
+// CJK Compatibility Ideographs (U+F900-FAFF) -> the unified ideograph each one
+// decomposes to, 0 where there is none or it lives outside the BMP (no reading face
+// carries those). Publishers' typesetting systems reach for a compatibility codepoint
+// to pin a particular glyph shape, but a face that never drew that shape has nothing
+// there: BIZ UD has 蓮 U+F999 and neither 溺 U+F9EC nor 煉 U+F993, so a book using them
+// drew the replacement box. The character is the same either way, so falling back to
+// the unified form shows the word instead of a hole.
+//
+// 512 uint16 = 1 KB of flash, no RAM: the table is only read on the rare codepoint
+// that lands in the block.
+constexpr uint16_t CJK_COMPAT_UNIFIED[512] = {
+    0x8C48, 0x66F4, 0x8ECA, 0x8CC8, 0x6ED1, 0x4E32, 0x53E5, 0x9F9C,  // U+F900
+    0x9F9C, 0x5951, 0x91D1, 0x5587, 0x5948, 0x61F6, 0x7669, 0x7F85,  // U+F908
+    0x863F, 0x87BA, 0x88F8, 0x908F, 0x6A02, 0x6D1B, 0x70D9, 0x73DE,  // U+F910
+    0x843D, 0x916A, 0x99F1, 0x4E82, 0x5375, 0x6B04, 0x721B, 0x862D,  // U+F918
+    0x9E1E, 0x5D50, 0x6FEB, 0x85CD, 0x8964, 0x62C9, 0x81D8, 0x881F,  // U+F920
+    0x5ECA, 0x6717, 0x6D6A, 0x72FC, 0x90CE, 0x4F86, 0x51B7, 0x52DE,  // U+F928
+    0x64C4, 0x6AD3, 0x7210, 0x76E7, 0x8001, 0x8606, 0x865C, 0x8DEF,  // U+F930
+    0x9732, 0x9B6F, 0x9DFA, 0x788C, 0x797F, 0x7DA0, 0x83C9, 0x9304,  // U+F938
+    0x9E7F, 0x8AD6, 0x58DF, 0x5F04, 0x7C60, 0x807E, 0x7262, 0x78CA,  // U+F940
+    0x8CC2, 0x96F7, 0x58D8, 0x5C62, 0x6A13, 0x6DDA, 0x6F0F, 0x7D2F,  // U+F948
+    0x7E37, 0x964B, 0x52D2, 0x808B, 0x51DC, 0x51CC, 0x7A1C, 0x7DBE,  // U+F950
+    0x83F1, 0x9675, 0x8B80, 0x62CF, 0x6A02, 0x8AFE, 0x4E39, 0x5BE7,  // U+F958
+    0x6012, 0x7387, 0x7570, 0x5317, 0x78FB, 0x4FBF, 0x5FA9, 0x4E0D,  // U+F960
+    0x6CCC, 0x6578, 0x7D22, 0x53C3, 0x585E, 0x7701, 0x8449, 0x8AAA,  // U+F968
+    0x6BBA, 0x8FB0, 0x6C88, 0x62FE, 0x82E5, 0x63A0, 0x7565, 0x4EAE,  // U+F970
+    0x5169, 0x51C9, 0x6881, 0x7CE7, 0x826F, 0x8AD2, 0x91CF, 0x52F5,  // U+F978
+    0x5442, 0x5973, 0x5EEC, 0x65C5, 0x6FFE, 0x792A, 0x95AD, 0x9A6A,  // U+F980
+    0x9E97, 0x9ECE, 0x529B, 0x66C6, 0x6B77, 0x8F62, 0x5E74, 0x6190,  // U+F988
+    0x6200, 0x649A, 0x6F23, 0x7149, 0x7489, 0x79CA, 0x7DF4, 0x806F,  // U+F990
+    0x8F26, 0x84EE, 0x9023, 0x934A, 0x5217, 0x52A3, 0x54BD, 0x70C8,  // U+F998
+    0x88C2, 0x8AAA, 0x5EC9, 0x5FF5, 0x637B, 0x6BAE, 0x7C3E, 0x7375,  // U+F9A0
+    0x4EE4, 0x56F9, 0x5BE7, 0x5DBA, 0x601C, 0x73B2, 0x7469, 0x7F9A,  // U+F9A8
+    0x8046, 0x9234, 0x96F6, 0x9748, 0x9818, 0x4F8B, 0x79AE, 0x91B4,  // U+F9B0
+    0x96B8, 0x60E1, 0x4E86, 0x50DA, 0x5BEE, 0x5C3F, 0x6599, 0x6A02,  // U+F9B8
+    0x71CE, 0x7642, 0x84FC, 0x907C, 0x9F8D, 0x6688, 0x962E, 0x5289,  // U+F9C0
+    0x677B, 0x67F3, 0x6D41, 0x6E9C, 0x7409, 0x7559, 0x786B, 0x7D10,  // U+F9C8
+    0x985E, 0x516D, 0x622E, 0x9678, 0x502B, 0x5D19, 0x6DEA, 0x8F2A,  // U+F9D0
+    0x5F8B, 0x6144, 0x6817, 0x7387, 0x9686, 0x5229, 0x540F, 0x5C65,  // U+F9D8
+    0x6613, 0x674E, 0x68A8, 0x6CE5, 0x7406, 0x75E2, 0x7F79, 0x88CF,  // U+F9E0
+    0x88E1, 0x91CC, 0x96E2, 0x533F, 0x6EBA, 0x541D, 0x71D0, 0x7498,  // U+F9E8
+    0x85FA, 0x96A3, 0x9C57, 0x9E9F, 0x6797, 0x6DCB, 0x81E8, 0x7ACB,  // U+F9F0
+    0x7B20, 0x7C92, 0x72C0, 0x7099, 0x8B58, 0x4EC0, 0x8336, 0x523A,  // U+F9F8
+    0x5207, 0x5EA6, 0x62D3, 0x7CD6, 0x5B85, 0x6D1E, 0x66B4, 0x8F3B,  // U+FA00
+    0x884C, 0x964D, 0x898B, 0x5ED3, 0x5140, 0x55C0, 0x0000, 0x0000,  // U+FA08
+    0x585A, 0x0000, 0x6674, 0x0000, 0x0000, 0x51DE, 0x732A, 0x76CA,  // U+FA10
+    0x793C, 0x795E, 0x7965, 0x798F, 0x9756, 0x7CBE, 0x7FBD, 0x0000,  // U+FA18
+    0x8612, 0x0000, 0x8AF8, 0x0000, 0x0000, 0x9038, 0x90FD, 0x0000,  // U+FA20
+    0x0000, 0x0000, 0x98EF, 0x98FC, 0x9928, 0x9DB4, 0x90DE, 0x96B7,  // U+FA28
+    0x4FAE, 0x50E7, 0x514D, 0x52C9, 0x52E4, 0x5351, 0x559D, 0x5606,  // U+FA30
+    0x5668, 0x5840, 0x58A8, 0x5C64, 0x5C6E, 0x6094, 0x6168, 0x618E,  // U+FA38
+    0x61F2, 0x654F, 0x65E2, 0x6691, 0x6885, 0x6D77, 0x6E1A, 0x6F22,  // U+FA40
+    0x716E, 0x722B, 0x7422, 0x7891, 0x793E, 0x7949, 0x7948, 0x7950,  // U+FA48
+    0x7956, 0x795D, 0x798D, 0x798E, 0x7A40, 0x7A81, 0x7BC0, 0x7DF4,  // U+FA50
+    0x7E09, 0x7E41, 0x7F72, 0x8005, 0x81ED, 0x8279, 0x8279, 0x8457,  // U+FA58
+    0x8910, 0x8996, 0x8B01, 0x8B39, 0x8CD3, 0x8D08, 0x8FB6, 0x9038,  // U+FA60
+    0x96E3, 0x97FF, 0x983B, 0x6075, 0x0000, 0x8218, 0x0000, 0x0000,  // U+FA68
+    0x4E26, 0x51B5, 0x5168, 0x4F80, 0x5145, 0x5180, 0x52C7, 0x52FA,  // U+FA70
+    0x559D, 0x5555, 0x5599, 0x55E2, 0x585A, 0x58B3, 0x5944, 0x5954,  // U+FA78
+    0x5A62, 0x5B28, 0x5ED2, 0x5ED9, 0x5F69, 0x5FAD, 0x60D8, 0x614E,  // U+FA80
+    0x6108, 0x618E, 0x6160, 0x61F2, 0x6234, 0x63C4, 0x641C, 0x6452,  // U+FA88
+    0x6556, 0x6674, 0x6717, 0x671B, 0x6756, 0x6B79, 0x6BBA, 0x6D41,  // U+FA90
+    0x6EDB, 0x6ECB, 0x6F22, 0x701E, 0x716E, 0x77A7, 0x7235, 0x72AF,  // U+FA98
+    0x732A, 0x7471, 0x7506, 0x753B, 0x761D, 0x761F, 0x76CA, 0x76DB,  // U+FAA0
+    0x76F4, 0x774A, 0x7740, 0x78CC, 0x7AB1, 0x7BC0, 0x7C7B, 0x7D5B,  // U+FAA8
+    0x7DF4, 0x7F3E, 0x8005, 0x8352, 0x83EF, 0x8779, 0x8941, 0x8986,  // U+FAB0
+    0x8996, 0x8ABF, 0x8AF8, 0x8ACB, 0x8B01, 0x8AFE, 0x8AED, 0x8B39,  // U+FAB8
+    0x8B8A, 0x8D08, 0x8F38, 0x9072, 0x9199, 0x9276, 0x967C, 0x96E3,  // U+FAC0
+    0x9756, 0x97DB, 0x97FF, 0x980B, 0x983B, 0x9B12, 0x9F9C, 0x0000,  // U+FAC8
+    0x0000, 0x0000, 0x3B9D, 0x4018, 0x4039, 0x0000, 0x0000, 0x0000,  // U+FAD0
+    0x9F43, 0x9F8E, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAD8
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAE0
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAE8
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAF0
+    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,  // U+FAF8
+};
+
+// Unified form for a compatibility ideograph, 0 when there is no BMP one.
+uint32_t unifiedIdeographFor(const uint32_t cp) {
+  if (cp < 0xF900 || cp > 0xFAFF) return 0;
+  return CJK_COMPAT_UNIFIED[cp - 0xF900];
+}
+
+// UTF-8 mark glyph for a text-emphasis style, nullptr for none. The sesame forms are the
+// Vertical Forms codepoints; every mark here is inside the coverage the reading faces
+// already carry for kutouten and enclosed CJK.
+const char* emphasisMarkUtf8(const CssTextEmphasis e) {
+  switch (e) {
+    case CssTextEmphasis::FilledDot:
+      return "\xE2\x80\xA2";  // •
+    case CssTextEmphasis::OpenDot:
+      return "\xE2\x97\xA6";  // ◦
+    case CssTextEmphasis::FilledCircle:
+      return "\xE2\x97\x8F";  // ●
+    case CssTextEmphasis::OpenCircle:
+      return "\xE2\x97\x8B";  // ○
+    case CssTextEmphasis::FilledSesame:
+      return "\xEF\xB9\x85";  // ﹅
+    case CssTextEmphasis::OpenSesame:
+      return "\xEF\xB9\x86";  // ﹆
+    case CssTextEmphasis::FilledTriangle:
+      return "\xE2\x96\xB2";  // ▲
+    case CssTextEmphasis::OpenTriangle:
+      return "\xE2\x96\xB3";  // △
+    case CssTextEmphasis::FilledDoubleCircle:
+      return "\xE2\x97\x89";  // ◉
+    case CssTextEmphasis::OpenDoubleCircle:
+      return "\xE2\x97\x8E";  // ◎
+    default:
+      return nullptr;
+  }
+}
 
 std::string trimAndNormalize(const std::string& str) {
   if (str.empty()) return "";
@@ -168,6 +297,20 @@ EpdFontFamily::Style ChapterHtmlSlimParser::fontStyleForTextDecoration(const Css
   return style;
 }
 
+void ChapterHtmlSlimParser::applyTextEmphasisToEntry(StyleStackEntry& entry, const CssStyle& css) {
+  if (css.hasTextEmphasis()) {
+    entry.hasEmphasis = true;
+    entry.emphasis = css.textEmphasis;
+  }
+}
+
+void ChapterHtmlSlimParser::applyTextOrientationToEntry(StyleStackEntry& entry, const CssStyle& css) {
+  if (css.hasTextOrientation()) {
+    entry.hasOrientation = true;
+    entry.orientation = css.textOrientation;
+  }
+}
+
 void ChapterHtmlSlimParser::applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css) {
   if (css.hasTextDecoration()) {
     entry.hasTextDecoration = true;
@@ -228,6 +371,8 @@ void ChapterHtmlSlimParser::pushDecorationStyleEntry(const CssTextDecoration def
     entry.italic = cssStyle.fontStyle == CssFontStyle::Italic;
   }
   applyDirectionToEntry(entry, cssStyle);
+  applyTextEmphasisToEntry(entry, cssStyle);
+  applyTextOrientationToEntry(entry, cssStyle);
   inlineStyleStack.push_back(entry);
   updateEffectiveInlineStyle();
 }
@@ -252,6 +397,9 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   effectiveTextAlign = currentCssStyle.textAlign;
   effectiveSup = false;
   effectiveSub = false;
+  effectiveEmphasis = currentCssStyle.hasTextEmphasis() ? currentCssStyle.textEmphasis : CssTextEmphasis::None;
+  effectiveOrientation =
+      currentCssStyle.hasTextOrientation() ? currentCssStyle.textOrientation : CssTextOrientation::Mixed;
 
   // Apply inline style stack in order
   for (const auto& entry : inlineStyleStack) {
@@ -285,6 +433,13 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
     if (entry.hasSub) {
       effectiveSub = entry.sub;
       if (entry.sub) effectiveSup = false;
+    }
+    // Unlike line decorations, a descendant's "none" cancels an ancestor's mark.
+    if (entry.hasEmphasis) {
+      effectiveEmphasis = entry.emphasis;
+    }
+    if (entry.hasOrientation) {
+      effectiveOrientation = entry.orientation;
     }
   }
 
@@ -371,23 +526,64 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
+  substituteMissingCompatibilityIdeographs();
   const size_t wordBytes = static_cast<size_t>(partWordBufferIndex);
-  if (insideTableCell && !tableRowStacked && tableCellTextBytes + wordBytes > MAX_GRID_TABLE_CELL_BYTES) {
+  // Upstream's grid tables lay cells out in horizontal-model coordinates; a vertical page has
+  // no place for that, so vertical books keep the stacked (flattened) table form.
+  if (insideTableCell && !tableRowStacked &&
+      (isVertical || tableCellTextBytes + wordBytes > MAX_GRID_TABLE_CELL_BYTES)) {
     fallbackTableRowToStacked();
   }
-
-  uint8_t linkId = 0;
-  if (insideFootnoteLink) {
-    if (!currentTextBlock->linkTargetMatches(currentFootnoteLinkId, currentFootnote.href)) {
-      currentFootnoteLinkId = currentTextBlock->addLinkTarget(currentFootnote.href);
+  if (isVertical) {
+    // Spend the pending whitespace run as a separator token.
+    //
+    // characterData drops HTML whitespace as a bare word boundary, which is right for horizontal
+    // layout: that path re-inserts the gap at layout time via getSpaceAdvance() between words that
+    // do not continue. Vertical layout has no such step — layoutVerticalColumns stacks each token by
+    // its own advance and nothing else — so with no token to carry it the space simply vanished and
+    // Latin phrases came out run together ("character length calculator" as one string).
+    //
+    // Emitting a token here rather than adding a rule to the vertical layout keeps the two writing
+    // modes agreeing on where a space belongs, instead of giving vertical its own notion of it.
+    //
+    // Guarded on a non-empty buffer so an empty flush (an inline tag boundary, say) neither spends
+    // the run nor emits a trailing separator, and on a non-empty block so a run that opens a
+    // paragraph is discarded the way CSS collapsing discards it.
+    if (partWordBufferIndex > 0) {
+      if (pendingVerticalWhitespace && currentTextBlock && !currentTextBlock->isEmpty()) {
+        currentTextBlock->addVerticalToken(" ", fontStyle, VerticalTextUtils::VerticalBehavior::Sideways);
+      }
+      pendingVerticalWhitespace = false;
     }
-    linkId = currentFootnoteLinkId;
-  }
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset, linkId);
-  if (insideTableCell && !tableRowStacked) {
-    tableCellTextBytes += wordBytes;
-    if (currentTextBlock->size() > MAX_GRID_TABLE_CELL_WORDS) {
-      fallbackTableRowToStacked();
+    // Vertical layout tokenizes per codepoint: each glyph is its own cell, classified
+    // (upright CJK / sideways Latin / tate-chu-yoko digits) so layoutVerticalColumns can
+    // stack and orient it. Latin runs and 1-2 digit numbers are grouped into one token.
+    // Per-token visible-offset tracking is not implemented for this path (see
+    // addColumnToPage for the page-granularity fallback used instead).
+    const size_t firstToken = currentTextBlock->size();
+    flushPartWordBufferVertical(fontStyle);
+    if (insideFootnoteLink) {
+      if (!currentTextBlock->linkTargetMatches(currentFootnoteLinkId, currentFootnote.href)) {
+        currentFootnoteLinkId = currentTextBlock->addLinkTarget(currentFootnote.href);
+      }
+      currentTextBlock->setLinkIdFrom(firstToken, currentFootnoteLinkId);
+    }
+  } else {
+    uint8_t linkId = 0;
+    if (insideFootnoteLink) {
+      if (!currentTextBlock->linkTargetMatches(currentFootnoteLinkId, currentFootnote.href)) {
+        currentFootnoteLinkId = currentTextBlock->addLinkTarget(currentFootnote.href);
+      }
+      linkId = currentFootnoteLinkId;
+    }
+    const size_t wordIndex = currentTextBlock->size();
+    currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset, linkId);
+    applyHorizontalEmphasis(wordIndex);
+    if (insideTableCell && !tableRowStacked) {
+      tableCellTextBytes += wordBytes;
+      if (currentTextBlock->size() > MAX_GRID_TABLE_CELL_WORDS) {
+        fallbackTableRowToStacked();
+      }
     }
   }
   partWordBufferIndex = 0;
@@ -395,9 +591,384 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   listItemBulletOnly = false;
 }
 
+// Attach bouten to a word the horizontal path just added, as a synthetic ruby annotation.
+//
+// The spacer is what makes the marks line up. Ruby draws in SUP style, which the renderer
+// puts out at 50% scale, and one annotation is centred over the whole word, so bare marks
+// advance only half a cell each and bunch into the middle of the run they mark. U+3000 is
+// full-width, so at SUP it is the other half: mark + space is exactly one character cell,
+// making the annotation as wide as the word and landing one mark per character.
+//
+// U+3000 shares its block with the brackets and kutouten on every page, so it is present
+// in any face that can render the text being marked.
+void ChapterHtmlSlimParser::applyHorizontalEmphasis(const size_t wordIndex) {
+  const char* mark = resolveEmphasisMark(effectiveEmphasis);
+  if (!mark) return;
+
+  size_t codepoints = 0;
+  for (int i = 0; i < partWordBufferIndex; i++) {
+    if ((static_cast<unsigned char>(partWordBuffer[i]) & 0xC0) != 0x80) codepoints++;
+  }
+  // Long runs would build a string bigger than the word itself for no legibility gain.
+  if (codepoints == 0 || codepoints > MAX_EMPHASIS_CODEPOINTS_PER_WORD) return;
+
+  static constexpr char IDEOGRAPHIC_SPACE[] = "\xE3\x80\x80";  // U+3000
+  constexpr size_t SPACE_LEN = sizeof(IDEOGRAPHIC_SPACE) - 1;
+  const size_t markLen = strlen(mark);
+
+  // addWord splits CJK text into one token per character, so the run this flush produced is
+  // words[wordIndex .. size()). Each token gets as many marks as it has codepoints: one per kanji
+  // or kana, several for a Latin or digit token that stayed whole. Hanging the whole run's marks
+  // on the first token (the previous form) made that one character carry a ruby wider than the
+  // line, and the horizontal ruby layout then spread its neighbours across the page to fit it
+  // (seen 2026-09-06 on test_horizontal_ja.epub: 「は 一 文」 with thirteen marks above).
+  const size_t tokenEnd = currentTextBlock->size();
+  for (size_t t = wordIndex; t < tokenEnd; t++) {
+    const std::string_view token = currentTextBlock->tokenAt(t);
+    size_t tokenCodepoints = 0;
+    for (const char c : token) {
+      if ((static_cast<unsigned char>(c) & 0xC0) != 0x80) tokenCodepoints++;
+    }
+    if (tokenCodepoints == 0) continue;
+    std::string marks;
+    marks.reserve((markLen + SPACE_LEN) * tokenCodepoints);
+    for (size_t i = 0; i < tokenCodepoints; i++) {
+      marks.append(mark, markLen);
+      if (i + 1 < tokenCodepoints) marks.append(IDEOGRAPHIC_SPACE, SPACE_LEN);
+    }
+    currentTextBlock->setRubyForWordAt(t, marks);
+  }
+}
+
+// Tokenize the pending buffer into vertical cells. Emits one token per CJK/upright
+// codepoint; consecutive ASCII letters coalesce into a Sideways run and 1-2 digit
+// numbers into a TateChuYoko token (3+ digits fall back to Sideways). A number keeps
+// any separator standing between two of its digits, so 3.14 and 12:34 are one cell each
+// and cannot be broken across a column.
+void ChapterHtmlSlimParser::flushPartWordBufferVertical(const EpdFontFamily::Style fontStyle) {
+  // Vertical layout emits roughly one token per codepoint, so a full buffer becomes a burst of
+  // pushes. Reserve up front (worst case one token per byte) so the parallel arrays grow once.
+  currentTextBlock->ensureTokenCapacity(static_cast<size_t>(partWordBufferIndex));
+
+  // Bouten ride the ruby path, so they need the token range this flush produces.
+  const char* emphasisMark = resolveEmphasisMark(effectiveEmphasis);
+  const size_t emphasisFirstToken = emphasisMark ? currentTextBlock->size() : 0;
+  // One mark per token. Vertical layout already gives every upright codepoint its own
+  // cell, so a per-token annotation lands one mark beside one character with no spacing
+  // trick needed; a coalesced Latin or tate-chu-yoko run takes a single mark over the
+  // cell it occupies. The mark is 3 UTF-8 bytes, inside the small-string buffer, so this
+  // costs no allocation per token.
+  const auto applyEmphasis = [&]() {
+    if (!emphasisMark) return;
+    const size_t tokenEnd = currentTextBlock->size();
+    for (size_t i = emphasisFirstToken; i < tokenEnd; i++) {
+      currentTextBlock->setRubyForWordAt(i, emphasisMark);
+    }
+  };
+
+  // CSS text-orientation / text-combine-upright on this run (the EBPAJ upright / sideways /
+  // tcy classes). The classifier below decides per character; these decide for the span.
+  if (effectiveOrientation != CssTextOrientation::Mixed && flushForcedOrientation(fontStyle, effectiveOrientation)) {
+    applyEmphasis();
+    return;
+  }
+
+  const auto* p = reinterpret_cast<const unsigned char*>(partWordBuffer);
+  const auto* end = p + partWordBufferIndex;
+  while (p < end) {
+    const unsigned char* cpStart = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+
+    if (VerticalTextUtils::isUprightInVertical(cp) || VerticalTextUtils::getVerticalPunctuationOffset(cp) != nullptr) {
+      // Upright CJK/kana/punctuation: one cell each. 、。， become their Vertical
+      // Forms counterparts when the reading face carries those glyphs, so the
+      // draw path gets a real vertical glyph instead of the shifted horizontal one.
+      const uint32_t formCp = VerticalTextUtils::verticalPresentationForm(cp);
+      if (formCp != 0 && fontHasVerticalForm(formCp)) {
+        std::string token;
+        utf8AppendCodepoint(formCp, token);
+        currentTextBlock->addVerticalToken(std::move(token), fontStyle, VerticalTextUtils::VerticalBehavior::Upright);
+        continue;
+      }
+      currentTextBlock->addVerticalToken(std::string(reinterpret_cast<const char*>(cpStart), p - cpStart), fontStyle,
+                                         VerticalTextUtils::VerticalBehavior::Upright);
+      continue;
+    }
+
+    // Coalesce a run of ASCII digits or letters into a single sideways/tate-chu-yoko token.
+    const bool isDigit = (cp >= '0' && cp <= '9');
+    const unsigned char* runStart = cpStart;
+    const unsigned char* runEnd = p;
+    int runChars = 1;
+    while (runEnd < end) {
+      const unsigned char* peek = runEnd;
+      const uint32_t next = utf8NextCodepoint(&peek);
+      const bool nextDigit = (next >= '0' && next <= '9');
+      const bool nextAscii = (next >= '!' && next <= '~');
+      if (isDigit) {
+        if (nextDigit) {
+          runEnd = peek;
+          runChars++;
+          continue;
+        }
+        // A separator standing between two digits is part of the number, not a break in
+        // it: 3.14, 12:34, 1,000, 3/4. Left out of the run, each of those became three
+        // cells with a column break free to fall between them, and 3.14 duly came back
+        // from the device split across two columns. The digit on the far side is what
+        // makes it safe -- the full stop ending a sentence has no digit after it, so it
+        // is not swallowed, and neither is the colon introducing a quotation.
+        if (next == '.' || next == ',' || next == ':' || next == '/') {
+          const unsigned char* after = peek;
+          if (after < end) {
+            const uint32_t following = utf8NextCodepoint(&after);
+            if (following >= '0' && following <= '9') {
+              runEnd = after;
+              runChars += 2;
+              continue;
+            }
+          }
+        }
+        break;
+      }
+      if (nextAscii && !nextDigit) {
+        runEnd = peek;
+        runChars++;
+        continue;
+      }
+      break;
+    }
+    p = runEnd;
+    std::string token(reinterpret_cast<const char*>(runStart), runEnd - runStart);
+    // 1-2 digits and an exclamation/question pair share one upright cell; every other
+    // ASCII run turns with the column.
+    const bool tateChuYoko =
+        (isDigit && runChars <= 2) || VerticalTextUtils::isTateChuYokoPunctuationPair(token.c_str());
+    const auto behavior =
+        tateChuYoko ? VerticalTextUtils::VerticalBehavior::TateChuYoko : VerticalTextUtils::VerticalBehavior::Sideways;
+
+    if (behavior == VerticalTextUtils::VerticalBehavior::Sideways) {
+      addSidewaysToken(std::move(token), fontStyle);
+      continue;
+    }
+
+    currentTextBlock->addVerticalToken(std::move(token), fontStyle, behavior);
+  }
+
+  applyEmphasis();
+}
+
+// A sideways run occupies its own WIDTH as the column's vertical extent, and the tokenizer
+// coalesces every unbroken ASCII stretch into one token -- so a path or an identifier with
+// no space in it ("package/metadata/manifest/spine/item/itemref") becomes a single token
+// taller than the column. Column breaking works between tokens, so it cannot split that
+// one, and the run is drawn straight through the status bar and off the panel. Break the
+// run into column-sized pieces here, where the character boundaries are still known;
+// layout then treats them as ordinary adjacent tokens. Only over-long runs are touched, so
+// ordinary words are unchanged. The pieces are cut at byte boundaries, which for a Latin
+// run is the same thing as character boundaries; a forced-sideways run of CJK text (see
+// flushForcedOrientation) is cut at the character instead.
+void ChapterHtmlSlimParser::addSidewaysToken(std::string token, const EpdFontFamily::Style fontStyle) {
+  constexpr auto kSideways = VerticalTextUtils::VerticalBehavior::Sideways;
+  if (viewportHeight <= 0 || renderer.getTextAdvanceX(fontId, token.c_str(), fontStyle) <= viewportHeight) {
+    currentTextBlock->addVerticalToken(std::move(token), fontStyle, kSideways);
+    return;
+  }
+  const auto nextCharEnd = [&token](const size_t from) {
+    size_t next = from + 1;
+    while (next < token.size() && (static_cast<unsigned char>(token[next]) & 0xC0) == 0x80) next++;
+    return next;
+  };
+  size_t pieceStart = 0;
+  while (pieceStart < token.size()) {
+    // Grow a piece one character at a time until the next one would overflow.
+    size_t pieceEnd = pieceStart;
+    size_t lastFitting = pieceStart;
+    while (pieceEnd < token.size()) {
+      const size_t next = nextCharEnd(pieceEnd);
+      if (renderer.getTextAdvanceX(fontId, token.substr(pieceStart, next - pieceStart).c_str(), fontStyle) >
+          viewportHeight) {
+        break;
+      }
+      lastFitting = next;
+      pieceEnd = next;
+    }
+    // A single character wider than the column would loop forever; emit it anyway.
+    if (lastFitting == pieceStart) lastFitting = nextCharEnd(pieceStart);
+    currentTextBlock->addVerticalToken(token.substr(pieceStart, lastFitting - pieceStart), fontStyle, kSideways);
+    pieceStart = lastFitting;
+  }
+}
+
+// The three non-default orientations, all of which the draw side reads back from the
+// VERTICAL_FLIP style bit (TextBlock::renderVertical derives a token's setting from its
+// text and the bit reverses that verdict), so nothing new travels through the page cache:
+//
+//   upright   every character in its own em cell, set upright. Characters that are upright
+//             anyway go the usual way (vertical forms for 、。， included); a Latin letter,
+//             a digit or an arrow gets a full cell and the flag, and is centred in it.
+//   sideways  every character turned with the column. Characters that turn anyway are
+//             coalesced into one run like ordinary Latin; an upright one (a fullwidth ！,
+//             kana in a "横倒し" span) becomes a one-character sideways token with the flag.
+//   combine   the whole run in one cell (tate-chu-yoko). Only for runs the tokenizer would
+//             have turned: 1-2 digits and !? are set that way already, and anything
+//             containing an upright character is prose the class was put on by mistake.
+//             Wider than one and a half cells cannot be squeezed in and turns as usual.
+bool ChapterHtmlSlimParser::flushForcedOrientation(const EpdFontFamily::Style fontStyle,
+                                                   const CssTextOrientation orientation) {
+  using VerticalTextUtils::VerticalBehavior;
+  const auto flipped = static_cast<EpdFontFamily::Style>(fontStyle | EpdFontFamily::VERTICAL_FLIP);
+  const auto* p = reinterpret_cast<const unsigned char*>(partWordBuffer);
+  const auto* end = p + partWordBufferIndex;
+
+  const auto isUprightByDefault = [](const uint32_t cp) {
+    return VerticalTextUtils::isUprightInVertical(cp) || VerticalTextUtils::getVerticalPunctuationOffset(cp) != nullptr;
+  };
+  // What the draw-time classifier would set upright inside one cell on its own.
+  const auto isNaturalTateChuYoko = [](const std::string& run) {
+    if (VerticalTextUtils::isTateChuYokoPunctuationPair(run.c_str())) return true;
+    if (run.empty() || run.size() > 2) return false;
+    for (const char c : run) {
+      if (c < '0' || c > '9') return false;
+    }
+    return true;
+  };
+
+  if (orientation == CssTextOrientation::Combine) {
+    for (const unsigned char* q = p; q < end;) {
+      const uint32_t cp = utf8NextCodepoint(&q);
+      if (cp == 0) break;
+      if (isUprightByDefault(cp)) return false;
+    }
+    std::string run(partWordBuffer, static_cast<size_t>(partWordBufferIndex));
+    if (isNaturalTateChuYoko(run)) return false;
+    const int cell = verticalCellWidthMemo > 0 ? verticalCellWidthMemo : renderer.getCjkCellWidth(fontId);
+    if (renderer.getTextAdvanceX(fontId, run.c_str(), fontStyle) > cell * 3 / 2) return false;
+    currentTextBlock->addVerticalToken(std::move(run), flipped, VerticalBehavior::TateChuYoko);
+    return true;
+  }
+
+  const bool upright = orientation == CssTextOrientation::Upright;
+  std::string run;  // sideways: consecutive characters that turn anyway, kept as one token
+  const auto flushRun = [&]() {
+    if (run.empty()) return;
+    // A lone digit pair or !? would be set upright by the draw-time classifier; flag it so
+    // it turns with the rest of the span.
+    const EpdFontFamily::Style style = isNaturalTateChuYoko(run) ? flipped : fontStyle;
+    addSidewaysToken(std::move(run), style);
+    run.clear();
+  };
+  while (p < end) {
+    const unsigned char* cpStart = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+    const VerticalTextUtils::PunctuationOffset* punct = VerticalTextUtils::getVerticalPunctuationOffset(cp);
+    const bool uprightByDefault = isUprightByDefault(cp);
+    // Brackets and long marks are upright tokens that the draw side turns anyway.
+    const bool turnsByDefault = punct != nullptr ? punct->rotate : !uprightByDefault;
+    std::string token(reinterpret_cast<const char*>(cpStart), p - cpStart);
+    if (upright) {
+      if (uprightByDefault) {
+        const uint32_t formCp = VerticalTextUtils::verticalPresentationForm(cp);
+        if (formCp != 0 && fontHasVerticalForm(formCp)) {
+          token.clear();
+          utf8AppendCodepoint(formCp, token);
+        }
+        currentTextBlock->addVerticalToken(std::move(token), fontStyle, VerticalBehavior::Upright);
+      } else if (cp == ' ') {
+        currentTextBlock->addVerticalToken(std::move(token), fontStyle, VerticalBehavior::Sideways);
+      } else {
+        currentTextBlock->addVerticalToken(std::move(token), flipped, VerticalBehavior::TateChuYoko);
+      }
+      continue;
+    }
+    if (turnsByDefault) {
+      run += token;
+      continue;
+    }
+    flushRun();
+    currentTextBlock->addVerticalToken(std::move(token), flipped, VerticalBehavior::Sideways);
+  }
+  flushRun();
+  return true;
+}
+
+// Coverage-interval probe of the reading face, cached per form because the answer is
+// needed once per 、。， in the chapter. Faces predating the Vertical Forms block
+// answer false and the shifted-horizontal-glyph fallback stays in effect.
+// Mark glyph for a text-emphasis style, substituting a dot when the reading face has no
+// sesame. U+FE45/FE46 are the default shape for CSS text-emphasis and the usual choice in
+// Japanese books, but they sit in Vertical Forms and most faces stop short of it -- the
+// generated OST reading faces included. Drawing the replacement box for every marked
+// character is worse than the dot every reader recognises as bouten, so the face is probed
+// once and the shape downgraded if it comes back empty.
+const char* ChapterHtmlSlimParser::resolveEmphasisMark(const CssTextEmphasis e) {
+  const bool filledSesame = e == CssTextEmphasis::FilledSesame;
+  if (!filledSesame && e != CssTextEmphasis::OpenSesame) {
+    return emphasisMarkUtf8(e);
+  }
+
+  const uint8_t bit = filledSesame ? 1u : 2u;
+  if ((sesameProbe & bit) == 0) {
+    sesameProbe |= bit;
+    const uint32_t cp = filledSesame ? 0xFE45 : 0xFE46;
+    const auto& fonts = renderer.getFontMap();
+    const auto it = fonts.find(fontId);
+    if (it != fonts.end() && it->second.hasCodepoint(cp)) {
+      sesameProbe |= static_cast<uint8_t>(bit << 2);
+    }
+  }
+  if ((sesameProbe & static_cast<uint8_t>(bit << 2)) != 0) {
+    return emphasisMarkUtf8(e);
+  }
+  return emphasisMarkUtf8(filledSesame ? CssTextEmphasis::FilledDot : CssTextEmphasis::OpenDot);
+}
+
+bool ChapterHtmlSlimParser::fontHasCodepoint(const uint32_t cp) const {
+  const auto& fonts = renderer.getFontMap();
+  const auto it = fonts.find(fontId);
+  return it != fonts.end() && it->second.hasCodepoint(cp);
+}
+
+// Rewrite compatibility ideographs the reading face has no glyph for into their unified
+// form. Both sit in the BMP and so encode to three UTF-8 bytes, which is what lets this
+// patch the buffer in place instead of rebuilding it. Runs on the flush path so the
+// vertical and horizontal tokenizers both see the substituted text.
+void ChapterHtmlSlimParser::substituteMissingCompatibilityIdeographs() {
+  auto* write = reinterpret_cast<unsigned char*>(partWordBuffer);
+  const auto* p = write;
+  const auto* end = p + partWordBufferIndex;
+  while (p < end) {
+    const unsigned char* cpStart = p;
+    const uint32_t cp = utf8NextCodepoint(&p);
+    if (cp == 0) break;
+    if (cp < 0xF900 || cp > 0xFAFF || (p - cpStart) != 3) continue;
+    const uint32_t unified = unifiedIdeographFor(cp);
+    if (unified == 0 || fontHasCodepoint(cp)) continue;
+    auto* out = write + (cpStart - write);
+    out[0] = static_cast<unsigned char>(0xE0 | (unified >> 12));
+    out[1] = static_cast<unsigned char>(0x80 | ((unified >> 6) & 0x3F));
+    out[2] = static_cast<unsigned char>(0x80 | (unified & 0x3F));
+  }
+}
+
+bool ChapterHtmlSlimParser::fontHasVerticalForm(const uint32_t formCp) {
+  const uint8_t bit = 1u << (formCp - 0xFE10);
+  if ((vertFormProbe & bit) == 0) {
+    vertFormProbe |= bit;
+    const auto& fonts = renderer.getFontMap();
+    const auto it = fonts.find(fontId);
+    if (it != fonts.end() && it->second.hasCodepoint(formCp)) {
+      vertFormProbe |= bit << 4;
+    }
+  }
+  return (vertFormProbe & (bit << 4)) != 0;
+}
+
 // start a new text block if needed
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
-  nextWordContinues = false;  // New block = new paragraph, no continuation
+  nextWordContinues = false;          // New block = new paragraph, no continuation
+  pendingVerticalWhitespace = false;  // and no separator carried across the paragraph boundary
   if (currentTextBlock) {
     // already have a text block running and it is empty - just reuse it
     if (currentTextBlock->isEmpty()) {
@@ -416,7 +987,16 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
         incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lineHeight);
       }
 
-      currentTextBlock->setBlockStyle(style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical));
+      auto merged = style.getCombinedBlockStyle(incoming, BlockStyle::CombineAxis::Vertical);
+      if (isVertical) {
+        // In vertical text the stack already hands every descendant the container's padding
+        // (inheritColumnInsets), so the deposit on the empty block is the same padding again.
+        // The vertical merge sums padding, which put the first child of a padding-top:2em box
+        // 4em down while its siblings sat at 2em (test 25, 2026-09-26). Take the larger instead,
+        // as the merge already does for margins.
+        merged.paddingTop = std::max(style.paddingTop, incoming.paddingTop);
+      }
+      currentTextBlock->setBlockStyle(merged);
 
       flushPendingAnchor();
       return;
@@ -438,13 +1018,13 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
-  currentTextBlock =
-      makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle);
+  currentTextBlock = makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled,
+                                                   blockStyle, isVertical);
   if (!currentTextBlock) {
     // Evict rebuildable caches and retry once before failing the build.
     freeink::MemoryManager::instance().ensureFree(4 * 1024);
-    currentTextBlock =
-        makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle);
+    currentTextBlock = makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled,
+                                                     blockStyle, isVertical);
   }
   if (!currentTextBlock) {
     LOG_ERR("EHP", "OOM: ParsedText");
@@ -724,8 +1304,36 @@ void ChapterHtmlSlimParser::finishTableRow() {
   clearLayoutLines();
 }
 
+// Vertical writing turns the physical top and bottom into the line's start and end: every
+// column of every paragraph inside <div class="start-5em"> (margin-top: 5em under .vrtl) starts
+// 5em down. The style stack only carried left/right insets to descendants, as horizontal flow
+// needs, so the top inset reached the first child alone (through the deposit on the empty
+// block) and the rest started at the column head (2026-09-26). Here it accumulates like the
+// horizontal insets do; the first child's deposit merge takes the max, so it is not doubled.
+static BlockStyle inheritColumnInsets(const BlockStyle& parent, BlockStyle child) {
+  child.marginTop = static_cast<int16_t>(child.marginTop + parent.marginTop);
+  child.paddingTop = static_cast<int16_t>(child.paddingTop + parent.paddingTop);
+  child.marginBottom = static_cast<int16_t>(child.marginBottom + parent.marginBottom);
+  child.paddingBottom = static_cast<int16_t>(child.paddingBottom + parent.paddingBottom);
+  return child;
+}
+
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  // Ancestor record for descendant selectors (".vrtl .start-1em"): every element goes on
+  // here and comes off at the top of endElement, whatever else the two handlers do with it.
+  {
+    const char* classValue = "";
+    if (atts != nullptr) {
+      for (int i = 0; atts[i]; i += 2) {
+        if (strcmp(atts[i], "class") == 0) {
+          classValue = atts[i + 1];
+          break;
+        }
+      }
+    }
+    self->ancestorStack.push_back({name, classValue});
+  }
   if (strcasecmp(name, "body") == 0) {
     // Case-insensitive to match ParagraphStreamer's tag matching (ProgressMapper). A case
     // mismatch here would leave visibleTextOffset at 0 for the whole section, so every page
@@ -771,6 +1379,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         const char* idValue = atts[i + 1];
         const bool isTocAnchor =
             std::find(self->tocAnchors.begin(), self->tocAnchors.end(), idValue) != self->tocAnchors.end();
+        // Both lists count toward the cap: an anchor waiting for placement is one that will be
+        // recorded, just not yet.
         if (isTocAnchor ||
             (!isNonNavigableInlineElement(name) &&
              self->anchorData.size() + self->anchorsAwaitingPlacement.size() < MAX_ANCHORS_PER_CHAPTER)) {
@@ -800,7 +1410,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // before tag-specific branches emit any content or metadata.
   CssStyle cssStyle;
   if (self->cssParser) {
-    cssStyle = self->cssParser->resolveStyle(name, classAttr);
+    // The element itself is the last ancestorStack entry; its ancestors are the rest.
+    cssStyle =
+        self->cssParser->resolveStyle(name, classAttr, self->ancestorStack.data(), self->ancestorStack.size() - 1);
     if (!styleAttr.empty()) {
       CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
       cssStyle.applyOver(inlineStyle);
@@ -1403,8 +2015,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
     }
-    const auto accumulated =
+    auto accumulated =
         self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle, BlockStyle::CombineAxis::Horizontal);
+    if (self->isVertical) accumulated = inheritColumnInsets(self->blockStyleStack.back(), accumulated);
     self->blockStyleStack.push_back(accumulated);
     self->startNewTextBlock(accumulated.withoutBottom());
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
@@ -1435,8 +2048,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->startNewTextBlock(brStyle);
     } else {
       self->currentCssStyle = cssStyle;
-      const auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
-                                                                                  BlockStyle::CombineAxis::Horizontal);
+      auto accumulated = self->blockStyleStack.back().getCombinedBlockStyle(userAlignmentBlockStyle,
+                                                                            BlockStyle::CombineAxis::Horizontal);
+      if (self->isVertical) accumulated = inheritColumnInsets(self->blockStyleStack.back(), accumulated);
       self->blockStyleStack.push_back(accumulated);
       self->startNewTextBlock(accumulated.withoutBottom());
       if (!self->currentTextBlock) {
@@ -1455,8 +2069,24 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         } else if (!self->listStack.empty() && self->listStack.back().ordered) {
           self->listStack.back().counter += 1;
           char marker[16];
-          snprintf(marker, sizeof(marker), "%d.", self->listStack.back().counter);
-          self->currentTextBlock->addWord(marker, EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
+          if (self->isVertical) {
+            // A column number reads as one upright cell up to two digits (縦中横), turned beyond.
+            snprintf(marker, sizeof(marker), "%d", self->listStack.back().counter);
+            self->currentTextBlock->addVerticalToken(marker, EpdFontFamily::REGULAR,
+                                                     strlen(marker) <= 2
+                                                         ? VerticalTextUtils::VerticalBehavior::TateChuYoko
+                                                         : VerticalTextUtils::VerticalBehavior::Sideways,
+                                                     self->visibleTextOffset);
+          } else {
+            snprintf(marker, sizeof(marker), "%d.", self->listStack.back().counter);
+            self->currentTextBlock->addWord(marker, EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
+          }
+          self->listItemBulletOnly = true;
+        } else if (self->isVertical) {
+          // Not the Latin bullet the horizontal path uses: see VERTICAL_LIST_MARKER.
+          self->currentTextBlock->addVerticalToken(VerticalTextUtils::VERTICAL_LIST_MARKER, EpdFontFamily::REGULAR,
+                                                   VerticalTextUtils::VerticalBehavior::Upright,
+                                                   self->visibleTextOffset);
           self->listItemBulletOnly = true;
         } else {
           self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false,
@@ -1506,6 +2136,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     applyTextDecorationToEntry(entry, cssStyle);
     applyDirectionToEntry(entry, cssStyle);
+    applyTextEmphasisToEntry(entry, cssStyle);
+    applyTextOrientationToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, ITALIC_TAGS, std::size(ITALIC_TAGS))) {
@@ -1526,6 +2158,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     }
     applyTextDecorationToEntry(entry, cssStyle);
     applyDirectionToEntry(entry, cssStyle);
+    applyTextEmphasisToEntry(entry, cssStyle);
+    applyTextOrientationToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "sup") == 0 || strcmp(name, "sub") == 0) {
@@ -1548,7 +2182,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     // Handle span and other inline elements for CSS styling.
     const bool inheritedTableTextAlign = self->tableDepth >= 1 && cssStyle.hasTextAlign();
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
-        cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || inheritedTableTextAlign) {
+        cssStyle.hasDirection() || cssStyle.hasVerticalAlign() || inheritedTableTextAlign ||
+        cssStyle.hasTextEmphasis() || cssStyle.hasTextOrientation()) {
       // Flush buffer before style change so preceding text gets current style
       if (self->partWordBufferIndex > 0) {
         self->flushPartWordBuffer();
@@ -1572,6 +2207,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         entry.textAlign = cssStyle.textAlign;
       }
       applyVerticalAlignToEntry(entry, cssStyle);
+      applyTextEmphasisToEntry(entry, cssStyle);
+      applyTextOrientationToEntry(entry, cssStyle);
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
     }
@@ -1583,6 +2220,10 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  // A layout pass that gave up leaves its words unconsumed, so the block only grows from here
+  // and the next token push is what runs the heap out (2026-09-10 abort in addVerticalToken).
+  // The build is already failed; stop taking text until parseStep notices.
+  if (self->layoutOom) return;
   const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData;
   const uint32_t callbackVisibleOffset = self->visibleTextOffset;
   if (countVisibleOffsets) {
@@ -1678,6 +2319,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       }
       // Whitespace is a real word boundary — reset continuation state
       self->nextWordContinues = false;
+      // Vertical layout needs the run kept as a separator (see flushPartWordBuffer). Only once the
+      // block has content: a run before the first word of a paragraph collapses away.
+      if (self->isVertical && self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+        self->pendingVerticalWhitespace = true;
+      }
       // Skip the whitespace char
       continue;
     }
@@ -1808,39 +2454,68 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
         self->flushPartWordBuffer();
         self->nextWordContinues = true;
       }
+      // Bound how far past the threshold one chunk can carry the block: checking only after
+      // the whole chunk was tokenized let a 4 KB read add well over a thousand tokens (648
+      // against a 320 threshold, 2026-09-10), and the layout pass then has to allocate for all
+      // of them at once. This is the CJK path -- text with no spaces reaches the tokenizer only
+      // when the 200-byte buffer fills, and a 3-byte character straddling that boundary leaves
+      // the buffer non-empty, so the token-boundary check below never fires on it.
+      self->maybeSoftFlushTextBlock();
     }
 
     if (self->partWordBufferIndex == 0) {
       self->partWordVisibleOffset = codepointOffset;
+      // Same bound for space-separated text, which empties the buffer at every word and so
+      // never reaches the size trigger above.
+      self->maybeSoftFlushTextBlock();
     }
     self->partWordBuffer[self->partWordBufferIndex++] = s[i];
   }
 
+  self->maybeSoftFlushTextBlock();
+}
+
+// Lay the block out and consume it once it is past the soft-flush threshold, keeping token
+// growth bounded: CSS-heavy spans fragment text into many tiny words, so the threshold is
+// lower when embedded CSS is active. The trailing line (column) is deliberately not emitted,
+// so paragraph flow survives the chunk boundary. Checked while characters are added too, not
+// only once a whole read has been tokenized: vertical text is one token per character, so a
+// 4 KB read would otherwise carry the block over a thousand tokens past the threshold.
+void ChapterHtmlSlimParser::maybeSoftFlushTextBlock() {
   // Block creation failed (OOM): nothing to soft-flush.
-  if (!self->currentTextBlock) {
+  if (!currentTextBlock || inRuby) return;
+  const size_t blockWordCount = currentTextBlock->size();
+  const size_t softFlushThreshold = embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
+  if (blockWordCount <= softFlushThreshold) return;
+
+  LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
+  if (isVertical) {
+    const int verticalInset =
+        currentTextBlock->getBlockStyle().topInset() + currentTextBlock->getBlockStyle().bottomInset();
+    const uint16_t effectiveHeight =
+        (verticalInset < viewportHeight) ? static_cast<uint16_t>(viewportHeight - verticalInset) : viewportHeight;
+    currentTextBlock->layoutVerticalColumns(
+        renderer, fontId, effectiveHeight,
+        [this](std::unique_ptr<TextBlock> column, const uint32_t offset) {
+          addColumnToPage(std::move(column), offset);
+        },
+        &verticalCellWidthMemo, false);
+    if (currentTextBlock->hadDroppedWords()) layoutOom = true;
     return;
   }
-
-  // Keep token growth bounded: CSS-heavy spans can fragment text into many tiny
-  // words, so flush earlier when embedded CSS is active. We still keep the
-  // "exclude last line" behavior to preserve paragraph flow across chunks.
-  const size_t blockWordCount = self->currentTextBlock->size();
-  const size_t softFlushThreshold =
-      self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
-  if (blockWordCount > softFlushThreshold && !self->inRuby) {
-    LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
-    self->applyBlockTopSpacing();
-    const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-    const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                        ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                        : self->viewportWidth;
-    self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
-        [self](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
-          self->addLineToPage(std::move(textBlock), offset);
+  applyBlockTopSpacing();
+  const int horizontalInset = currentTextBlock->getBlockStyle().totalHorizontalInset();
+  const uint16_t effectiveWidth =
+      (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
+  {
+    currentTextBlock->layoutAndExtractLines(
+        renderer, fontId, effectiveWidth,
+        [this](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
+          addLineToPage(std::move(textBlock), offset);
         },
-        false, self->characterSpacing, self->wordSpacingPercent);
+        false, characterSpacing, wordSpacingPercent);
   }
+  if (currentTextBlock->hadDroppedWords()) layoutOom = true;
 }
 
 void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const XML_Char* s, const int len) {
@@ -1861,6 +2536,7 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+  if (!self->ancestorStack.empty()) self->ancestorStack.pop_back();
   if (self->nonVisibleTextDepth > 0) {
     self->nonVisibleTextDepth--;
   }
@@ -2332,6 +3008,106 @@ void ChapterHtmlSlimParser::applyBlockTopSpacing() {
   }
 }
 
+int ChapterHtmlSlimParser::verticalColumnWidth() const {
+  // The cell the glyphs are drawn in is the full-width advance itself, unscaled: the line
+  // spacing setting moves the columns apart, it does not stretch the characters.
+  return std::max(1, renderer.getCjkCellWidth(fontId));
+}
+
+int ChapterHtmlSlimParser::verticalColumnSpacing() const {
+  const int width = verticalColumnWidth();
+  const int pitch = static_cast<int>(width * VERTICAL_COLUMN_PITCH_EM * lineCompression + 0.5f);
+  // A gap of at least one pixel even if a setting combination rounds the pitch down to the cell.
+  return std::max(1, pitch - width);
+}
+
+int ChapterHtmlSlimParser::verticalRubyReserve() const {
+  // Ruby in vertical writing is set beside its column, to the right (JLREQ 3.3). The gap between
+  // columns carries it for every column but the first, whose ruby lands outside the text area and
+  // is clipped by the screen edge -- the readings on a page's first column simply went missing
+  // (2026-09-11). TextBlock draws ruby in a half-width cell, so reserving exactly that keeps the
+  // page's own right edge clear without taking a whole column's worth of width.
+  // Only the part the reader's own right margin does not already cover. Reserving the full ruby
+  // width inside the viewport cost a whole column: at 18 pt the ruby cell is 19 px and the page
+  // held 9 columns up to a reserve of 18, so 19 dropped it to 8 -- an 11% loss of text per page
+  // for one pixel (measured 2026-09-11, viewport 512, pitch 57).
+  const int rubyWidth = verticalColumnWidth() / 2;
+  const int covered = rightMargin;
+  return rubyWidth > covered ? rubyWidth - covered : 0;
+}
+
+void ChapterHtmlSlimParser::addColumnToPage(std::unique_ptr<TextBlock> column, const uint32_t visibleOffset) {
+  // Column occupies one full-width cell plus the gap that carries the line-spacing setting.
+  const int columnWidth = verticalColumnWidth();
+  const int columnSpacing = verticalColumnSpacing();
+#ifdef INPUT_DIAG
+  // Reported once per build rather than per column: the values are constant for a chapter, and
+  // the report needs them to reconcile a column count against the font and the margin setting.
+  if (!verticalLayoutReported_) {
+    verticalLayoutReported_ = true;
+    InputDiag::noteVerticalLayout(static_cast<uint16_t>(columnWidth),
+                                  static_cast<uint16_t>(columnWidth + columnSpacing),
+                                  static_cast<uint16_t>(verticalRubyReserve()), viewportWidth, viewportHeight);
+  }
+#endif
+
+  if (!currentPage) {
+    currentPage.reset(new Page());
+    currentPageVisibleOffsetSet = false;
+  }
+
+  // Re-anchor the cursor to the right margin whenever the page changed. Pages are also
+  // started outside this function (TOC-anchor breaks, image blocks) and those paths only
+  // reset the horizontal cursor, so the cursor value alone cannot tell us whether it still
+  // belongs to the current page. Keying on the page index instead is immune to that, and to
+  // a fresh Page landing on the address of the one just handed off.
+  if (verticalCursorPageIndex != completedPageCount) {
+    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth - verticalRubyReserve());
+    verticalCursorPageIndex = completedPageCount;
+  }
+
+  // Columns advance right-to-left; a new page starts once the cursor passes the left edge.
+  if (currentPageNextX < 0) {
+    // The column's first character, carried from addVerticalToken, starts the next page.
+    setCurrentPageVisibleOffset(visibleOffset);
+    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex, currentPageVisibleOffset);
+    completedPageCount++;
+    currentPage.reset(new Page());
+    currentPageNextX = static_cast<int16_t>(viewportWidth - columnWidth - verticalRubyReserve());
+    currentPageVisibleOffsetSet = false;
+    verticalCursorPageIndex = completedPageCount;
+  }
+  setCurrentPageVisibleOffset(visibleOffset);
+  // Same as addLineToPage: the column's page is settled, so waiting anchors name this one.
+  commitAnchorsAwaitingPlacement();
+
+  wordsExtractedInBlock += column->wordCount();
+  auto footnoteIt = pendingFootnotes.begin();
+  while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
+    currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
+    ++footnoteIt;
+  }
+  pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
+
+  const int16_t yOffset = column->getBlockStyle().topInset();
+  // Link spans run down the column (see layoutVerticalColumns); the rectangle is the column's
+  // cell width across. Ruby beside the column is not part of the target.
+  for (const auto& link : column->takeLinkSpans()) {
+    if (!currentPage->addLink(link.href, currentPageNextX, static_cast<int16_t>(yOffset + link.x),
+                              static_cast<int16_t>(columnWidth), link.width)) {
+      LOG_DBG("EHP", "Dropped page link: %.48s", link.href);
+    }
+  }
+  auto pageLine = makeUniqueNoThrow<PageLine>(std::move(column), currentPageNextX, yOffset);
+  if (!pageLine) {
+    LOG_ERR("EHP", "OOM: PageLine (column)");
+    layoutOom = true;
+    return;
+  }
+  currentPage->elements.push_back(std::move(pageLine));
+  currentPageNextX -= static_cast<int16_t>(columnWidth + columnSpacing);
+}
+
 void ChapterHtmlSlimParser::makePages() {
   if (!currentTextBlock) {
     LOG_ERR("EHP", "!! No text block to make pages for !!");
@@ -2354,6 +3130,35 @@ void ChapterHtmlSlimParser::makePages() {
   const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
 
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+
+  // Vertical (tategaki): lay the paragraph out as right-to-left columns. Block top/bottom
+  // margins are a horizontal-flow concept; vertical advances by column width and adds a
+  // half-cell inter-paragraph gap instead.
+  if (isVertical) {
+    const int verticalInset = blockStyle.topInset() + blockStyle.bottomInset();
+    const uint16_t effectiveHeight =
+        (verticalInset < viewportHeight) ? static_cast<uint16_t>(viewportHeight - verticalInset) : viewportHeight;
+    currentTextBlock->layoutVerticalColumns(
+        renderer, fontId, effectiveHeight,
+        [this](std::unique_ptr<TextBlock> column, const uint32_t offset) {
+          addColumnToPage(std::move(column), offset);
+        },
+        &verticalCellWidthMemo);
+    if (currentTextBlock->hadDroppedWords()) {
+      layoutOom = true;
+    }
+    if (!pendingFootnotes.empty() && currentPage) {
+      for (const auto& [idx, fn] : pendingFootnotes) {
+        currentPage->addFootnote(fn.number, fn.href);
+      }
+      pendingFootnotes.clear();
+    }
+    if (extraParagraphSpacing) {
+      currentPageNextX -= static_cast<int16_t>(lineHeight / 2);
+    }
+    return;
+  }
+
   applyBlockTopSpacing();
 
   // Calculate effective width accounting for horizontal margins/padding

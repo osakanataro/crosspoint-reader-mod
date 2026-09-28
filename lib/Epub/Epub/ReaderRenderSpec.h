@@ -23,4 +23,14 @@ struct ReaderRenderSpec {
   bool embeddedStyle = true;
   uint8_t imageRendering = 0;
   bool focusReadingEnabled = false;
+  // Vertical writing (tategaki / vertical-rl). Resolved per book by the reader (the EPUB's
+  // page-progression-direction and language) and written into the spec before layout, so
+  // switching a book between vertical and horizontal invalidates its section cache.
+  bool isVertical = false;
+  // White space the reader keeps outside the viewport on the right, in pixels (the user's screen
+  // margin, not the bezel inset, which is under the frame and cannot be drawn into usefully).
+  // Vertical ruby is set beside its column and the rightmost column's lands here, so the page
+  // only has to reserve what this does not already cover. Not a cache key: it only matters to
+  // vertical layout through the viewport, which already is one.
+  uint8_t rightMargin = 0;
 };

@@ -62,24 +62,47 @@ struct PageTurnResult {
   bool fromTilt;
 };
 
-inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
+// `rtlPageProgression`: the book's pages advance right to left (spine page-progression-direction
+// rtl, or an RTL-script language). The controls that carry a left-right sense then have to
+// follow, or every turn is backwards from what the page shows. A vertical Japanese book is the
+// common case; a horizontal Arabic or Hebrew one behaves the same way.
+//
+// The two axis-carrying inputs are treated differently on purpose:
+//
+//   Front Left/Right compose with the orientation flip. Both are transforms of the same
+//   axis -- one because the panel is rotated, one because the text runs the other way --
+//   so applying both is correct: in an inverted vertical book they cancel out.
+//
+//   The side buttons override sideButtonLayout instead of composing. That setting is how
+//   the reader states which side-button end means "forward" for ordinary books, and letting
+//   it compose would mean a reader who had already flipped it by hand to cope with vertical
+//   text now gets the old, wrong behaviour back. SIDE_BUTTONS_DISABLED still wins, since
+//   that is not a direction but an off switch.
+inline PageTurnResult detectPageTurn(const MappedInputManager& input, const bool rtlPageProgression = false) {
+  using Button = MappedInputManager::Button;
   const bool usePress = SETTINGS.longPressButtonBehavior == SETTINGS.OFF;
   const bool tiltNext = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedForward();
   const bool tiltPrev = SETTINGS.tiltPageTurn && halTiltSensor.wasTiltedBack();
-  const bool swapFront = input.isNavDirectionSwapped();
-  const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
-  const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
-  const auto pageButtonTriggered = [&](const MappedInputManager::Button button) {
+  const bool swapFront = input.isNavDirectionSwapped() != rtlPageProgression;
+  const auto prevButton = swapFront ? Button::Right : Button::Left;
+  const auto nextButton = swapFront ? Button::Left : Button::Right;
+
+  // Physical Up/Down when overriding, so sideButtonLayout's direction is bypassed;
+  // PageBack/PageForward otherwise, which is where that setting is applied.
+  const bool sideOverride =
+      rtlPageProgression && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  const auto sidePrevButton = sideOverride ? Button::Down : Button::PageBack;
+  const auto sideNextButton = sideOverride ? Button::Up : Button::PageForward;
+
+  const auto pageButtonTriggered = [&](const Button button) {
     if (usePress) return input.wasPressed(button);
     return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);
   };
-  const bool prev =
-      tiltPrev || (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
-  const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                         input.wasReleased(MappedInputManager::Button::Power);
+  const bool prev = tiltPrev || pageButtonTriggered(sidePrevButton) || pageButtonTriggered(prevButton);
+  const bool powerTurn =
+      SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN && input.wasReleased(Button::Power);
   const bool next = input.homeButtonAction() == HomeButtonAction::NextPage || tiltNext ||
-                    pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
-                    pageButtonTriggered(nextButton);
+                    pageButtonTriggered(sideNextButton) || powerTurn || pageButtonTriggered(nextButton);
   return {prev, next, tiltPrev || tiltNext};
 }
 

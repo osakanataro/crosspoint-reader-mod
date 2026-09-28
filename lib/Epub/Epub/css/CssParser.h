@@ -50,7 +50,11 @@ class CssParser {
   };
 
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 12;
+  // v13 (this tree): the style record also carries text-emphasis and text-orientation /
+  //     text-combine-upright (two enum bytes, defined bits 19-20), and two-part descendant
+  //     selectors (".vrtl .start-1em") are stored under a key with a single space. Upstream
+  //     1.6.5 is v12 with the shorter record, so the number has to differ.
+  static constexpr uint8_t CSS_CACHE_VERSION = 13;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -76,6 +80,20 @@ class CssParser {
    * @return Combined style with all applicable rules merged
    */
   [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr) const;
+
+  /**
+   * Same, with the open ancestors of the element (outermost first) so two-part descendant
+   * selectors can match. Each ancestor is its tag name and class attribute. Only ".a .b",
+   * ".a tag", ".a tag.b" and the same three with a tag as the first part are stored; the
+   * EBPAJ template every surveyed Japanese book carries writes its writing-mode-specific
+   * rules that way (".vrtl .h-indent-1em", ".hltr .start-1em"), 956 of its 1,905 rules.
+   */
+  struct AncestorRef {
+    std::string tag;
+    std::string classAttr;
+  };
+  [[nodiscard]] CssStyle resolveStyle(std::string_view tagName, std::string_view classAttr,
+                                      const AncestorRef* ancestors, size_t ancestorCount) const;
 
   /**
    * Parse an inline style attribute string.
@@ -105,6 +123,7 @@ class CssParser {
     selectorPoolSize_ = selectorPoolCapacity_ = 0;
     styleCount_ = styleCapacity_ = 0;
     ruleGrowthStopped_ = false;
+    hasDescendantRules_ = false;
   }
 
   /**
@@ -166,17 +185,24 @@ class CssParser {
   uint16_t styleCount_ = 0;
   uint16_t styleCapacity_ = 0;
   bool ruleGrowthStopped_ = false;
+  // Set once any stored key carries a descendant combinator, so resolveStyle can skip the
+  // ancestor lookups entirely for the many stylesheets that have none.
+  bool hasDescendantRules_ = false;
 
   std::string cachePath;
 
   // Internal parsing helpers
   bool restoreCacheBackupIfNeeded() const;
   void processRuleBlockWithStyle(std::string_view selectorGroup, const CssStyle& style);
-  [[nodiscard]] int compareEntryToPieces(const SelectorEntry& entry, std::string_view p0, std::string_view p1,
-                                         std::string_view p2) const;
+  [[nodiscard]] int compareEntryToPieces(const SelectorEntry& entry, const std::string_view* pieces,
+                                         size_t pieceCount) const;
+  [[nodiscard]] size_t lowerBound(const std::string_view* pieces, size_t pieceCount, bool& exact) const;
   [[nodiscard]] size_t lowerBound(std::string_view p0, std::string_view p1, std::string_view p2, bool& exact) const;
   [[nodiscard]] const CssStyle* findStyle(std::string_view p0, std::string_view p1 = {},
                                           std::string_view p2 = {}) const;
+  // Descendant key: "<ancestorPart> <p0><p1><p2>", e.g. (".vrtl", "p", ".", "x") -> ".vrtl p.x".
+  [[nodiscard]] const CssStyle* findDescendantStyle(std::string_view ancestorPart, std::string_view p0,
+                                                    std::string_view p1 = {}, std::string_view p2 = {}) const;
   [[nodiscard]] std::string_view selectorAt(size_t index) const;
   RuleInsertResult insertOrMerge(std::string_view selector, const CssStyle& style);
   PoolResult ensureEntryCapacity(size_t needed);
@@ -191,6 +217,7 @@ class CssParser {
   static CssFontStyle interpretFontStyle(std::string_view val);
   static CssFontWeight interpretFontWeight(std::string_view val);
   static CssTextDecoration interpretDecoration(std::string_view val);
+  static CssTextEmphasis interpretTextEmphasis(std::string_view val);
   static CssLength interpretLength(std::string_view val);
   /** Returns true only when a numeric length was parsed (e.g. 2em, 50%). False for auto/inherit/initial. */
   static bool tryInterpretLength(std::string_view val, CssLength& out);

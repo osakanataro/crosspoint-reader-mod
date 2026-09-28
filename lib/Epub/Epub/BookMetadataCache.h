@@ -17,6 +17,9 @@ class BookMetadataCache {
     std::string language;
     std::string coverItemHref;
     std::string textReferenceHref;
+    // <spine page-progression-direction="rtl">: marks a right-to-left / vertical book.
+    // Used to auto-detect tategaki (vertical writing) when the writing-mode is AUTO.
+    bool pageProgressionRtl = false;
   };
 
   struct SpineEntry {

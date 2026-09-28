@@ -55,6 +55,9 @@ class Epub {
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
+  // True if the spine declares page-progression-direction="rtl" (RTL / vertical book).
+  // Used to auto-detect tategaki (vertical writing).
+  bool isPageProgressionRtl() const;
   std::string getCoverBmpPath(bool cropped = false, bool originalThresholds = false) const;
   bool generateCoverBmp(bool cropped = false, bool originalThresholds = false) const;
   std::string getThumbBmpPath() const;

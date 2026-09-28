@@ -1,6 +1,7 @@
 #pragma once
 
 #include <EpdFontFamily.h>
+#include <VerticalTextUtils.h>
 
 #include <deque>
 #include <functional>
@@ -46,6 +47,9 @@ class ParsedText {
   // token and discarded after layout, never added to the page-cache TextBlock.
   std::vector<uint8_t> wordLinkIds;
   std::vector<std::string> linkTargets;
+  // Per-word vertical orientation (tategaki). Populated only in vertical mode, in lockstep
+  // with words[]; empty in horizontal mode. Consumed by layoutVerticalColumns.
+  std::vector<VerticalTextUtils::VerticalBehavior> wordVerticalBehaviors;
   // Zero-based visible Unicode-codepoint offsets in the spine body, stored as
   // uint16_t deltas from a shared base to keep this layout-only metadata small.
   // Pathological spans wider than uint16_t use sparse rebases; rendered
@@ -63,6 +67,10 @@ class ParsedText {
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
+  // True when this block is laid out as vertical (tategaki) columns. Kept here so addWord can
+  // maintain the wordVerticalBehaviors invariant even on shared markup paths that don't know
+  // about vertical mode.
+  bool verticalMode;
   bool isNaturalAlign;
   // True once this paragraph has handed a line to the page. The parser soft-flushes a paragraph
   // over the word threshold, so layout runs several times over the same ParsedText; each run
@@ -113,11 +121,13 @@ class ParsedText {
 
  public:
   explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
-                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle())
+                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
+                      const bool verticalMode = false)
       : blockStyle(blockStyle),
         extraParagraphSpacing(extraParagraphSpacing),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
+        verticalMode(verticalMode),
         isNaturalAlign(false),
         hasRtlWord(false) {}
   ~ParsedText() = default;
@@ -126,6 +136,22 @@ class ParsedText {
                uint32_t visibleTextOffset = 0, uint8_t linkId = 0);
   uint8_t addLinkTarget(const char* href);
   bool linkTargetMatches(uint8_t linkId, const char* href) const;
+  // Marks tokens [first, size()) as belonging to link target linkId. The vertical tokenizer
+  // pushes a run of cells at once and tags them afterwards, as the emphasis path does.
+  void setLinkIdFrom(size_t first, uint8_t linkId) {
+    for (size_t i = first; i < wordLinkIds.size(); ++i) wordLinkIds[i] = linkId;
+  }
+  // Vertical (tategaki) token: one already-tokenized unit (typically a single codepoint)
+  // plus its orientation class. Bypasses the horizontal focus/bidi machinery -- vertical
+  // layout stacks tokens down a column and composes columns right-to-left.
+  void addVerticalToken(std::string_view token, EpdFontFamily::Style fontStyle, VerticalTextUtils::VerticalBehavior vb,
+                        uint32_t visibleTextOffset = 0);
+  // Reserve the per-token parallel arrays for `additionalTokens` more pushes. Callers that
+  // append a burst of tokens (a CJK-split word, a buffer of vertical cells) should call this
+  // first so the arrays grow once instead of doubling repeatedly mid-burst.
+  void ensureTokenCapacity(size_t additionalTokens);
+  // Read access to a token's text (the parser's bouten path needs each CJK token's length).
+  std::string_view tokenAt(size_t index) const { return wordAt(index); }
   void setRubyForWordAt(size_t index, const std::string& ruby);
   void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
   EpdFontFamily::Style getWordStyleAt(size_t index) const {
@@ -152,4 +178,16 @@ class ParsedText {
                              const std::function<void(std::unique_ptr<TextBlock>, uint32_t)>& processLine,
                              bool includeLastLine = true, int8_t characterSpacing = 0,
                              uint8_t wordSpacingPercent = 100);
+  // Vertical (tategaki) analogue of layoutAndExtractLines: stacks tokens down columns of
+  // height columnHeight, applying kinsoku at column boundaries, and emits one TextBlock per
+  // column (words positioned by ypos; the page composes columns right-to-left) with the
+  // visible offset of its first token. Consumes emitted words like the horizontal path;
+  // includeLastColumn=false preserves a trailing partial column across mid-block flushes.
+  // cjkCellWidthMemo carries the full-width cell advance across paragraphs: a block with
+  // an upright word writes its advance there, and a block without one (a pure-Latin
+  // paragraph) reads it back instead of falling back to the line height, which is ~40%
+  // wider and used to push such columns' ruby into the neighbouring column.
+  void layoutVerticalColumns(const GfxRenderer& renderer, int fontId, uint16_t columnHeight,
+                             const std::function<void(std::unique_ptr<TextBlock>, uint32_t)>& processColumn,
+                             int* cjkCellWidthMemo = nullptr, bool includeLastColumn = true);
 };
