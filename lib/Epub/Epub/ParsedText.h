@@ -64,6 +64,13 @@ class ParsedText {
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   bool isNaturalAlign;
+  // True once this paragraph has handed a line to the page. The parser soft-flushes a paragraph
+  // over the word threshold, so layout runs several times over the same ParsedText; each run
+  // numbers its own lines from zero and would otherwise re-apply the first-line indent at every
+  // flush boundary. Never reset: one ParsedText is one paragraph (startNewTextBlock builds a
+  // fresh one).
+  bool lineEmitted = false;
+  bool topSpacingClaimed = false;
   bool hasRtlWord;
   bool droppedWords = false;
   std::vector<std::string> reorderedWordsScratch;
@@ -85,6 +92,10 @@ class ParsedText {
   int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
                                   int fontId) const;
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
+  // True when the paragraph already opens with an ideographic space (U+3000), which
+  // paperback-derived EPUBs use as the first-line indent itself. Adding the reader's own
+  // indent on top of it sets the line in two characters.
+  bool beginsWithIdeographicSpace() const;
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                         std::vector<bool>& noSpaceBeforeVec);
@@ -126,6 +137,14 @@ class ParsedText {
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
+  // True the first time only. The block's top margin belongs before its first line, and a
+  // paragraph past the soft-flush threshold is laid out in several passes -- whichever pass
+  // comes first claims it, so it is neither lost at the head nor inserted mid-paragraph.
+  bool claimTopSpacing() {
+    if (topSpacingClaimed) return false;
+    topSpacingClaimed = true;
+    return true;
+  }
   // True once any word was dropped because the text arena could not allocate.
   // Callers must treat the block as incomplete and fail the section build.
   bool hadDroppedWords() const { return droppedWords; }

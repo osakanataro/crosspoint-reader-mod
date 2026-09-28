@@ -45,6 +45,9 @@ constexpr size_t TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS = 320;
 // every text fragment (e.g. Kobo KePub spans). The cap prevents unbounded heap growth
 // on resource-constrained devices (~380KB heap). TOC anchors bypass this cap.
 constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
+// Anchors held back until their block places something. Consecutive empty anchored elements are
+// rare; past this many, the rest fall back to naming the page in progress.
+constexpr size_t MAX_ANCHORS_AWAITING_PLACEMENT = 16;
 
 // Reuse serializable PageLine/PageHorizontalRule elements for a small grid.
 constexpr int16_t TABLE_CELL_HORIZONTAL_PADDING = 4;
@@ -309,9 +312,24 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
     }
   }
 
-  // Record deferred anchor after previous block is flushed (and any TOC page break)
-  anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
+  // Hold the anchor until a line of its block has actually been placed. completedPageCount here
+  // is the page in progress, and the block's first line may not fit on it -- addLineToPage then
+  // emits that page and puts the line on the next one. A TOC anchor came out right before this
+  // change only because it forces the break above first; nothing else did.
+  if (anchorsAwaitingPlacement.size() < MAX_ANCHORS_AWAITING_PLACEMENT) {
+    anchorsAwaitingPlacement.push_back(std::move(pendingAnchorId));
+  } else {
+    anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
+  }
   pendingAnchorId.clear();
+}
+
+void ChapterHtmlSlimParser::commitAnchorsAwaitingPlacement() {
+  if (anchorsAwaitingPlacement.empty()) return;
+  for (auto& anchor : anchorsAwaitingPlacement) {
+    anchorData.push_back({std::move(anchor), static_cast<uint16_t>(completedPageCount)});
+  }
+  anchorsAwaitingPlacement.clear();
 }
 
 void ChapterHtmlSlimParser::setCurrentPageVisibleOffset(const uint32_t offset) {
@@ -493,6 +511,8 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   currentPage->elements.push_back(std::move(pageRule));
   setCurrentPageVisibleOffset(visibleTextOffset);
   currentPageNextY = static_cast<int16_t>(currentPageNextY + ruleThickness + bottomSpacing);
+  // The rule is on this page, so anything still waiting is on it too.
+  commitAnchorsAwaitingPlacement();
 
   if (!pendingAnchorId.empty()) {
     anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
@@ -751,7 +771,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         const char* idValue = atts[i + 1];
         const bool isTocAnchor =
             std::find(self->tocAnchors.begin(), self->tocAnchors.end(), idValue) != self->tocAnchors.end();
-        if (isTocAnchor || (!isNonNavigableInlineElement(name) && self->anchorData.size() < MAX_ANCHORS_PER_CHAPTER)) {
+        if (isTocAnchor ||
+            (!isNonNavigableInlineElement(name) &&
+             self->anchorData.size() + self->anchorsAwaitingPlacement.size() < MAX_ANCHORS_PER_CHAPTER)) {
           // Flush a displaced anchor before overwriting. Consecutive non-block elements
           // (e.g. <aside id="fn1">text</aside><aside id="fn2">) with no intervening block
           // never trigger startNewTextBlock, so fn1 gets silently overwritten. That leaves
@@ -1206,6 +1228,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
                 self->currentPage->elements.push_back(std::move(pageImage));
                 self->setCurrentPageVisibleOffset(self->visibleTextOffset);
+                // An anchor on (or just before) the image names the page the image landed on.
+                self->commitAnchorsAwaitingPlacement();
                 self->currentPageNextY += displayHeight + imageMarginBottom;
 
                 // The image consumed the empty block's accumulated vertical spacing.
@@ -1805,6 +1829,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->embeddedStyle ? TEXT_BLOCK_SOFT_FLUSH_WORDS_WITH_CSS : TEXT_BLOCK_SOFT_FLUSH_WORDS;
   if (blockWordCount > softFlushThreshold && !self->inRuby) {
     LOG_DBG("EHP", "Text block soft flush (%u words)", static_cast<unsigned>(blockWordCount));
+    self->applyBlockTopSpacing();
     const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
     const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
                                         ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
@@ -2204,6 +2229,18 @@ bool ChapterHtmlSlimParser::finishParse() {
     currentTextBlock.reset();
   }
 
+  // Anything still waiting laid out nothing of its own -- an empty anchored element, or a
+  // chapter that ended in a table. The last page that exists is the closest there is, and is
+  // what the old record-on-flush behaviour would have named. Runs after the block above so
+  // the final page is already counted.
+  if (!anchorsAwaitingPlacement.empty()) {
+    const int lastPage = completedPageCount > 0 ? completedPageCount - 1 : 0;
+    for (auto& anchor : anchorsAwaitingPlacement) {
+      anchorData.push_back({std::move(anchor), static_cast<uint16_t>(lastPage)});
+    }
+    anchorsAwaitingPlacement.clear();
+  }
+
   return true;
 }
 
@@ -2243,6 +2280,8 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
     currentPageVisibleOffsetSet = false;
   }
   setCurrentPageVisibleOffset(visibleOffset);
+  // The page is settled now, so anchors waiting since their block was flushed name this one.
+  commitAnchorsAwaitingPlacement();
 
   // Track cumulative words to assign footnotes to the page containing their anchor
   wordsExtractedInBlock += line->wordCount();
@@ -2273,6 +2312,26 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
   currentPageNextY += lineHeight;
 }
 
+// Top margin and padding go before the block's first line, once. makePages() is the last layout
+// pass, so a paragraph that was soft-flushed earlier has already placed lines; adding the margin
+// there put the paragraph's top spacing in the middle of it (0.5em mid-paragraph on a long <p>).
+void ChapterHtmlSlimParser::applyBlockTopSpacing() {
+  if (!currentTextBlock || !currentTextBlock->claimTopSpacing()) return;
+  const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
+  if (blockStyle.marginTop <= 0 && blockStyle.paddingTop <= 0) return;
+  if (!currentPage) {
+    currentPage.reset(new Page());
+    currentPageNextY = 0;
+    currentPageVisibleOffsetSet = false;
+  }
+  if (blockStyle.marginTop > 0) {
+    currentPageNextY += blockStyle.marginTop;
+  }
+  if (blockStyle.paddingTop > 0) {
+    currentPageNextY += blockStyle.paddingTop;
+  }
+}
+
 void ChapterHtmlSlimParser::makePages() {
   if (!currentTextBlock) {
     LOG_ERR("EHP", "!! No text block to make pages for !!");
@@ -2294,14 +2353,8 @@ void ChapterHtmlSlimParser::makePages() {
 
   const int lineHeight = renderer.getLineHeight(fontId, lineCompression);
 
-  // Apply top spacing before the paragraph (stored in pixels)
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
-  if (blockStyle.marginTop > 0) {
-    currentPageNextY += blockStyle.marginTop;
-  }
-  if (blockStyle.paddingTop > 0) {
-    currentPageNextY += blockStyle.paddingTop;
-  }
+  applyBlockTopSpacing();
 
   // Calculate effective width accounting for horizontal margins/padding
   const int horizontalInset = blockStyle.totalHorizontalInset();

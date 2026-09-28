@@ -122,7 +122,11 @@ class ChapterHtmlSlimParser {
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
-  std::string pendingAnchorId;          // deferred until after previous text block is flushed
+  std::string pendingAnchorId;  // deferred until after previous text block is flushed
+  // Anchors whose block has been flushed but has not placed anything yet. They name the page
+  // the block's first line (or image, or rule) actually lands on, not the page in progress
+  // when the element opened -- which is one page early whenever that line does not fit.
+  std::vector<std::string> anchorsAwaitingPlacement;
   std::vector<std::string> tocAnchors;  // the list of anchors that are TOC chapter boundaries
   uint16_t xpathParagraphIndex = 0;
   uint16_t xpathListItemIndex = 0;
@@ -164,6 +168,8 @@ class ChapterHtmlSlimParser {
   void updateEffectiveInlineStyle();
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPendingAnchor();
+  void commitAnchorsAwaitingPlacement();
+  void applyBlockTopSpacing();
   void flushPartWordBuffer();
   void fallbackTableRowToStacked();
   void closeTableCell();
