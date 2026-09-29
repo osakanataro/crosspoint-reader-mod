@@ -296,23 +296,35 @@ void EpubReaderActivity::openReaderMenu() {
   const ChapterPosition position = chapterPosition();
   const int bookProgressPercent = bookPercentFor(position);
 
-  startActivityForResult(
-      std::make_unique<EpubReaderMenuActivity>(renderer, mappedInput, epub->getTitle(), position.displayPage(),
-                                               position.totalPages, bookProgressPercent, SETTINGS.orientation,
-                                               !currentPageFootnotes.empty(), !cachedBookmarks.empty()),
-      [this](const ActivityResult& result) {
-        const auto& menu = std::get<MenuResult>(result.data);
+  // A build paused by the heap gate still holds its parser and CSS tables (tens of KB); the menu
+  // and the list screens behind it cannot be built on what is left. Persist the laid-out pages and
+  // drop the build; it resumes from the partial when the reader draws again.
+  if (section && section->isBuilding() && !buildTickHeapGate()) {
+    section->suspendBuild();
+  }
 
-        if (SETTINGS.orientation != menu.orientation) {
-          applyOrientation(menu.orientation);
-        }
+  auto menuActivity = makeUniqueNoThrow<EpubReaderMenuActivity>(
+      renderer, mappedInput, epub->getTitle(), position.displayPage(), position.totalPages, bookProgressPercent,
+      SETTINGS.orientation, !currentPageFootnotes.empty(), !cachedBookmarks.empty());
+  if (!menuActivity) {
+    LOG_ERR("ERS", "OOM: reader menu (free=%u max=%u)", static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    return;
+  }
 
-        toggleAutoPageTurn(menu.pageTurnOption);
+  startActivityForResult(std::move(menuActivity), [this](const ActivityResult& result) {
+    const auto& menu = std::get<MenuResult>(result.data);
 
-        if (!result.isCancelled) {
-          onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
-        }
-      });
+    if (SETTINGS.orientation != menu.orientation) {
+      applyOrientation(menu.orientation);
+    }
+
+    toggleAutoPageTurn(menu.pageTurnOption);
+
+    if (!result.isCancelled) {
+      onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
+    }
+  });
 }
 
 bool EpubReaderActivity::buildTickHeapGate() {
