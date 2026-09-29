@@ -198,15 +198,18 @@ inline std::vector<StrId> homeThemeValues() {
 // Each entry has a key (for JSON API) and category (for grouping).
 // ACTION-type entries and entries without a key are device-only.
 //
-// The static list is constructed exactly once (master's optimization, #1086 +
-// #1636) so the per-entry SettingInfo cost is paid once; every call then copies
-// it. When an SdCardFontRegistry is supplied AND has SD card fonts installed,
+// Built afresh on every call. Upstream (#1086 + #1636) kept the base list in a function-local
+// static so the per-entry cost was paid once, but that pinned ~13.9 KB of heap for the whole
+// session -- read at boot, then resident through every reader page, where the C3 renders with
+// 5-6 KB free (heap-low, 2026-09-26). The list is only needed by settings load/save, the
+// settings screen and the web settings page, so rebuilding it there costs a few ms and returns
+// the memory everywhere else. When an SdCardFontRegistry is supplied AND has SD card fonts installed,
 // the font-family entry is replaced in that copy with a registry-aware version.
 // The font-size entry is always rebuilt, since its options are point sizes read
 // from the active family rather than a fixed enum.
 inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
                                                 const std::vector<DictionaryEntry>* dictionaries = nullptr) {
-  static const std::vector<SettingInfo> baseList = [] {
+  std::vector<SettingInfo> baseList = [] {
     // Enum settings are persisted as numeric values. Assign these labels by enum
     // value so a reordered menu or enum cannot silently swap their behavior.
     std::vector<StrId> sleepScreenValues(CrossPointSettings::SLEEP_SCREEN_MODE_COUNT);
@@ -500,7 +503,7 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     return v;
   }();
 
-  std::vector<SettingInfo> v = baseList;
+  std::vector<SettingInfo> v = std::move(baseList);
   if (!BoardConfig::hasTouch()) {
     // The reader menu style stays available on button boards (the toolbar
     // chrome is button-navigable); only the touch controls are hidden.
