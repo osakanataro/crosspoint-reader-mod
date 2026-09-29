@@ -451,6 +451,13 @@ class SdCardFont {
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
   int fetchAdvancesForCodepoints(uint32_t* codepoints, uint32_t cpCount, uint8_t styleMask);
+  // prewarmStyle's return when the chunked arena could not hold the whole set (a chunk
+  // allocation failed or MINI_BM_MAX_CHUNKS was reached). The style is left freed and
+  // arenaFitGlyphs_ holds how many of its validGlyphs_ glyphs were placed first, which
+  // prewarm() uses to size a smaller retry.
+  static constexpr int PREWARM_ARENA_TOO_LARGE = -2;
+  uint32_t arenaFitGlyphs_ = 0;
+  uint32_t arenaValidGlyphs_ = 0;
   int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly, bool loadKernLig,
                    bool accumulate);
 

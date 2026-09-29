@@ -1179,7 +1179,31 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
   int totalMissed = 0;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    const int missedForStyle = prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, loadKernLig, accumulate);
+    int missedForStyle = prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, loadKernLig, accumulate);
+    if (missedForStyle == PREWARM_ARENA_TOO_LARGE) {
+      // The chunked arena ran out (a 4 KB chunk could not be allocated, or the chunk cap
+      // was reached) partway through the page. Rather than leaving every glyph to the
+      // 8-slot overflow ring, keep the prefix that fit: codepoints are sorted, so the
+      // prefix keeps kana and punctuation, and the dropped suffix falls to the ring.
+      // Sized from what was placed, then halved while it still does not fit.
+      constexpr uint32_t ARENA_RETRY_FLOOR = 16;
+      uint32_t fit = arenaValidGlyphs_ > 0
+                         ? static_cast<uint32_t>(static_cast<uint64_t>(cpCount) * arenaFitGlyphs_ / arenaValidGlyphs_)
+                         : cpCount / 2;
+      if (fit >= cpCount) fit = cpCount / 2;
+      while (fit >= ARENA_RETRY_FLOOR) {
+        LOG_DBG("SDCF", "Arena retry: %u -> %u glyphs (placed %u/%u, maxAlloc=%u)", cpCount, fit, arenaFitGlyphs_,
+                arenaValidGlyphs_, static_cast<unsigned>(ESP.getMaxAllocHeap()));
+        missedForStyle = prewarmStyle(si, codepoints.get(), fit, metadataOnly, loadKernLig, accumulate);
+        if (missedForStyle != PREWARM_ARENA_TOO_LARGE) break;
+        fit /= 2;
+      }
+      if (missedForStyle == PREWARM_ARENA_TOO_LARGE || fit < ARENA_RETRY_FLOOR) {
+        missedForStyle = static_cast<int>(cpCount);  // nothing resident
+      } else {
+        missedForStyle += static_cast<int>(cpCount - fit);  // the dropped suffix is absent too
+      }
+    }
     totalMissed += missedForStyle;
   }
 
@@ -1512,15 +1536,19 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       const uint32_t chunkIdx = span >> MINI_BM_CHUNK_SHIFT;
       if (chunkIdx >= MINI_BM_MAX_CHUNKS) {
         LOG_ERR("SDCF", "Prewarm: mini bitmap needs > %u chunks (style %u)", MINI_BM_MAX_CHUNKS, styleIdx);
+        arenaFitGlyphs_ = i;
+        arenaValidGlyphs_ = validCount;
         freeStyleMiniData(s);
-        return static_cast<int>(cpCount);
+        return PREWARM_ARENA_TOO_LARGE;
       }
       if (!s.miniBitmapChunks[chunkIdx]) {
         s.miniBitmapChunks[chunkIdx] = psramNewArray<uint8_t>(MINI_BM_CHUNK_SIZE);
         if (!s.miniBitmapChunks[chunkIdx]) {
           LOG_ERR("SDCF", "Failed to allocate mini bitmap chunk %u (style %u)", chunkIdx, styleIdx);
+          arenaFitGlyphs_ = i;
+          arenaValidGlyphs_ = validCount;
           freeStyleMiniData(s);
-          return static_cast<int>(cpCount);
+          return PREWARM_ARENA_TOO_LARGE;
         }
       }
       if (chunkIdx + 1 > s.miniBitmapChunkCount) s.miniBitmapChunkCount = chunkIdx + 1;
