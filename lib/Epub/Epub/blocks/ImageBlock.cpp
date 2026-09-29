@@ -15,6 +15,19 @@
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "Epub/converters/PngStreamDecoder.h"
 
+#if INPUT_DIAG
+#include "../../../../src/util/InputDiag.h"
+// Page-time image outcomes go to /image-diag.txt next to the heap at that moment.
+#define IMG_DIAG(fmt, ...)                                        \
+  do {                                                            \
+    char imgDiagBuf[72];                                          \
+    snprintf(imgDiagBuf, sizeof(imgDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(imgDiagBuf);                        \
+  } while (0)
+#else
+#define IMG_DIAG(fmt, ...)
+#endif
+
 // Cache file format:
 // - uint16_t width
 // - uint16_t height
@@ -378,6 +391,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     LOG_DBG("IMG", "Lazy-extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
     if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) {
       LOG_ERR("IMG", "Lazy extraction failed: %s", srcPath.c_str());
+      IMG_DIAG("page img extract FAIL %.36s", srcPath.c_str());
     }
   }
 
@@ -386,6 +400,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
+    IMG_DIAG("page img missing %.40s", srcPath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -395,6 +410,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
+    IMG_DIAG("page img empty %.40s", srcPath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -436,6 +452,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
+    IMG_DIAG("page img decode FAIL %dx%d %.30s", width, height, srcPath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -443,6 +460,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   renderer.preserveImagePolarity(x, y, width, height);
   LOG_DBG("IMG", "Decode successful");
+  IMG_DIAG("page img decode ok %dx%d", width, height);
 }
 
 bool ImageBlock::serialize(HalFile& file) {

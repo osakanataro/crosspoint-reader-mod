@@ -1636,7 +1636,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               // image-heavy chapter from stalling for seconds per image.
               ImageDimensions dims = {0, 0};
               ImageDimsProbe headerProbe;
-              self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+              {
+                // The probe reads only the first bytes, but starting the inflate still wants
+                // the full 32KB window in one block, which a build's heap often lacks (19KB
+                // largest block on a commercial book: every image dropped). Same loan as the
+                // full extraction below.
+                GfxRenderer::FrameBufferLoan probeLoan(self->renderer);
+                self->epub->readItemContentsToStream(resolvedPath, headerProbe, 1024, /*allowEarlyStop=*/true);
+              }
               bool gotDimensions = headerProbe.getDimensions(dims);
 
               if (!gotDimensions) {
@@ -1650,7 +1657,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 HalFile cachedImageFile;
                 bool extractSuccess = false;
                 if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-                  extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+                  {
+                    // Same 32KB-window need as the probe; the popup is already on screen.
+                    GfxRenderer::FrameBufferLoan extractLoan(self->renderer);
+                    extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+                  }
                   cachedImageFile.flush();
                   cachedImageFile.close();
                 }
@@ -1669,6 +1680,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 }
               }
 
+#ifdef INPUT_DIAG
+              if (!gotDimensions) {
+                char line[72];
+                snprintf(line, sizeof(line), "build img no-dims %.40s", resolvedPath.c_str());
+                InputDiag::noteImageEvent(line);
+              }
+#endif
               if (gotDimensions) {
                 LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
 
@@ -1817,6 +1835,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                       }
                     }
                   }
+#ifdef INPUT_DIAG
+                  {
+                    char line[72];
+                    snprintf(line, sizeof(line), "build img %s %dx%d %.30s", haveFile ? "ok" : "extract FAIL",
+                             displayWidth, displayHeight, resolvedPath.c_str());
+                    InputDiag::noteImageEvent(line);
+                  }
+#endif
                   if (haveFile && FsHelpers::hasPngExtension(cachedImagePath)) {
                     GfxRenderer::FrameBufferLoan decodeLoan(self->renderer);
                     (void)PngStreamDecoder::decodeToCache(cachedImagePath, ImageBlock::cachePathFor(cachedImagePath),
