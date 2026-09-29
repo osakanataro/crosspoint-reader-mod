@@ -15,6 +15,11 @@ the date in front keeps the ordering right regardless.
 
 Copies the built image to dist/ under a name carrying the number. Diagnostic
 builds (INPUT_DIAG) get a -diag suffix so the two cannot be confused on the card.
+Images for another board carry its name (-x4pro) before that suffix; the X3 image
+from the default env keeps the bare name.
+
+Only the default env advances the counter. Another board's env reuses the number
+the default build just took, so the X3 and X4 Pro images of one change share it.
 
 The number stays out of the compile: defining it (a past OST_VERSION macro) put
 a value that changes every build into every translation unit's command line,
@@ -38,8 +43,12 @@ def warn(msg):
     print(f'WARNING [ost_version.py]: {msg}', file=sys.stderr)
 
 
-def next_version(project_dir):
-    """Return YYYYMMDDNN, advancing the per-day counter."""
+# PlatformIO env -> board tag in the file name. The default env (X3) has none.
+BOARD_TAGS = {'x4pro': '-x4pro'}
+
+
+def next_version(project_dir, advance=True):
+    """Return YYYYMMDDNN, advancing the per-day counter unless advance is False."""
     today = datetime.date.today().strftime('%Y%m%d')
     path = os.path.join(project_dir, COUNTER_FILE)
 
@@ -52,6 +61,9 @@ def next_version(project_dir):
         pass
     except (ValueError, OSError) as e:
         warn(f'could not read {COUNTER_FILE} ({e}); restarting the counter')
+
+    if not advance and stored_date == today and stored_seq > 0:
+        return f'{today}{stored_seq:02d}'
 
     seq = stored_seq + 1 if stored_date == today else 1
     if seq > 99:
@@ -149,14 +161,16 @@ def copy_to_dist(project_dir, version, suffix, source):
 
 def main(env):
     project_dir = env.subst('$PROJECT_DIR')
-    version = next_version(project_dir)
+    pioenv = env.subst('$PIOENV')
+    board = BOARD_TAGS.get(pioenv, '')
+    version = next_version(project_dir, advance=(pioenv == 'default'))
     diag_at_pre = has_input_diag(env)
-    write_build_id_header(project_dir, f'{version}{"-diag" if diag_at_pre else ""}')
+    write_build_id_header(project_dir, f'{version}{board}{"-diag" if diag_at_pre else ""}')
 
     def post_action(target, source, env):
         # Re-check against the fully folded environment and keep whichever pass
         # saw the flag: the name has to be wrong in the safe direction.
-        suffix = '-diag' if (diag_at_pre or has_input_diag(env)) else ''
+        suffix = board + ('-diag' if (diag_at_pre or has_input_diag(env)) else '')
         copy_to_dist(project_dir, version, suffix, str(target[0]))
 
     env.AddPostAction('$BUILD_DIR/${PROGNAME}.bin', post_action)

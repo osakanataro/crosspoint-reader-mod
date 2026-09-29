@@ -79,14 +79,20 @@ def get_base_version(project_dir):
 def inject_version(env):
     # Only applies to development environments; release envs set the
     # version via build_flags in platformio.ini and are unaffected.
-    if env['PIOENV'] not in ('default', 'sticky'):
+    # x4pro is a development env too, but upstream's platformio.ini gives it a fixed version;
+    # only stamp it when the build flags leave the version to this script.
+    pioenv = env['PIOENV']
+    if pioenv not in ('default', 'sticky', 'x4pro'):
+        return
+    if pioenv == 'x4pro' and any('CROSSPOINT_VERSION' in str(f) for f in (env.get('BUILD_FLAGS') or [])):
         return
 
     project_dir = env['PROJECT_DIR']
     base_version = get_base_version(project_dir)
     branch = get_git_branch(project_dir)
     short_sha = get_git_short_sha(project_dir)
-    version_string = f'{base_version}-dev-{branch}-{short_sha}'
+    board = '-x4pro' if pioenv == 'x4pro' else ''
+    version_string = f'{base_version}-dev-{branch}-{short_sha}{board}'
 
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')
