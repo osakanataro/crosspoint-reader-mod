@@ -24,9 +24,6 @@ class HalFile;
 class SdCardFont {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
-  // prewarmStyle: the bitmap arena did not fit the largest free block.
-  // Distinct from a missed-glyph count so the caller can retry smaller.
-  static constexpr int PREWARM_ARENA_TOO_LARGE = -2;
   static constexpr uint8_t MAX_STYLES = 4;
 
   // Recent frees of a style's mini arena, for INPUT_DIAG (who dropped the page's glyphs, and when).
@@ -159,6 +156,12 @@ class SdCardFont {
   // Returns the bitmap for an on-demand-loaded (overflow) glyph.
   const uint8_t* getOverflowBitmap(const EpdGlyph* glyph) const;
 
+  // Resolves a prewarmed mini glyph's chunked bitmap. `ctx` is the glyphMissCtx
+  // (an OverflowContext identifying the style); `dataOffset` is the glyph's
+  // virtual offset into the style's chunked arena. Returns nullptr if the chunk
+  // is absent or out of range. Called by GfxRenderer::getGlyphBitmap().
+  const uint8_t* miniGlyphBitmap(const void* ctx, uint32_t dataOffset) const;
+
   // Extract SdCardFont* from an opaque glyphMissCtx pointer.
   // Used by GfxRenderer::getGlyphBitmap() to recover the SdCardFont from EpdFontData::glyphMissCtx.
   static SdCardFont* fromMissCtx(void* ctx);
@@ -219,6 +222,16 @@ class SdCardFont {
   };
 
   // All per-style data: file offsets, intervals, kern/lig, prewarm cache, EpdFont
+  // The per-style mini bitmap arena is stored as a list of fixed-size chunks
+  // instead of one contiguous block: a fragmented heap routinely has the bytes
+  // but not one block large enough for a page's glyphs, and a failed arena sent
+  // every glyph through the 8-slot overflow ring. Each glyph's bitmap is placed
+  // wholly within one chunk (never straddling); its EpdGlyph::dataOffset is a
+  // virtual offset that maps to (chunk index, offset-in-chunk) via miniGlyphBitmap().
+  static constexpr uint32_t MINI_BM_CHUNK_SHIFT = 12;  // 4 KB chunks
+  static constexpr uint32_t MINI_BM_CHUNK_SIZE = 1u << MINI_BM_CHUNK_SHIFT;
+  static constexpr uint32_t MINI_BM_MAX_CHUNKS = 24;  // 96 KB ceiling per style/page
+
   struct PerStyle {
     CpFontHeader header{};
 
@@ -282,18 +295,20 @@ class SdCardFont {
     EpdFontData miniData{};
     EpdUnicodeInterval* miniIntervals = nullptr;
     EpdGlyph* miniGlyphs = nullptr;
-    uint8_t* miniBitmap = nullptr;
+    // Chunked mini bitmap arena (see MINI_BM_CHUNK_* above). Chunks are allocated
+    // on demand during prewarm and kept for reuse; miniBitmapChunkCount is how many are live.
+    uint8_t* miniBitmapChunks[MINI_BM_MAX_CHUNKS] = {};
+    uint32_t miniBitmapChunkCount = 0;
     uint32_t miniIntervalCount = 0;
     uint32_t miniGlyphCount = 0;
     uint32_t miniIntervalCapacity = 0;
     uint32_t miniGlyphCapacity = 0;
+    // Bytes held by the live chunks (miniBitmapChunkCount * MINI_BM_CHUNK_SIZE).
     uint32_t miniBitmapCapacity = 0;
     // Bitmap bytes the current page actually used (set by prewarmStyle), the
     // underuse-hysteresis signal; 0 = no bitmap built this scope (metadata-only
     // prewarm), which leaves the hysteresis counter untouched.
     uint32_t miniBitmapUsed = 0;
-    // Exact bitmap bytes per glyph of the last requested set, for the arena retry.
-    uint32_t measuredBytesPerGlyph = 0;
     uint8_t miniUnderuseRuns = 0;
     // True when the resident mini was built metadata-only (no bitmaps): it can
     // serve metadata requests but a full render request must rebuild.
