@@ -54,7 +54,18 @@ class SdCardFont {
   // Supports v4 (multi-style) format.
   // Returns true on success.
   // isReaderFont: the family's body-text size (its first load), reported by INPUT_DIAG.
-  bool load(const char* path, bool isReaderFont = false);
+  // scaleNum/scaleDen: every glyph record (width, height, bearings, advance) and bitmap is
+  // scaled by this ratio as it enters the resident caches, and the style's line metrics at
+  // load, so the renderer sees a font of the scaled size. 1/1 = the file as it is. Only 2-bit
+  // fonts are scaled; a 1-bit font ignores the ratio. Kerning values are not scaled (the CJK
+  // fonts this is for carry none).
+  // preferFlash: read through the copy in the inactive OTA slot (SdCardFontCache) when it holds
+  // this very file; otherwise, and for any range the copy does not hold, the SD card is read.
+  bool load(const char* path, bool isReaderFont = false, uint8_t scaleNum = 1, uint8_t scaleDen = 1,
+            bool preferFlash = false);
+  // True while reads are served from the flash copy (a read failure turns it off for good).
+  bool usingFlash() const { return useFlash_; }
+  size_t flashPayloadBytes() const { return flashPayloadBytes_; }
 
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
@@ -320,6 +331,34 @@ class SdCardFont {
   uint8_t styleCount_ = 0;
 
   char filePath_[128] = {};
+  // Flash copy state (see load()). Mutable: the const read paths flip it off on a read failure.
+  mutable bool useFlash_ = false;
+  size_t flashPayloadBytes_ = 0;
+  bool loadSelectedSource(bool isReaderFont, uint8_t scaleNum, uint8_t scaleDen);
+
+  // Glyph scale applied on the way into the resident caches (see load()).
+  uint8_t scaleNum_ = 1;
+  uint8_t scaleDen_ = 1;
+  bool isScaled() const { return scaleNum_ != scaleDen_; }
+  // Nearest for bearings, ascender/descender and advances.
+  int16_t scaledBearing(int16_t v) const;
+  uint16_t scaleAdvance(uint16_t advanceFP) const;
+  // The scaled glyph box: the source box's edges multiplied by the exact ratio and rounded
+  // outward, so the ink keeps its scaled position inside it (never clipped, never shifted).
+  struct ScaledBox {
+    int16_t left;
+    int16_t top;
+    uint16_t width;
+    uint16_t height;
+  };
+  ScaledBox scaledBox(const EpdGlyph& g) const;
+  // width/height/left/top/advanceX only; dataLength/dataOffset are the caller's.
+  void scaleGlyphMetrics(EpdGlyph& g) const;
+  static uint32_t bitmapBytes2Bit(uint32_t w, uint32_t h) { return (w * h + 3) / 4; }
+  // Bilinear resample of a packed 2-bit (4 levels) glyph bitmap `src` (box `g`, unscaled) into
+  // `dst` (box `box` = scaledBox(g)) at exactly scaleNum_/scaleDen_; dst must hold
+  // bitmapBytes2Bit(box.width, box.height) bytes and is fully written.
+  void resampleBitmap2Bit(const uint8_t* src, const EpdGlyph& g, uint8_t* dst, const ScaledBox& box) const;
 
   // Overflow context: glyphMissHandler needs to know which style it's serving
   struct OverflowContext {
