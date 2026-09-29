@@ -3,9 +3,10 @@
 XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader を改造しています。
 命名は面倒くさくなったのでOSakanaTaro版ってことでOST版です。
 
-### 2026/09/23時点の開発方針
-- XTEINK X3で動けばいい
-  - aliexpressで買ったUSB接続ができないバージョンを使用
+### 2026/09/2時点の開発方針
+- XTEINK X3とXTEINK X4 Pro向けに開発
+  - Xteink X3はaliexpressで買ったUSB接続ができないバージョンを使用
+  - Xteink X4 Proは [Xteink公式](https://go.sjv.io/aNGBAW)で購入したバージョンを使用
 - Claude Codeで開発する
   - コンパイルなどはUbuntu 24.04仮想マシン上で実施
 - 本家をベースにする
@@ -31,7 +32,7 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
   - ~~CSSが巨大すぎてメモリクラッシュを起こす件についての対応をやる必要があるのかという問題~~
   - ~~[Setings]-[Reader]-[Text Settings]にある[Style]にて「Embedded Style」を「OFF」にするとCSSを使わないため回避できる~~
   - こんな小さな端末で著者がやりたいという複雑な表現をやって期待通りの表示になるのか？と思いつつ対応
-- 本家との付き合い方（2026/09/02決定）
+- 本家との付き合い方
   - UIの大きな変更は個別に追随しない。本家のタグが更新された時点でforkしなおし再実装する
   - 基本的に縦書き・挿絵・フォントに関わる本家修正だけ取り込む
 - フォントの明朝／ゴシック混植は実施しない
