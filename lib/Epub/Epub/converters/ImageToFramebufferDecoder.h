@@ -23,6 +23,10 @@ struct RenderConfig {
   float sourceCropY = 0.0f;         // Fraction cropped equally from the top and bottom edges
   bool preserveAlpha = false;       // Skip transparent pixels instead of compositing them against white
   std::string cachePath;            // If non-empty, decoder will write pixel cache to this path
+  // Decode straight into the pixel cache without touching the framebuffer (build-time
+  // pregeneration). Requires a non-empty cachePath; x/y are cache metadata only and should be 0.
+  // Only JpegToFramebufferConverter honours it.
+  bool cacheOnly = false;
 };
 
 class ImageToFramebufferDecoder {

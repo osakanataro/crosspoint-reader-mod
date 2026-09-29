@@ -1847,6 +1847,36 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     GfxRenderer::FrameBufferLoan decodeLoan(self->renderer);
                     (void)PngStreamDecoder::decodeToCache(cachedImagePath, ImageBlock::cachePathFor(cachedImagePath),
                                                           displayWidth, displayHeight);
+                  } else if (haveFile && FsHelpers::hasJpgExtension(cachedImagePath)) {
+                    // A JPEG decoded at page time needs the ~18 KB decoder plus a heap floor, which a
+                    // text page's glyph arena leaves no room for (a 56x756 plate inside a column
+                    // failed there). Decode it into its .pxc now; the converter borrows the
+                    // framebuffer for the decoder itself when the heap is short, so no loan here.
+                    // Same settings as ImageBlock::render, so the page finds the cache it would
+                    // have written. x/y are cache metadata only.
+                    RenderConfig pregen;
+                    pregen.x = 0;
+                    pregen.y = 0;
+                    pregen.maxWidth = displayWidth;
+                    pregen.maxHeight = displayHeight;
+                    pregen.useGrayscale = true;
+                    pregen.useDithering = true;
+                    pregen.performanceMode = false;
+                    pregen.useExactDimensions = true;
+                    pregen.cacheOnly = true;
+                    pregen.cachePath = ImageBlock::cachePathFor(cachedImagePath);
+                    ImageToFramebufferDecoder* pregenDecoder = ImageDecoderFactory::getDecoder(cachedImagePath);
+                    const bool cached =
+                        pregenDecoder && pregenDecoder->decodeToFramebuffer(cachedImagePath, self->renderer, pregen);
+                    if (!cached) Storage.remove(pregen.cachePath.c_str());  // a partial .pxc must not be read
+#ifdef INPUT_DIAG
+                    {
+                      char line[72];
+                      snprintf(line, sizeof(line), "build jpg pxc %s %dx%d max=%u", cached ? "ok" : "FAIL",
+                               displayWidth, displayHeight, static_cast<unsigned>(ESP.getMaxAllocHeap()));
+                      InputDiag::noteImageEvent(line);
+                    }
+#endif
                   }
                 }
 
