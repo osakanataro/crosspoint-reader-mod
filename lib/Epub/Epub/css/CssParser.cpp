@@ -12,6 +12,8 @@
 #include <cstring>
 #include <string_view>
 
+#include "CssSelectorUsage.h"
+
 namespace {
 
 // Stack-allocated string buffer to avoid heap reallocations during parsing
@@ -1242,7 +1244,7 @@ bool CssParser::saveToCache(const bool complete) const {
   return true;
 }
 
-CssParser::CacheLoadResult CssParser::loadFromCache() {
+CssParser::CacheLoadResult CssParser::loadFromCache(const CssSelectorUsage* usage) {
   if (cachePath.empty()) {
     return CacheLoadResult::Invalid;
   }
@@ -1334,6 +1336,12 @@ CssParser::CacheLoadResult CssParser::loadFromCache() {
       return CacheLoadResult::Invalid;
     }
 
+    // Skip rules that can never match the scanned chapter; generic publisher templates register
+    // hundreds of rules of which a chapter uses a handful, and the bytes have already been consumed.
+    if (usage != nullptr && !usage->matches(std::string(selectorBuffer.get(), selectorLen))) {
+      continue;
+    }
+
     const RuleInsertResult insertResult = insertOrMerge(std::string_view(selectorBuffer.get(), selectorLen), style);
     if (insertResult == RuleInsertResult::OutOfMemory) {
       clear();
@@ -1356,6 +1364,7 @@ CssParser::CacheLoadResult CssParser::loadFromCache() {
   }
 
   const bool partial = (flags & CSS_CACHE_FLAG_PARTIAL) != 0;
-  LOG_DBG("CSS", "Loaded %u rules from %s cache", ruleCount, partial ? "partial" : "complete");
+  LOG_DBG("CSS", "Loaded %u of %u rules from %s cache%s", entryCount_, ruleCount, partial ? "partial" : "complete",
+          usage != nullptr ? " (usage-filtered)" : "");
   return CacheLoadResult::Complete;
 }

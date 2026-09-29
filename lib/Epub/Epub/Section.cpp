@@ -9,6 +9,7 @@
 
 #include "../../../src/util/InputDiag.h"
 #include "Epub/css/CssParser.h"
+#include "Epub/css/CssSelectorUsage.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
@@ -425,7 +426,13 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   if (spec.embeddedStyle) {
     ctx->cssParser = epub->getCssParser();
     if (ctx->cssParser) {
-      const CssParser::CacheLoadResult cacheResult = ctx->cssParser->loadFromCache();
+      // Load only the cached rules this chapter can reference: publisher templates (the EBPAJ /
+      // KADOKAWA ones most Japanese EPUBs carry) register hundreds of rules of which a chapter uses
+      // a handful, and the full set costs tens of KB right while the build needs the heap. If the
+      // scan fails, load everything.
+      CssSelectorUsage usage;
+      const bool scanned = usage.scanHtmlFile(ctx->parsePath);
+      const CssParser::CacheLoadResult cacheResult = ctx->cssParser->loadFromCache(scanned ? &usage : nullptr);
       if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
         LOG_ERR("SCT", "Insufficient heap to hydrate CSS; section build deferred");
         ctx->cssParser->clear();

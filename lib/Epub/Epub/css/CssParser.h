@@ -9,6 +9,8 @@
 
 #include "CssStyle.h"
 
+class CssSelectorUsage;
+
 /**
  * Lightweight CSS parser for EPUB stylesheets
  *
@@ -151,7 +153,8 @@ class CssParser {
    * Clears any existing rules before loading.
    * @return Complete when loaded, LowMemory when it should be retried, otherwise Invalid
    */
-  CacheLoadResult loadFromCache();
+  // usage: keep only rules whose selector can match the scanned chapter (nullptr = all).
+  CacheLoadResult loadFromCache(const CssSelectorUsage* usage = nullptr);
 
  private:
   enum class RuleInsertResult : uint8_t {
