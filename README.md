@@ -3,7 +3,7 @@
 XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader を改造しています。
 命名は面倒くさくなったのでOSakanaTaro版ってことでOST版です。
 
-### 2026/09/2時点の開発方針
+### 2026/09/29時点の開発方針
 - XTEINK X3とXTEINK X4 Pro向けに開発
   - Xteink X3はaliexpressで買ったUSB接続ができないバージョンを使用
   - Xteink X4 Proは [Xteink公式](https://go.sjv.io/aNGBAW)で購入したバージョンを使用
