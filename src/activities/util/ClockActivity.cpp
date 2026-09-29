@@ -78,7 +78,11 @@ void ClockActivity::loop() {
   // edge it set -- the release would be gone before wasReleased() is asked.
   // Only the activities that block inside their own inner loop poll for
   // themselves.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+  // Home-key boards (X4 Pro) have no Back button: any Home-key action leaves the clock, whatever
+  // the tap or hold is bound to elsewhere. The frontlight toggle stays usable while the clock is up.
+  const HomeButtonAction homeAction = mappedInput.homeButtonAction();
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+      (homeAction != HomeButtonAction::Ignore && homeAction != HomeButtonAction::ToggleFrontlight)) {
     finish();
     return;
   }
