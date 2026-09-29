@@ -1,5 +1,6 @@
 #include "ZipFile.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <InflateStream.h>
 #include <Logging.h>
@@ -446,6 +447,33 @@ uint8_t* ZipFile::readFileToMemory(const char* filename, size_t* size, const boo
   return data;
 }
 
+namespace {
+
+// Take `want` bytes, halving down to CHUNK_FLOOR when the heap holds no block
+// that large. A fragmented heap is the normal state mid-read on this device --
+// a chapter build was measured at 16 KB free with a 5.3 KB largest block, where
+// both 8 KB buffers below failed and the extraction reported FAIL, leaving the
+// page with an empty outlined box until the chapter happened to be rebuilt with
+// more room (2026-09-17, p050.jpg of a commercial volume). Smaller chunks cost
+// more trips to the card and nothing else, so a slow picture beats no picture.
+uint8_t* allocChunkDownTo(const size_t want, size_t* got) {
+  constexpr size_t CHUNK_FLOOR = 512;
+  for (size_t size = want; size >= CHUNK_FLOOR; size /= 2) {
+    if (auto* p = static_cast<uint8_t*>(malloc(size))) {
+      *got = size;
+      if (size != want) {
+        LOG_DBG("ZIP", "Chunk shrunk %zu -> %zu (largest block %u)", want, size,
+                static_cast<unsigned>(ESP.getMaxAllocHeap()));
+      }
+      return p;
+    }
+  }
+  *got = 0;
+  return nullptr;
+}
+
+}  // namespace
+
 bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t chunkSize, const bool allowEarlyStop) {
   const ScopedOpenClose zip{*this};
   if (!zip) return false;
@@ -462,7 +490,8 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
   if (fileStat.method == ZIP_METHOD_STORED) {
     // no deflation, just read content
-    const auto buffer = static_cast<uint8_t*>(malloc(chunkSize));
+    size_t storedChunk = 0;
+    const auto buffer = allocChunkDownTo(chunkSize, &storedChunk);
     if (!buffer) {
       LOG_ERR("ZIP", "Failed to allocate memory for buffer");
       return false;
@@ -470,7 +499,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
     size_t remaining = inflatedDataSize;
     while (remaining > 0) {
-      const size_t dataRead = file.read(buffer, remaining < chunkSize ? remaining : chunkSize);
+      const size_t dataRead = file.read(buffer, remaining < storedChunk ? remaining : storedChunk);
       if (dataRead == 0) {
         LOG_ERR("ZIP", "Could not read more bytes");
         free(buffer);
@@ -491,13 +520,15 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
   }
 
   if (fileStat.method == ZIP_METHOD_DEFLATED) {
-    auto* fileReadBuffer = static_cast<uint8_t*>(malloc(chunkSize));
+    size_t readChunk = 0;
+    auto* fileReadBuffer = allocChunkDownTo(chunkSize, &readChunk);
     if (!fileReadBuffer) {
       LOG_ERR("ZIP", "Failed to allocate memory for zip file read buffer");
       return false;
     }
 
-    auto* outputBuffer = static_cast<uint8_t*>(malloc(chunkSize));
+    size_t outChunk = 0;
+    auto* outputBuffer = allocChunkDownTo(chunkSize, &outChunk);
     if (!outputBuffer) {
       LOG_ERR("ZIP", "Failed to allocate memory for output buffer");
       free(fileReadBuffer);
@@ -508,7 +539,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
     ctx.file = &file;
     ctx.fileRemaining = deflatedDataSize;
     ctx.readBuf = fileReadBuffer;
-    ctx.readBufSize = chunkSize;
+    ctx.readBufSize = readChunk;
 
     InflateStream inflate;
     if (!inflate.init(true)) {
@@ -524,7 +555,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
 
     while (true) {
       size_t produced;
-      const InflateStream::Status status = inflate.readAtMost(outputBuffer, chunkSize, &produced);
+      const InflateStream::Status status = inflate.readAtMost(outputBuffer, outChunk, &produced);
 
       totalProduced += produced;
       if (totalProduced > static_cast<size_t>(inflatedDataSize)) {
