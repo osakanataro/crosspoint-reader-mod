@@ -1069,7 +1069,11 @@ int Epub::getSpineIndexForTocIndex(const int tocIndex) const {
   return spineIndex;
 }
 
-int Epub::getTocIndexForSpineIndex(const int spineIndex) const { return getSpineItem(spineIndex).tocIndex; }
+int Epub::getTocIndexForSpineIndex(const int spineIndex) const {
+  // The reader uses spineCount as the end-of-book position, not a chapter.
+  if (spineIndex < 0 || spineIndex >= getSpineItemsCount()) return -1;
+  return getSpineItem(spineIndex).tocIndex;
+}
 
 size_t Epub::getBookSize() const {
   if (!bookMetadataCache || !bookMetadataCache->isLoaded() || bookMetadataCache->getSpineCount() == 0) {
@@ -1112,6 +1116,9 @@ float Epub::calculateProgress(const int currentSpineIndex, const float currentSp
   if (bookSize == 0) {
     return 0.0f;
   }
+  // Handle the reader's end-of-book position before looking up chapter sizes.
+  if (currentSpineIndex >= getSpineItemsCount()) return 1.0f;
+  if (currentSpineIndex < 0) return 0.0f;
   const size_t prevChapterSize = (currentSpineIndex >= 1) ? getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
   const size_t curChapterSize = getCumulativeSpineItemSize(currentSpineIndex) - prevChapterSize;
   const float sectionProgSize = currentSpineRead * static_cast<float>(curChapterSize);
