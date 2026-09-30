@@ -47,10 +47,17 @@ uint32_t writeTocEntryTo(F& file, const BookMetadataCache::TocEntry& entry) {
   return pos;
 }
 
+// Does not check readString()'s bool return: SpineEntry/TocEntry are returned
+// by value through the public getSpineEntry()/getTocEntry() API, so signaling
+// failure here would mean changing that return type for every caller across
+// the reader. A corrupt length still can't crash (readString() itself refuses
+// to grow past MAX_SERIALIZED_STRING_LEN), but sequential callers of this
+// template during buildBookBin (no reseek between iterations) will desync for
+// the rest of that pass, not just this one entry.
 template <typename F>
 BookMetadataCache::SpineEntry readSpineEntryFrom(F& file) {
   BookMetadataCache::SpineEntry entry;
-  serialization::readString(file, entry.href);
+  (void)serialization::readString(file, entry.href);  // see comment above
   serialization::readPod(file, entry.cumulativeSize);
   serialization::readPod(file, entry.tocIndex);
   return entry;
@@ -59,9 +66,9 @@ BookMetadataCache::SpineEntry readSpineEntryFrom(F& file) {
 template <typename F>
 BookMetadataCache::TocEntry readTocEntryFrom(F& file) {
   BookMetadataCache::TocEntry entry;
-  serialization::readString(file, entry.title);
-  serialization::readString(file, entry.href);
-  serialization::readString(file, entry.anchor);
+  (void)serialization::readString(file, entry.title);  // see comment above
+  (void)serialization::readString(file, entry.href);
+  (void)serialization::readString(file, entry.anchor);
   serialization::readPod(file, entry.level);
   serialization::readPod(file, entry.spineIndex);
   return entry;
@@ -484,13 +491,17 @@ bool BookMetadataCache::load() {
   serialization::readPod(bookFile, spineCount);
   serialization::readPod(bookFile, tocCount);
 
-  serialization::readString(bookFile, coreMetadata.title);
-  serialization::readString(bookFile, coreMetadata.author);
-  serialization::readString(bookFile, coreMetadata.titleFileAs);
-  serialization::readString(bookFile, coreMetadata.authorFileAs);
-  serialization::readString(bookFile, coreMetadata.language);
-  serialization::readString(bookFile, coreMetadata.coverItemHref);
-  serialization::readString(bookFile, coreMetadata.textReferenceHref);
+  if (!serialization::readString(bookFile, coreMetadata.title) ||
+      !serialization::readString(bookFile, coreMetadata.author) ||
+      !serialization::readString(bookFile, coreMetadata.titleFileAs) ||
+      !serialization::readString(bookFile, coreMetadata.authorFileAs) ||
+      !serialization::readString(bookFile, coreMetadata.language) ||
+      !serialization::readString(bookFile, coreMetadata.coverItemHref) ||
+      !serialization::readString(bookFile, coreMetadata.textReferenceHref)) {
+    LOG_ERR("BMC", "Corrupt metadata string length -- treating cache as invalid");
+    bookFile.close();
+    return false;
+  }
   serialization::readPod(bookFile, coreMetadata.pageProgressionRtl);
 
   // Cache cumulative spine sizes in RAM. The progress bar (every render) and percent
