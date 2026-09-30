@@ -1,5 +1,6 @@
 #include "SdCardFontCache.h"
 
+#include <Arduino.h>
 #include <HalOtaSlot.h>
 #include <HalStorage.h>
 #include <Logging.h>
@@ -17,6 +18,10 @@ namespace {
 
 // Set by invalidateUntilReboot() from the task running a firmware update, read by the render task.
 std::atomic<bool> slotBeingUpdated{false};
+// Reads of the copy in progress. A reader registers before it checks the flag, and
+// invalidateUntilReboot() waits for this to drain after setting it, so no read that passed the
+// check is still running when the update starts erasing (both sides are sequentially consistent).
+std::atomic<int> readsInFlight{0};
 
 using sd_card_font_cache_format::Header;
 
@@ -150,11 +155,16 @@ bool isValidFor(const char* sourcePath, size_t* payloadBytes) {
 
 bool readAt(size_t offset, void* data, size_t length, size_t payloadBytes) {
   static const HalOtaSlot slot = HalOtaSlot::inactive();
-  if (slotBeingUpdated.load() || payloadBytes > payloadCapacity(slot) ||
+  if (payloadBytes > payloadCapacity(slot) ||
       !sd_card_font_cache_format::containsPayloadRange(payloadBytes, offset, length)) {
     return false;
   }
-  return length == 0 || slot.read(sd_card_font_cache_format::HEADER_AREA_SIZE + offset, data, length);
+  if (length == 0) return !slotBeingUpdated.load();
+  readsInFlight.fetch_add(1);
+  const bool ok =
+      !slotBeingUpdated.load() && slot.read(sd_card_font_cache_format::HEADER_AREA_SIZE + offset, data, length);
+  readsInFlight.fetch_sub(1);
+  return ok;
 }
 
 Result preload(const char* sourcePath, ProgressCallback progress, void* context) {
@@ -257,6 +267,11 @@ const char* resultName(Result result) {
   return "unknown";
 }
 
-void invalidateUntilReboot() { slotBeingUpdated.store(true); }
+void invalidateUntilReboot() {
+  slotBeingUpdated.store(true);
+  // A read that checked the flag before it was set may still be in the flash; the erase must not
+  // start under it. One read is a glyph or a table slice, so this is at most a few milliseconds.
+  while (readsInFlight.load() > 0) delay(1);
+}
 
 }  // namespace SdCardFontCache
