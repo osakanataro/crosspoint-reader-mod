@@ -84,6 +84,19 @@ def _flag_sets_input_diag(text):
     return text == '-DINPUT_DIAG' or text.startswith('-DINPUT_DIAG=')
 
 
+def _flags_set_input_diag(flags):
+    """Both spellings PlatformIO accepts: -DINPUT_DIAG and the separated -D INPUT_DIAG."""
+    flags = [str(f) for f in flags]
+    for i, flag in enumerate(flags):
+        if _flag_sets_input_diag(flag):
+            return True
+        if flag == '-D' and i + 1 < len(flags):
+            name = flags[i + 1]
+            if name == 'INPUT_DIAG' or name.startswith('INPUT_DIAG='):
+                return True
+    return False
+
+
 def has_input_diag(env):
     """True when this build carries INPUT_DIAG.
 
@@ -105,9 +118,14 @@ def has_input_diag(env):
         if str(name) == 'INPUT_DIAG':
             return True
 
+    raw_flags = []
     for flag in env.get('BUILD_FLAGS', []) or []:
-        if _flag_sets_input_diag(str(flag)):
-            return True
+        try:
+            raw_flags.extend(shlex.split(str(flag)))
+        except ValueError:
+            raw_flags.extend(str(flag).split())
+    if _flags_set_input_diag(raw_flags):
+        return True
 
     for var in ('PLATFORMIO_BUILD_FLAGS', 'PLATFORMIO_BUILD_SRC_FLAGS'):
         raw = os.environ.get(var)
@@ -119,7 +137,7 @@ def has_input_diag(env):
             # Unbalanced quotes: fall back to whitespace splitting rather than
             # reporting a diagnostic build as plain.
             flags = raw.split()
-        if any(_flag_sets_input_diag(f) for f in flags):
+        if _flags_set_input_diag(flags):
             return True
 
     return False

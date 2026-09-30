@@ -479,7 +479,10 @@ void EpubReaderActivity::loop() {
       }
       if (!built) {
         LOG_ERR("ERS", "Background section build failed");
-        InputDiag::captureLogs("section-build-failed");
+        // A failure, so it replaces an informational capture (a slow render) still waiting to be
+        // written, and is written now rather than at the next periodic flush.
+        InputDiag::captureLogs("section-build-failed", /*failure=*/true);
+        InputDiag::flushNow();
         section.reset();
         requestUpdate();
       } else if (section->isBuildComplete() && applyDeferredReposition()) {
