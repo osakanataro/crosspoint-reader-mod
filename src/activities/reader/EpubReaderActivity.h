@@ -211,6 +211,11 @@ class EpubReaderActivity final : public ReaderActivity {
   ~EpubReaderActivity() override;
 
   void loop() override;
+  // Auto page turn produces no input, so it must hold off the sleep timeout itself. It is idle
+  // between turns, so the CPU may still downclock (needsFullSpeed() would otherwise follow
+  // preventAutoSleep()).
+  bool preventAutoSleep() override { return automaticPageTurnActive; }
+  bool needsFullSpeed() override { return false; }
 
   bool pageTurn(bool isForward) override;
   bool skipPages(int amount) override;
