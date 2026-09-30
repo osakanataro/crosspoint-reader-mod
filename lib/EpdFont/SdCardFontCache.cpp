@@ -7,12 +7,16 @@
 #include <SdCardFont.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 #include "SdCardFontCacheFormat.h"
 
 namespace SdCardFontCache {
 namespace {
+
+// Set by invalidateUntilReboot() from the task running a firmware update, read by the render task.
+std::atomic<bool> slotBeingUpdated{false};
 
 using sd_card_font_cache_format::Header;
 
@@ -132,6 +136,7 @@ bool sourceFits(const char* sourcePath, size_t* payloadBytes) {
 
 bool isValidFor(const char* sourcePath, size_t* payloadBytes) {
   if (payloadBytes) *payloadBytes = 0;
+  if (slotBeingUpdated.load()) return false;
 
   const HalOtaSlot slot = HalOtaSlot::inactive();
   Header header{};
@@ -145,7 +150,7 @@ bool isValidFor(const char* sourcePath, size_t* payloadBytes) {
 
 bool readAt(size_t offset, void* data, size_t length, size_t payloadBytes) {
   static const HalOtaSlot slot = HalOtaSlot::inactive();
-  if (payloadBytes > payloadCapacity(slot) ||
+  if (slotBeingUpdated.load() || payloadBytes > payloadCapacity(slot) ||
       !sd_card_font_cache_format::containsPayloadRange(payloadBytes, offset, length)) {
     return false;
   }
@@ -251,5 +256,7 @@ const char* resultName(Result result) {
   }
   return "unknown";
 }
+
+void invalidateUntilReboot() { slotBeingUpdated.store(true); }
 
 }  // namespace SdCardFontCache

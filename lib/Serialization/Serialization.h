@@ -58,28 +58,39 @@ constexpr uint32_t MAX_SERIALIZED_STRING_LEN = 65535;
 // already returns nullptr on its own corruption checks) rather than pressing
 // on.
 [[nodiscard]] inline bool readString(std::istream& is, std::string& s) {
-  uint32_t len;
+  uint32_t len = 0;
   readPod(is, len);
-  if (len > MAX_SERIALIZED_STRING_LEN) {
+  if (!is || len > MAX_SERIALIZED_STRING_LEN) {
     LOG_ERR("SER", "readString: length %u exceeds max, treating as corrupt", len);
     s.clear();
     return false;
   }
   s.resize(len);
-  is.read(&s[0], len);
+  // A stream cut short inside the string is as corrupt as an oversized length.
+  if (len > 0 && !is.read(&s[0], len)) {
+    s.clear();
+    return false;
+  }
   return true;
 }
 
 [[nodiscard]] inline bool readString(HalFile& file, std::string& s) {
-  uint32_t len;
-  readPod(file, len);
+  uint32_t len = 0;
+  if (file.read(reinterpret_cast<uint8_t*>(&len), sizeof(len)) != static_cast<int>(sizeof(len))) {
+    s.clear();
+    return false;
+  }
   if (len > MAX_SERIALIZED_STRING_LEN) {
     LOG_ERR("SER", "readString: length %u exceeds max, treating as corrupt", len);
     s.clear();
     return false;
   }
   s.resize(len);
-  file.read(&s[0], len);
+  // A file cut short inside the string is as corrupt as an oversized length.
+  if (len > 0 && file.read(&s[0], len) != static_cast<int>(len)) {
+    s.clear();
+    return false;
+  }
   return true;
 }
 }  // namespace serialization

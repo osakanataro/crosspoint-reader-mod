@@ -1045,6 +1045,17 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
     startNewTextBlock(parentBlockStyle);
   }
 
+  if (isVertical) {
+    // Vertical pages fill by column (currentPageNextX) and never advance currentPageNextY, so a
+    // horizontal rule would be drawn across the column heads. The break is kept as one blank
+    // column, the usual form of a scene break in vertical text. At the start of a page it adds
+    // nothing, and a cursor already past the left edge makes the next column start a new page.
+    if (currentPage && !currentPage->elements.empty() && verticalCursorPageIndex == completedPageCount) {
+      currentPageNextX = static_cast<int16_t>(currentPageNextX - verticalColumnWidth() - verticalColumnSpacing());
+    }
+    return;
+  }
+
   if (!currentPage) {
     currentPage.reset(new (std::nothrow) Page());
     if (!currentPage) {
@@ -1156,6 +1167,9 @@ void ChapterHtmlSlimParser::closeTableCell() {
 }
 
 void ChapterHtmlSlimParser::addTableRowSeparator() {
+  // Vertical pages never advance currentPageNextY: every separator would land as a full-width
+  // line across the column heads. The stacked rows read as separate paragraphs without it.
+  if (isVertical) return;
   if (!currentPage || currentPage->elements.empty() || viewportWidth == 0 ||
       currentPageNextY + TABLE_ROW_SEPARATOR_GAP > viewportHeight) {
     return;

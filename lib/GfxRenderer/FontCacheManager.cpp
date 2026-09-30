@@ -207,12 +207,13 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manage
 void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
   const bool wasScanning = manager_->scanMode_ == ScanMode::Scanning;
   manager_->scanMode_ = ScanMode::None;
-  if (manager_->scanCodepointCount_ == 0) return;
-
+  // Before the empty-scan return: a page scope whose hook never fired has to report zero, not the
+  // previous page's figures.
   if (wasScanning) {
     manager_->lastScanBytes_ = 0;
     manager_->lastScanFonts_ = 0;
   }
+  if (manager_->scanCodepointCount_ == 0) return;
 
   std::sort(manager_->scanCodepoints_, manager_->scanCodepoints_ + manager_->scanCodepointCount_);
 

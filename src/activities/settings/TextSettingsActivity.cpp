@@ -394,6 +394,9 @@ void TextSettingsActivity::applySize(int listIndex) {
 void TextSettingsActivity::applyFlashCacheSetting() {
   if (SETTINGS.sdFontFamilyName[0] == '\0') return;  // built-in family: nothing to copy, nothing to reload
   const bool wantFlash = SETTINGS.sdFontFlashCache != 0;
+  // Copy off and the font already read from the card: the family/size change has just loaded
+  // it that way, and a forced reload would read its tables from the SD a second time.
+  if (!wantFlash && !sdFontSystem.readerFontFromFlash()) return;
   if (wantFlash && !runFlashCopy()) {
     // runFlashCopy switched the setting off; the reload below returns the font to the card.
   }

@@ -67,7 +67,7 @@ namespace {
 // v53: Vertical columns carry link rectangles, so the footnote selector can reach them.
 // v54: Images honour max-width/max-height; vertical books set images in the column flow.
 // v55: A vertical page holding a single image centres it horizontally.
-constexpr uint8_t SECTION_FILE_VERSION = 55;
+constexpr uint8_t SECTION_FILE_VERSION = 56;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

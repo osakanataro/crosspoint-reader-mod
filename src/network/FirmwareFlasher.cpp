@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <SdCardFontCache.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <mbedtls/sha256.h>
@@ -310,6 +311,9 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
     file.close();
     return Result::OOM;
   }
+
+  // The destination is the slot the flash font copy lives in: stop reading it before the erase.
+  SdCardFontCache::invalidateUntilReboot();
 
   // Interleave erase + write so the progress bar advances 0→100% smoothly
   // rather than stalling for several seconds during a single up-front erase.

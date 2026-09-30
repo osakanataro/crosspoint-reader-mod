@@ -457,8 +457,9 @@ namespace {
 // more room (2026-09-17, p050.jpg of a commercial volume). Smaller chunks cost
 // more trips to the card and nothing else, so a slow picture beats no picture.
 uint8_t* allocChunkDownTo(const size_t want, size_t* got) {
-  constexpr size_t CHUNK_FLOOR = 512;
-  for (size_t size = want; size >= CHUNK_FLOOR; size /= 2) {
+  // A request already below 512 is its own floor.
+  const size_t floor = std::min<size_t>(want, 512);
+  for (size_t size = want; size >= floor && size > 0; size /= 2) {
     if (auto* p = static_cast<uint8_t*>(malloc(size))) {
       *got = size;
       if (size != want) {

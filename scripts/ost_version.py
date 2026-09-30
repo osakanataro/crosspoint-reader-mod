@@ -181,7 +181,8 @@ def main(env):
     project_dir = env.subst('$PROJECT_DIR')
     pioenv = env.subst('$PIOENV')
     board = BOARD_TAGS.get(pioenv, '')
-    version = next_version(project_dir, advance=(pioenv == 'default'))
+    # Only a board with its own tag may share the day's number: its image name still differs.
+    version = next_version(project_dir, advance=(pioenv not in BOARD_TAGS))
     diag_at_pre = has_input_diag(env)
     write_build_id_header(project_dir, f'{version}{board}{"-diag" if diag_at_pre else ""}')
 

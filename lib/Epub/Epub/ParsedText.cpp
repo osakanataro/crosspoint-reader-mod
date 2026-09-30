@@ -123,38 +123,38 @@ std::vector<size_t> cjkCharacterBreakByteOffsets(const std::string& text) {
   // which for a Japanese paragraph -- one unspaced "word" -- cost 8x the paragraph's
   // bytes in one block: 20 KB for a 2.5 KB paragraph, requested mid-build where the
   // largest free block was 5 KB. With -fno-exceptions the failed reserve was a
-  // terminate() (crash 2026-09-17, horizontal-regression-test ch.14). The result vector
-  // is bounded by one entry per codepoint; pure CJK is 3 bytes each, so reserve a third
-  // and let a mixed run grow.
-  std::vector<size_t> allowedOffsets;
-  const auto* ptr = reinterpret_cast<const unsigned char*>(text.c_str());
-  const auto* const start = ptr;
-  uint32_t prevCp = utf8NextCodepoint(&ptr);
-  if (prevCp == 0) return {};
-  size_t prevEnd = static_cast<size_t>(ptr - start);
-  bool hasCjkBreakable = utf8IsCjkBreakable(prevCp);
-  bool reserved = false;
-  while (*ptr) {
-    const uint32_t cp = utf8NextCodepoint(&ptr);
-    if (cp == 0) break;
-    if (utf8IsCjkBreakable(cp)) hasCjkBreakable = true;
-    if (hasCjkBreakOpportunityBetween(prevCp, cp)) {
-      if (!reserved) {
-        // First opportunity found: size the result once. Skip the whole per-character
-        // split when even that block cannot be placed -- the word then stays one token,
-        // and the line pre-check reports the page instead of the allocator aborting.
-        const size_t want = text.size() / 3 + 1;
-        constexpr size_t RESERVE_HEADROOM = 4 * 1024;
-        if (ESP.getMaxAllocHeap() < want * sizeof(size_t) + RESERVE_HEADROOM) return {};
-        allowedOffsets.reserve(want);
-        reserved = true;
-      }
-      allowedOffsets.push_back(prevEnd);
+  // terminate() (crash 2026-09-17, horizontal-regression-test ch.14). The result is sized
+  // exactly: a first pass counts the opportunities without allocating (a guess by byte
+  // length is short for mixed runs such as "a漢a漢", where every boundary breaks, and
+  // over-reserves pure CJK), then the vector is reserved once and never regrows.
+  const auto* const start = reinterpret_cast<const unsigned char*>(text.c_str());
+  const auto forEachBreak = [start](auto&& onBreak) {
+    const auto* ptr = start;
+    uint32_t prevCp = utf8NextCodepoint(&ptr);
+    if (prevCp == 0) return false;
+    size_t prevEnd = static_cast<size_t>(ptr - start);
+    bool hasCjkBreakable = utf8IsCjkBreakable(prevCp);
+    while (*ptr) {
+      const uint32_t cp = utf8NextCodepoint(&ptr);
+      if (cp == 0) break;
+      if (utf8IsCjkBreakable(cp)) hasCjkBreakable = true;
+      if (hasCjkBreakOpportunityBetween(prevCp, cp)) onBreak(prevEnd);
+      prevCp = cp;
+      prevEnd = static_cast<size_t>(ptr - start);
     }
-    prevCp = cp;
-    prevEnd = static_cast<size_t>(ptr - start);
-  }
-  if (!hasCjkBreakable) return {};
+    return hasCjkBreakable;
+  };
+
+  size_t count = 0;
+  if (!forEachBreak([&count](size_t) { count++; }) || count == 0) return {};
+  // Skip the whole per-character split when even that block cannot be placed -- the word
+  // then stays one token, and the line pre-check reports the page instead of the allocator
+  // aborting.
+  constexpr size_t RESERVE_HEADROOM = 4 * 1024;
+  if (ESP.getMaxAllocHeap() < count * sizeof(size_t) + RESERVE_HEADROOM) return {};
+  std::vector<size_t> allowedOffsets;
+  allowedOffsets.reserve(count);
+  forEachBreak([&allowedOffsets](size_t offset) { allowedOffsets.push_back(offset); });
   return allowedOffsets;
 }
 

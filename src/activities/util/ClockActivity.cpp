@@ -153,7 +153,7 @@ void ClockActivity::render(RenderLock&&) {
   }
 #endif
 
-  Rtc::DateTime now;
+  Rtc::DateTime now{};
   const bool haveTime = halClock.getLocalDateTime(now);
   if (haveTime) {
     renderedMinute = now.minute;

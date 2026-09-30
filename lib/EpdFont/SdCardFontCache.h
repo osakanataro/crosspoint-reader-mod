@@ -43,5 +43,10 @@ bool readAt(size_t offset, void* data, size_t length, size_t payloadBytes);
 // (copy, then read-back verification).
 Result preload(const char* sourcePath, ProgressCallback progress = nullptr, void* context = nullptr);
 const char* resultName(Result result);
+// A firmware update is about to erase and write the slot the copy lives in. From here until the
+// next boot isValidFor() and readAt() report no copy, so a loaded font falls back to the card
+// instead of reading erased or new-image bytes (an update that fails returns to the UI without
+// rebooting). A successful update reboots, and the header check then rebuilds the copy.
+void invalidateUntilReboot();
 
 }  // namespace SdCardFontCache
