@@ -3,7 +3,7 @@ _language_code: "EN"
 _order: "0"
 _bcp47: "en"
 
-STR_CROSSPOINT: "CrossPoint"
+STR_CROSSPOINT: "CrossPoint OST"
 STR_BOOTING: "BOOTING"
 STR_SLEEPING: "SLEEPING"
 STR_ENTERING_SLEEP: "Going to sleep"

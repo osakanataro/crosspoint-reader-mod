@@ -3,7 +3,7 @@ _language_code: "NB"
 _order: "26"
 _bcp47: "nb"
 
-STR_CROSSPOINT: "CrossPoint"
+STR_CROSSPOINT: "CrossPoint OST"
 STR_BOOTING: "STARTER"
 STR_SLEEPING: "HVILER"
 STR_ENTERING_SLEEP: "Går i hvilemodus"

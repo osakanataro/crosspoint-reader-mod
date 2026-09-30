@@ -3,7 +3,7 @@ _language_code: "SK"
 _order: "24"
 _bcp47: "sk"
 
-STR_CROSSPOINT: "CrossPoint"
+STR_CROSSPOINT: "CrossPoint OST"
 STR_BOOTING: "SPÚŠŤANIE"
 STR_SLEEPING: "SPÁNOK"
 STR_ENTERING_SLEEP: "Prechod do režimu spánku"
