@@ -47,6 +47,9 @@ class Epub {
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false);
+  // Whether load() will parse the source stylesheets again (the CSS cache is missing, partial or
+  // from an older version), which extracts each one through a 32KB inflate window.
+  bool cssCacheNeedsRebuild() const;
   // Package metadata only (title, author, their file-as sort forms, language):
   // the existing cache when there is one, else the OPF parsed up to </metadata>.
   bool loadMetadata(BookMetadataCache::BookMetadata& out);

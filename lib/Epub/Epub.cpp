@@ -423,6 +423,10 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
   return parseResult;
 }
 
+bool Epub::cssCacheNeedsRebuild() const {
+  return CssParser(cachePath).inspectCache() != CssParser::CacheStatus::Complete;
+}
+
 // load in the meta data for the epub file
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());

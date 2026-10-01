@@ -199,7 +199,10 @@ bool EpubReaderActivity::loadBook() {
   }
 
   const bool uncached = !Storage.exists((loadedEpub->getCachePath() + "/book.bin").c_str());
-  if (uncached) {
+  // A CSS rebuild on an indexed book extracts each stylesheet through the same 32KB inflate window
+  // as a first index; lend it the framebuffer too, so it never needs that block from the heap.
+  const bool cssUncached = !uncached && SETTINGS.embeddedStyle != 0 && loadedEpub->cssCacheNeedsRebuild();
+  if (uncached || cssUncached) {
     disableFastInitialRefresh();
     GUI.drawPopup(renderer, tr(STR_INDEXING));
   }
@@ -207,7 +210,7 @@ bool EpubReaderActivity::loadBook() {
   bool loaded;
   {
     std::optional<GfxRenderer::FrameBufferLoan> loan;
-    if (uncached) loan.emplace(renderer);
+    if (uncached || cssUncached) loan.emplace(renderer);
     loaded = loadedEpub->load(true, SETTINGS.embeddedStyle == 0);
   }
   if (!loaded) {
