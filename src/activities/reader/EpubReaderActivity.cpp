@@ -53,6 +53,10 @@ namespace {
 // (that helper also gates power management). Overlay refresh choices are per-panel:
 // this family runs the grayscale anti-aliasing pass, so chrome painted over a
 // fresh page needs the HALF ghost-cleanup and closing re-renders the page.
+// The toolbar's page snapshot is a convenience (closing the toolbar redraws without re-rendering);
+// it is skipped rather than taken when it would leave the next render short.
+constexpr size_t OVERLAY_SNAPSHOT_HEADROOM = 16 * 1024;
+
 bool xteinkClassPanel() { return gpio.isXteinkDevice() || BoardConfig::isX4Pro() || BoardConfig::isX4Classic(); }
 
 // Tategaki (vertical writing) auto-detection: no explicit writing-mode setting exists yet,
@@ -1577,7 +1581,7 @@ void EpubReaderActivity::renderBook() {
   if (overlay != Overlay::None && usesToolbarMenu()) {
     // The page just re-rendered under the overlay: refresh the snapshot that
     // backs panel->toolbar restores (any previous copy is stale).
-    overlayPageStored = renderer.storeBwBuffer();
+    overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
     renderOverlay();
     // An open option picker rides on top of the freshly drawn panel.
     if (overlayPopup.isActive()) overlayPopup.render(renderer);
@@ -2148,7 +2152,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
     if (previous == Overlay::None) {
       // Snapshot the clean page so stepping back from a panel to the toolbar
       // (and closing, where supported) can restore it without a re-render.
-      overlayPageStored = renderer.storeBwBuffer();
+      overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
     } else if (overlayPageStored) {
       // Overlay -> overlay: wipe the previous chrome (toolbar header, sheet,
       // progress row) back to the clean page so none of it shows around or
@@ -2156,7 +2160,7 @@ void EpubReaderActivity::openOverlay(Overlay target) {
       // resync: the glass still shows the old chrome, and the differential
       // must keep diffing against it to erase it.
       renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
-      overlayPageStored = renderer.storeBwBuffer();
+      overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
     }
     renderOverlay();
     pushOverlayRefresh();
@@ -2261,7 +2265,7 @@ void EpubReaderActivity::handleOverlayInput() {
       settleOverlayRefresh();
       if (overlayPageStored) {
         renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
-        overlayPageStored = renderer.storeBwBuffer();
+        overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
         renderOverlay();
         pushOverlayRefresh();
       } else {
@@ -2423,7 +2427,7 @@ void EpubReaderActivity::handleOverlayInput() {
         // No baseline resync: the glass shows the panel, and erasing it needs
         // the differential to keep diffing against the last pushed frame.
         renderer.restoreBwBuffer(/*resyncPanelBaseline=*/false);
-        overlayPageStored = renderer.storeBwBuffer();
+        overlayPageStored = renderer.storeBwBuffer(OVERLAY_SNAPSHOT_HEADROOM);
       }
       fastRedraw();  // takes its own RenderLock
       return;

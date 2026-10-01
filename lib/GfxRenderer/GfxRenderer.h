@@ -452,7 +452,9 @@ class GfxRenderer {
   // Paper Mono: the base activation is deferred so base + gray planes go out
   // as one waveform. Route the base through displayGrayscaleBase() when true.
   bool combinesGrayscaleBase() const;
-  bool storeBwBuffer();  // Returns true if buffer was stored successfully
+  // Returns true if the buffer was stored. `headroom` is free heap that must remain after the copy:
+  // an optional snapshot (the reader toolbar) asks for more so it never starves the next render.
+  bool storeBwBuffer(size_t headroom = 0);
   // Restore and free the stored buffer. resyncPanelBaseline rewrites the
   // controller's differential baseline to the restored frame — correct after
   // a grayscale render (the glass matches the stored BW plane), WRONG when
