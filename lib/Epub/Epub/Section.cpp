@@ -68,7 +68,8 @@ namespace {
 // v54: Images honour max-width/max-height; vertical books set images in the column flow.
 // v55: A vertical page holding a single image centres it horizontally.
 // v57: The halves of a vertical kana repeat mark (〳〵, 〴〵) are no longer split across lines.
-constexpr uint8_t SECTION_FILE_VERSION = 57;
+// v58: SD-font kerning survives requests served from glyphs cached without kerning.
+constexpr uint8_t SECTION_FILE_VERSION = 58;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
