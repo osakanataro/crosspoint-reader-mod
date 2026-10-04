@@ -1203,8 +1203,10 @@ bool EpubReaderActivity::backgroundBuildWanted() const {
 }
 
 bool EpubReaderActivity::skipLoopDelay() {
-  // The main loop holds the render lock while querying this hint.
-  return !buildHeapPaused && backgroundBuildWanted();
+  // The main loop holds the render lock while querying this hint. No build step runs under an
+  // open toolbar or panel (see loop()), so spinning without the idle delay there would only keep
+  // the CPU at full speed and off its power-saving clock.
+  return overlay == Overlay::None && !buildHeapPaused && backgroundBuildWanted();
 }
 
 bool EpubReaderActivity::buildChunkTimed(const uint16_t pages) {
@@ -1489,6 +1491,7 @@ void EpubReaderActivity::renderBook() {
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_CHAPTER), true, EpdFontFamily::BOLD);
     renderStatusBar();
     renderer.displayBuffer();
+    pageBufferStale = false;  // the framebuffer holds this screen again, not a lent-out blank
     automaticPageTurnActive = false;
     showPendingSyncSaveError();
     return;
