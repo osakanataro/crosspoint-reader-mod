@@ -2611,6 +2611,10 @@ void GfxRenderer::freeBwBufferChunks() {
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
 bool GfxRenderer::storeBwBuffer(const size_t headroom) {
+  // A copy still held is replaced either way. Free it before the heap check: it is counted in
+  // the shortfall, and a refusal that kept it would orphan it, since every caller records a
+  // false return as "nothing stored".
+  freeBwBufferChunks();
   // Refuse up front when the copy cannot fit: every caller has a fallback (re-render, skip the
   // grays), while an attempt that fails at chunk N leaves N freed 8KB holes behind.
   if (ESP.getFreeHeap() < frameBufferSize + headroom || ESP.getMaxAllocHeap() < BW_BUFFER_CHUNK_SIZE) {
@@ -2620,13 +2624,6 @@ bool GfxRenderer::storeBwBuffer(const size_t headroom) {
   }
   // Allocate and copy each chunk
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
-    // Check if any chunks are already allocated
-    if (bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
-      free(bwBufferChunks[i]);
-      bwBufferChunks[i] = nullptr;
-    }
-
     const size_t offset = i * BW_BUFFER_CHUNK_SIZE;
     const size_t chunkSize = std::min(BW_BUFFER_CHUNK_SIZE, static_cast<size_t>(frameBufferSize - offset));
     bwBufferChunks[i] = static_cast<uint8_t*>(malloc(chunkSize));
