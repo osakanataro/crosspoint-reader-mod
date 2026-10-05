@@ -10,7 +10,7 @@ Modelled on crosspoint-jp's scripts/sim_run.ts. One invocation:
   4. converts the BMP screenshots to PNG (Pillow, when installed) and summarises the
      log: activity transitions, ERR lines, "Outside range" draws, sanitizer reports.
 
-Exit status is non-zero when the simulator crashed or the build failed.
+Exit status is non-zero when the simulator crashed, hung past --timeout, or the build failed.
 
 Examples:
   python3 scripts/sim_run.py --shot 1500:home
@@ -302,7 +302,7 @@ def main():
     crashed = sig is not None and sig not in (signal.SIGKILL, signal.SIGTERM)
     status = "timeout" if timed_out else f"exit={proc.returncode}"
     print(f"\n[sim_run] {status} signal={sig or '-'} elapsed={elapsed:.1f}s {'!! CRASH' if crashed else ''}")
-    sys.exit(1 if crashed or (proc.returncode not in (0, None) and sig is None) else 0)
+    sys.exit(1 if crashed or timed_out or (proc.returncode not in (0, None) and sig is None) else 0)
 
 
 if __name__ == "__main__":

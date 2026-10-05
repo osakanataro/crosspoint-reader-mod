@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -1310,8 +1311,8 @@ void InputDiag::flush(const bool inputActive) {
     for (uint32_t i = 0; i < shown && off < sizeof(miniFreeBuf); i++) {
       const auto& e = ev[(miniFreeTotal - 1 - i) % SdCardFont::MINI_FREE_EVENTS];
       const int n =
-          snprintf(miniFreeBuf + off, sizeof(miniFreeBuf) - off, "%s0x%08x@%u free=%uK g=%u s=%u m=%d", i ? " | " : "",
-                   e.caller, e.ms, e.freeHeap / 1024, e.glyphs, e.style, e.metadataOnly ? 1 : 0);
+          snprintf(miniFreeBuf + off, sizeof(miniFreeBuf) - off, "%s0x%08" PRIxPTR "@%u free=%uK g=%u s=%u m=%d",
+                   i ? " | " : "", e.caller, e.ms, e.freeHeap / 1024, e.glyphs, e.style, e.metadataOnly ? 1 : 0);
       if (n <= 0) break;
       off += static_cast<size_t>(n);
     }

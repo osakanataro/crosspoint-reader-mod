@@ -28,7 +28,7 @@ class SdCardFont {
 
   // Recent frees of a style's mini arena, for INPUT_DIAG (who dropped the page's glyphs, and when).
   struct MiniFreeEvent {
-    uint32_t caller = 0;
+    uintptr_t caller = 0;  // return address; pointer-wide so a 64-bit host keeps it whole
     uint32_t ms = 0;
     uint32_t freeHeap = 0;
     uint16_t glyphs = 0;
