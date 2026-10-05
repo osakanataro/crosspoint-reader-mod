@@ -122,6 +122,8 @@ CJK版だけは freeink-sdk 自体も自前でforkしていて、SSD1677パネ�
   - ツールバーのページの写し（X3 で約52KB）が解放されずに残る件を修正。2026100101 で入れた「残りが足りなければ写しを取らない」判定が、前の写しを解放しないまま断っていた。ツールバーを開いたままページが描き直されると起き、本を閉じても戻らず、設定画面を開くところで落ちていた（2026100403-diag、実機確認済み）
   - 横書きの字詰めの確認用に kerning-toolbar-test.epub を作成（Python で生成。NotoSansJP で字詰めの効く組と効かない組の見比べ、中身のない章、長い章）
   - パソコン上で当版を動かす模擬環境を追加（2026/10/05）。本家の組織が公開する crosspoint-simulator（firmware をそのまま組み立てて SDL2 の窓に画面を出す物）を fork した [osakanataro/crosspoint-simulator](https://github.com/osakanataro/crosspoint-simulator) の枝 `ost` に、当版が足した HAL（時計の日時、電池の電圧、書体の複製先の領域、ウォッチドッグの設定）の代替を置き、`platformio.ini` に `simulator_x3` / `simulator` / `simulator_x4_pro` の環境を足した。縦書きの本を SD 書体で開き、ルビ・傍点を含めてページを描けることを確認。画面の無い環境でも動くよう、加速描画が無ければ軟件描画に落とす手当てを fork 側に入れた。パネルの更新時間・残像・実機のヒープ量は再現しない
+    - 画面の回帰検査 `scripts/sim_regress.py` と指示書 `test/sim-regress/scenarios.yaml` を追加。試験用の本8冊（縦書き検証集、縦横の書式確認、縦書きの罫線表、横書き回帰検証、字詰めとツールバー、SVG 表紙）を `test/sim-regress/books/` に置き、決まった操作で取った画面（X3 で30枚）を `test/sim-regress/baseline/` の基準と見比べて、違う画素の数と差分画像（赤）を `index.html` に出す。基準の更新は `--update-baseline`。使い方は `test/sim-regress/README.md`
+    - 模擬環境では保存の置き場の名前（`epub_<n>`）を実機と同じ 32bit の hash にした（JP版の `FsHelpers::pathHash` の形。実機は `std::hash` のままで変わらない）。実機の SD をそのまま模擬環境で読め、章の保存を突き合わせられる
     - JP版の `scripts/sim_run.ts` に倣った `scripts/sim_run.py` を追加。模擬 SD の組み立て（本・`.cpfont`・settings.json・開く本の指定）、ボタン操作の予約、指定時刻の画面取得（PNG）、記録の要約（画面遷移・ERR 行・画面外描画）を1回の実行で行う。例: `python3 scripts/sim_run.py --env simulator_x3 --fonts-dir ../fonts --sd-font NotoSansJP --book x.epub --open /Books/x.epub --shot 9000:page --script '10000:UP' --shot 12000:next`
   - 起動画面・眠り画面のロゴを本としおりの形に替え、ロゴの下の名前を「CrossPoint OST」にした（2026093008-diag、X3・X4 Pro で実機確認済み）
   - 段階0（素の 1.6.5 のビルド）、段階1（診断）、段階2（時計と監視）、段階3（字形の計測と素の実測）まで完了。詳細は下の「1.6.5ベースへの作り直し」節
