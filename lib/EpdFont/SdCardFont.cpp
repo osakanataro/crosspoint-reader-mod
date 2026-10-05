@@ -176,7 +176,7 @@ const SdCardFont::MiniFreeEvent* SdCardFont::miniFreeEvents(uint32_t& total) {
 void SdCardFont::freeStyleMiniData(PerStyle& s) {
   if (s.miniGlyphCount > 0) {
     auto& ev = miniFreeEventLog[miniFreeEventTotal % MINI_FREE_EVENTS];
-    ev.caller = reinterpret_cast<uint32_t>(__builtin_return_address(0));
+    ev.caller = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
     ev.ms = millis();
     ev.freeHeap = ESP.getFreeHeap();
     ev.glyphs = static_cast<uint16_t>(s.miniGlyphCount);
