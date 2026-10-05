@@ -1302,7 +1302,7 @@ void InputDiag::flush(const bool inputActive) {
   }
 
   // Newest first: caller@ms free=KB g=glyphs s=style m=metadataOnly.
-  char miniFreeBuf[4 * 48] = "";
+  char miniFreeBuf[4 * 64] = "";  // room for 16-digit addresses on a 64-bit host
   uint32_t miniFreeTotal = 0;
   {
     const auto* ev = SdCardFont::miniFreeEvents(miniFreeTotal);

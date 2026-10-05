@@ -83,7 +83,9 @@ def copy_fonts(sd, fonts_dir):
         dst.mkdir(parents=True, exist_ok=True)
         for f in fam.glob("*.cpfont"):
             target = dst / f.name
-            if not target.exists() or target.stat().st_size != f.stat().st_size:
+            # copy2 keeps the source mtime, so size + mtime tells a rebuilt font from a copied one.
+            if (not target.exists() or target.stat().st_size != f.stat().st_size
+                    or target.stat().st_mtime_ns != f.stat().st_mtime_ns):
                 shutil.copy2(f, target)
 
 

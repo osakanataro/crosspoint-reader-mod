@@ -169,7 +169,7 @@ def main():
                 books = [src]
                 if sc.get("open", True):
                     open_path = f"/Books/{src.name}"
-            sim_run.assemble_sd(sd, books=books, fonts_dir=args.fonts_dir if sc is scenarios[0] else None,
+            sim_run.assemble_sd(sd, books=books, fonts_dir=args.fonts_dir,
                                 sd_font=sc.get("font", font), settings=settings, open_path=open_path, fresh=True)
             events, shots, end_ms = schedule(sc, defaults)
             sc_out = out / env / name
