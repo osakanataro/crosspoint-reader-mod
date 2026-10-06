@@ -183,8 +183,11 @@ def main():
             rows.append({"scenario": name, "shot": "-", "result": f"error: {e}", "count": None, "bbox": None})
             continue
         if not result["ok"]:
+            # A crashed or hung run may have captured half-drawn screens: neither compare
+            # them nor let --update-baseline store them.
             failed = True
             rows.append({"scenario": name, "shot": "-", "result": status, "count": None, "bbox": None})
+            continue
         for ms, shot in shots:
             base = baseline_root / env / name / f"{shot}.png"
             cur = result["shots"].get(shot)

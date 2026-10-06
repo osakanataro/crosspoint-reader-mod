@@ -268,7 +268,9 @@ def run(env_name, sd, events, shots, out, timeout=60, heap=None, max_alloc=None,
             result["shots"][name] = png
         else:
             result["shots"][name] = bmp
-    result["ok"] = not (crashed or timed_out or (proc.returncode not in (0, None) and sig is None))
+    # Only a clean exit counts: a signal (even SIGTERM/SIGKILL from outside) or a non-zero
+    # status is a failed run.
+    result["ok"] = not timed_out and proc.returncode == 0
     return result
 
 

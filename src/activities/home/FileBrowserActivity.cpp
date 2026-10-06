@@ -39,7 +39,7 @@ std::string getBookCachePath(const std::string& path) {
   } else {
     return "";
   }
-  return std::string("/.crosspoint/") + prefix + std::to_string(std::hash<std::string>{}(path));
+  return std::string("/.crosspoint/") + prefix + std::to_string(FsHelpers::pathHash(path));
 }
 
 bool moveStatePath(const std::string& oldPath, const std::string& newPath, bool& moved) {
