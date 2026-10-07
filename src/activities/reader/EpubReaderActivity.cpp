@@ -975,6 +975,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           section.reset();
           epub->clearCache();
           epub->setupCacheDir();
+          // The link back-stack went with the old cache; the destructor must not write it
+          // back into the fresh one.
+          footnoteDepth = 0;
           if (!saveProgress(backupSpine, backupPage, backupPageCount)) {
             LOG_ERR("ERS", "Failed to save progress before cache clear");
           }
