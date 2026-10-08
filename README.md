@@ -63,6 +63,10 @@ XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader �
     - Inx版 https://github.com/obijuankenobiii/inx
     - witchhunt版 https://github.com/jpirnay/witchhunt-reader
     - crossmux版 https://github.com/0x1abin/crossmux
+    - CrossInk版 https://github.com/uxjulia/CrossInk （2026/10/08 追加。X3・X4・X4 Pro 対象。書体とテーマ、読書統計、しおり、読了の管理、読書画面だけのボタン割り当てなど）
+  - 以下はゲームなどの追加機能の参考として読む（2026/10/08 追加。どちらも縦書きの実装は無い）
+    - crosspet版 https://github.com/trilwu/crosspet （X3・X4 対象。仮想ペット、チェス、数独、マインスイーパー、2048、単語帳など。本家 1.5.0 起点で旧 SDK）
+    - crossplay版 https://github.com/ma-r-s/crossplay （X4 Pro などの ESP32-S3 機専用で X3 には入らない。25 のゲームと 8 の道具、2台での近距離対戦、単語帳、漫画など）
 
 各フォークが本家のどのリリースまで取り込んでいるか（2026/10/01時点、GitHubの履歴を照合）。
 
@@ -81,21 +85,24 @@ Inx版・witchhunt版・抹茶版の先行版を取り落とす）:
 
 | 版 | 最新 | 日付 |
 |---|---|---|
-| 抹茶版 | 1.6.5-rc-2（先行版） | 2026/09/30 |
-| crossmux版 | 毎日ビルド（nightly、先行版） | 2026/09/30 |
-| Yomuka版 | yomuka-v0.8.0 | 2026/09/29 |
-| witchhunt版 | 2.37.0-rc.2（先行版） | 2026/09/29 |
+| crossplay版 | v1.14.0 | 2026/10/06 |
+| 抹茶版 | 1.7.0-nightly-1（先行版） | 2026/10/05 |
+| Papyrix版 | v1.33.1 | 2026/10/05 |
+| crossmux版 | 毎日ビルド（nightly、先行版） | 2026/10/05 |
+| CrossInk版 | v1.6.1（独自の版番号） | 2026/10/04 |
+| Yomuka版 | yomuka-v0.8.1 | 2026/10/03 |
+| witchhunt版 | 2.37 | 2026/09/29 |
 | **OST版** | 20260929（先行版、1.6.5 ベース） | 2026/09/29 |
 | 本家 | 1.6.5 | 2026/09/27 |
-| Papyrix版 | v1.33.0 | 2026/09/26 |
 | JP版 | v0.3.2 | 2026/09/19 |
 | Inx版 | 1.0.20-BETA（先行版） | 2026/09/11 |
 | CJK版 | 0.4.2 | 2026/09/05 |
+| crosspet版 | v1.8.4 | 2026/07/25 |
 
 CJK版だけは freeink-sdk 自体も自前でforkしていて、SSD1677パネル向けの修正を独自に入れている。
 他は本家のfreeink-sdkをそのまま参照している。
 
-# 最近の更新内容について(2026/10/07)
+# 最近の更新内容について(2026/10/08)
 
 - 本家 1.6.5（2026/09/27 リリース）を起点に作り直しを開始（2026/09/28〜、ブランチ `vertical-1.6.5`）。新しい系統の最初の pre-release として OST版 2026093001-diag（タグ 20260929、診断版、X3 と X4 Pro の2本）を公開
   - Xteink X4 Pro 向けの版も作るようにした（2026/09/29〜）。X4 Pro は PSRAM があり読書中の空きが 130KB 以上、18pt の縦書きは 1 ページ 8 列（X3 は 9 列）
