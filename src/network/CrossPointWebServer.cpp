@@ -17,6 +17,7 @@
 #include "CrossPointSettings.h"
 #include "FontInstaller.h"
 #include "OpdsServerStore.h"
+#include "ProtectedPaths.h"
 #include "SdCardFontSystem.h"
 #include "SettingsList.h"
 #include "WebDAVHandler.h"
@@ -578,7 +579,7 @@ void CrossPointWebServer::handleDownload() const {
   }
 
   const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (itemName.startsWith(".")) {
+  if (itemName.startsWith(".") || protectedpaths::isSensitivePath(itemPath.c_str())) {
     server->send(403, "text/plain", "Cannot access system files");
     return;
   }
@@ -717,6 +718,10 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     String filePath = state.path;
     if (!filePath.endsWith("/")) filePath += "/";
     filePath += state.fileName;
+    if (protectedpaths::isSensitivePath(filePath.c_str())) {
+      state.error = "Cannot write protected items";
+      return;
+    }
 
     // Check if file already exists - SD operations can be slow
     resetTaskWatchdogIfSubscribed();
@@ -941,6 +946,11 @@ void CrossPointWebServer::handleRename() const {
     newPath += "/";
   }
   newPath += newName;
+  if (protectedpaths::isSensitivePath(itemPath.c_str()) || protectedpaths::isSensitivePath(newPath.c_str())) {
+    file.close();
+    server->send(403, "text/plain", "Cannot move protected item");
+    return;
+  }
 
   if (Storage.exists(newPath.c_str())) {
     file.close();
@@ -1029,6 +1039,11 @@ void CrossPointWebServer::handleMove() const {
     newPath += "/";
   }
   newPath += itemName;
+  if (protectedpaths::isSensitivePath(itemPath.c_str()) || protectedpaths::isSensitivePath(newPath.c_str())) {
+    file.close();
+    server->send(403, "text/plain", "Cannot move protected item");
+    return;
+  }
 
   if (newPath == itemPath) {
     file.close();
@@ -1108,8 +1123,8 @@ void CrossPointWebServer::handleDelete() const {
     // Security check: prevent deletion of protected items
     const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
 
-    // Hidden/system files are protected
-    if (itemName.startsWith(".")) {
+    // Hidden/system files and credential stores are protected
+    if (itemName.startsWith(".") || protectedpaths::isSensitivePath(itemPath.c_str())) {
       failedItems += itemPath + " (hidden/system file); ";
       allSuccess = false;
       continue;
@@ -1682,6 +1697,10 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
           String filePath = wsUploadPath;
           if (!filePath.endsWith("/")) filePath += "/";
           filePath += wsUploadFileName;
+          if (protectedpaths::isSensitivePath(filePath.c_str())) {
+            wsServer->sendTXT(num, "ERROR:Cannot write protected items");
+            return;
+          }
 
           resetTaskWatchdogIfSubscribed();
           if (Storage.exists(filePath.c_str())) {
