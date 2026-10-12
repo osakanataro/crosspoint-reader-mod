@@ -7,6 +7,7 @@
 #include <HalStorage.h>
 #include <LibraryBuilder.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WiFi.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
@@ -654,7 +655,7 @@ static bool flushUploadBuffer(CrossPointWebServer::UploadState& state) {
   if (state.bufferPos > 0 && state.file) {
     resetTaskWatchdogIfSubscribed();  // Reset watchdog before potentially slow SD write
     const unsigned long writeStart = millis();
-    const size_t written = state.file.write(state.buffer.data(), state.bufferPos);
+    const size_t written = state.file.write(state.buffer.get(), state.bufferPos);
     totalWriteTime += millis() - writeStart;
     writeCount++;
     resetTaskWatchdogIfSubscribed();  // Reset watchdog after SD write
@@ -738,6 +739,14 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       LOG_DBG("WEB", "[UPLOAD] FAILED to create file: %s", filePath.c_str());
       return;
     }
+    state.buffer = makeUniqueNoThrow<uint8_t[]>(UploadState::UPLOAD_BUFFER_SIZE);
+    if (!state.buffer) {
+      state.error = "Not enough memory to receive the file";
+      state.file.close();
+      Storage.remove(filePath.c_str());
+      LOG_ERR("WEB", "[UPLOAD] OOM: upload buffer");
+      return;
+    }
     resetTaskWatchdogIfSubscribed();
 
     LOG_DBG("WEB", "[UPLOAD] File created successfully: %s", filePath.c_str());
@@ -753,7 +762,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         const size_t space = UploadState::UPLOAD_BUFFER_SIZE - state.bufferPos;
         const size_t toCopy = (remaining < space) ? remaining : space;
 
-        memcpy(state.buffer.data() + state.bufferPos, data, toCopy);
+        memcpy(state.buffer.get() + state.bufferPos, data, toCopy);
         state.bufferPos += toCopy;
         data += toCopy;
         remaining -= toCopy;
@@ -763,6 +772,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
           if (!flushUploadBuffer(state)) {
             state.error = "Failed to write to SD card - disk may be full";
             state.file.close();
+            state.buffer.reset();
             return;
           }
         }
@@ -787,6 +797,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         state.error = "Failed to write final data to SD card";
       }
       state.file.close();
+      state.buffer.reset();
 
       if (state.error.isEmpty()) {
         state.success = true;
@@ -808,6 +819,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
     state.bufferPos = 0;  // Discard buffered data
+    state.buffer.reset();
     if (state.file) {
       state.file.close();
       // Try to delete the incomplete file
@@ -1910,6 +1922,13 @@ void CrossPointWebServer::handleFontUploadData() {
         LOG_ERR("WEB", "Failed to open font file for write: %s", path);
         break;
       }
+      fontUpload.buffer = makeUniqueNoThrow<uint8_t[]>(FontUploadState::BUFFER_SIZE);
+      if (!fontUpload.buffer) {
+        LOG_ERR("WEB", "OOM: font upload buffer");
+        fontUpload.file.close();
+        Storage.remove(path);
+        break;
+      }
 
       fontUpload.valid = true;
       LOG_DBG("WEB", "Font upload started: %s -> %s", filename.c_str(), path);
@@ -1936,13 +1955,13 @@ void CrossPointWebServer::handleFontUploadData() {
       while (remaining > 0) {
         size_t space = FontUploadState::BUFFER_SIZE - fontUpload.bufferPos;
         size_t chunk = (remaining < space) ? remaining : space;
-        memcpy(fontUpload.buffer.data() + fontUpload.bufferPos, src, chunk);
+        memcpy(fontUpload.buffer.get() + fontUpload.bufferPos, src, chunk);
         fontUpload.bufferPos += chunk;
         src += chunk;
         remaining -= chunk;
 
         if (fontUpload.bufferPos >= FontUploadState::BUFFER_SIZE) {
-          fontUpload.file.write(fontUpload.buffer.data(), fontUpload.bufferPos);
+          fontUpload.file.write(fontUpload.buffer.get(), fontUpload.bufferPos);
           fontUpload.bytesWritten += fontUpload.bufferPos;
           fontUpload.bufferPos = 0;
           resetTaskWatchdogIfSubscribed();
@@ -1954,13 +1973,14 @@ void CrossPointWebServer::handleFontUploadData() {
     case UPLOAD_FILE_END: {
       // Flush remaining buffer
       if (fontUpload.valid && fontUpload.bufferPos > 0) {
-        fontUpload.file.write(fontUpload.buffer.data(), fontUpload.bufferPos);
+        fontUpload.file.write(fontUpload.buffer.get(), fontUpload.bufferPos);
         fontUpload.bytesWritten += fontUpload.bufferPos;
         fontUpload.bufferPos = 0;
       }
       if (fontUpload.file.isOpen()) {
         fontUpload.file.close();
       }
+      fontUpload.buffer.reset();
 
       if (!fontUpload.valid && !fontUpload.filePath.empty()) {
         Storage.remove(fontUpload.filePath.c_str());
@@ -1978,6 +1998,7 @@ void CrossPointWebServer::handleFontUploadData() {
         Storage.remove(fontUpload.filePath.c_str());
       }
       fontUpload.valid = false;
+      fontUpload.buffer.reset();
       LOG_DBG("WEB", "Font upload aborted");
       break;
     }
