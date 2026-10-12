@@ -1,0 +1,72 @@
+Subject: [PATCH] FatFile: shorten the entry before freeing truncated clusters
+
+Not from upstream SdFat or crosspoint-reader: written for this fork to go
+with 0003 and 0004.
+
+truncate() and open() with O_TRUNC freed clusters and only then rewrote
+the directory entry. With 0003 the FAT reaches the card first, so a power
+cut in between leaves the entry naming clusters the FAT shows as free
+(for a truncation to zero, its first cluster), and the next allocation
+can hand them to another file (cross-linked files).
+
+Both now write the entry first: truncate() sets the end-of-chain mark,
+size and first cluster and syncs before freeing the tail; open() with
+O_TRUNC clears the first cluster and size in the cached entry and syncs
+before freeing the chain. A power cut in between leaves lost clusters,
+which fsck reclaims. It costs one more sector write when a non-empty
+file is truncated.
+
+---
+--- a/src/FatLib/FatFile.cpp
++++ b/src/FatLib/FatFile.cpp
+@@ -594,9 +594,17 @@
+                  getLe16(dir->firstClusterLow);
+ 
+   if (oflag & O_TRUNC) {
+-    if (firstCluster && !m_vol->freeChain(firstCluster)) {
+-      DBG_FAIL_MACRO;
+-      goto fail;
++    if (firstCluster) {
++      // Empty the entry on the device before freeing its clusters: a power
++      // cut in between leaves lost clusters, not an entry pointing at free ones.
++      setLe16(dir->firstClusterLow, 0);
++      setLe16(dir->firstClusterHigh, 0);
++      setLe32(dir->fileSize, 0);
++      m_vol->cacheDirty();
++      if (!m_vol->cacheSync() || !m_vol->freeChain(firstCluster)) {
++        DBG_FAIL_MACRO;
++        goto fail;
++      }
+     }
+     // need to update directory entry
+     m_flags |= FILE_FLAG_DIR_DIRTY;
+@@ -1342,17 +1350,23 @@
+     toFree = m_firstCluster;
+     m_firstCluster = 0;
+   }
++  m_fileSize = m_curPosition;
++
++  // need to update directory entry
++  m_flags |= FILE_FLAG_DIR_DIRTY;
++  // Write the shortened entry before freeing the tail: a power cut in between
++  // leaves lost clusters, not an entry pointing at free ones.
++  if (!sync()) {
++    DBG_FAIL_MACRO;
++    goto fail;
++  }
+   if (toFree) {
+-    if (!m_vol->freeChain(toFree)) {
++    if (!m_vol->freeChain(toFree) || !m_vol->cacheSync()) {
+       DBG_FAIL_MACRO;
+       goto fail;
+     }
+   }
+-  m_fileSize = m_curPosition;
+-
+-  // need to update directory entry
+-  m_flags |= FILE_FLAG_DIR_DIRTY;
+-  return sync();
++  return true;
+ 
+ fail:
+   return false;

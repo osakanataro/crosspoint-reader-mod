@@ -13,3 +13,10 @@ Run a single suite directly:
 
 Google Test is fetched via CMake FetchContent on first configure; the pinned
 version lives in test/CMakeLists.txt.
+
+SdFat write order (not part of the CMake suites; needs the SdFat copy a
+firmware build fetches): cuts the power after every sector write of remove,
+truncate, O_TRUNC, append and create, and checks no live entry names a free
+cluster.
+
+  python3 test/sdfat_write_order/run_write_order_test.py [path/to/SdFat-2.3.1]

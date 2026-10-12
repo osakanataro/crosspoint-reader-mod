@@ -3,7 +3,8 @@ PlatformIO post: script: apply CrossPoint's SdFat patches via `git apply`.
 
 The patches in `scripts/sdfat_patches/` make USE_SEPARATE_FAT_CACHE
 overridable, invalidate the sector cache after a failed read, and sync the
-separate FAT cache before the directory sector (see the file headers). They target SdFat 2.3.1 only.
+separate FAT cache before the directory sector, and rewrite a directory entry
+before freeing the clusters it named (see the file headers). They target SdFat 2.3.1 only.
 
 Unlike JPEGDEC, SdFat is a registry dependency of the SDK, so the script
 patches only the copy that the current environment actually builds:
@@ -36,6 +37,14 @@ PATCHES = (
     ("0003-sync-fat-cache-before-data-cache.patch", "src/FatLib/FatPartition.h",
      "fb91c81beac2779a0d4b08e886a5fefdf8062b8ad422ccec4e178ae4e88b72e5",
      "ad9d6a745aa8c91c8f006a61b2a6296e8dd89a1d05f1b335446e371ec541efcc"),
+    # 0004 and 0005 are this fork's: with 0003's order, freeing clusters must wait
+    # until the entry no longer names them, see the patch headers.
+    ("0004-delete-entry-before-freeing-clusters.patch", "src/FatLib/FatFileLFN.cpp",
+     "e7a13328625505c5f2c18279087a36d90b308bc7c97513371a6ce14884026be2",
+     "84b9fe6bfae78ceaa02fa76e3cd2b946dbbd7b323b53e148263997db6f0829cf"),
+    ("0005-shorten-entry-before-freeing-clusters.patch", "src/FatLib/FatFile.cpp",
+     "c1757a57ea134df2aab650d2db109b7d731f66cf309e5a070a9b50667c258948",
+     "31a94e51f3b7dac555ed7a9b98277ad613f0c4fb84daf6f21c1769cecdb1d3ae"),
 )
 
 
