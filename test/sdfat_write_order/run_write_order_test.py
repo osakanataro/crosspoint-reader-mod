@@ -51,14 +51,20 @@ def run(source):
         patch.apply_patches(project, dependency)
 
         print("== all patches", flush=True)
-        if build_and_run(project, dependency, "patched") != 0:
+        status = build_and_run(project, dependency, "patched")
+        if status == 2:
+            raise SystemExit("FAIL: an SdFat operation under test failed")
+        if status != 0:
             raise SystemExit("FAIL: a power cut can leave an entry naming a free cluster")
 
         for name in reversed(ORDER_PATCHES):
             subprocess.run(["git", "apply", "--reverse", str(project / "scripts/sdfat_patches" / name)],
                            cwd=dependency, check=True)
         print("== without 0004 and 0005", flush=True)
-        if build_and_run(project, dependency, "unpatched") == 0:
+        status = build_and_run(project, dependency, "unpatched")
+        if status == 2:
+            raise SystemExit("FAIL: an SdFat operation under test failed without 0004 and 0005")
+        if status != 1:
             raise SystemExit("FAIL: the test no longer sees the hazard 0004 and 0005 remove")
     print("PASS: no unsafe power-cut point with the patches; the test still detects one without them")
 

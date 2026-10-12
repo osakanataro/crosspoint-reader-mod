@@ -69,9 +69,11 @@ bool consistent(const std::vector<uint8_t>& image) {
   return true;
 }
 
-using Operation = void (*)(FatVolume&);
+// Returns false when the operation itself failed, so a test that never ran cannot pass.
+using Operation = bool (*)(FatVolume&);
 
-// Returns the number of power-cut points that leave an unsafe card.
+// Returns the number of power-cut points that leave an unsafe card, or -1 when the setup or
+// the operation failed.
 int unsafeCuts(const char* name, Operation operation) {
   RamDevice device;
   static uint8_t sectorBuffer[kSectorBytes];
@@ -80,19 +82,23 @@ int unsafeCuts(const char* name, Operation operation) {
   FatFile file;
   if (!formatter.format(&device, sectorBuffer) || !volume.begin(&device)) {
     printf("%-14s setup failed\n", name);
-    return 1;
+    return -1;
   }
   // 300 clusters span two FAT sectors, so freeing them also exercises eviction.
   std::vector<uint8_t> data(volume.bytesPerCluster() * 300, 0xAB);
   if (!file.open(&volume, "victim.bin", O_RDWR | O_CREAT) || file.write(data.data(), data.size()) != data.size() ||
       !file.close()) {
     printf("%-14s setup failed\n", name);
-    return 1;
+    return -1;
   }
   std::vector<uint8_t> image = device.image;
   device.recording = true;
-  operation(volume);
+  const bool done = operation(volume);
   device.recording = false;
+  if (!done) {
+    printf("%-14s operation failed\n", name);
+    return -1;
+  }
 
   int unsafe = consistent(image) ? 0 : 1;
   for (const auto& [sector, bytes] : device.writes) {
@@ -106,49 +112,57 @@ int unsafeCuts(const char* name, Operation operation) {
 }  // namespace
 
 int main() {
+  const std::pair<const char*, Operation> operations[] = {
+      {"remove",
+       [](FatVolume& v) {
+         FatFile f;
+         return f.open(&v, "victim.bin", O_RDWR) && f.remove();
+       }},
+      {"truncate(0)",
+       [](FatVolume& v) {
+         FatFile f;
+         return f.open(&v, "victim.bin", O_RDWR) && f.truncate(0) && f.close();
+       }},
+      {"truncate(mid)",
+       [](FatVolume& v) {
+         FatFile f;
+         return f.open(&v, "victim.bin", O_RDWR) && f.truncate(v.bytesPerCluster() * 10) && f.close();
+       }},
+      {"open O_TRUNC",
+       [](FatVolume& v) {
+         FatFile f;
+         return f.open(&v, "victim.bin", O_RDWR | O_TRUNC) && f.close();
+       }},
+      {"append",
+       [](FatVolume& v) {
+         FatFile f;
+         std::vector<uint8_t> d(v.bytesPerCluster() * 50, 1);
+         return f.open(&v, "victim.bin", O_RDWR | O_AT_END) && f.write(d.data(), d.size()) == d.size() && f.close();
+       }},
+      {"create small",
+       [](FatVolume& v) {
+         FatFile f;
+         std::vector<uint8_t> d(v.bytesPerCluster() * 3, 2);
+         return f.open(&v, "small.bin", O_RDWR | O_CREAT) && f.write(d.data(), d.size()) == d.size() && f.close();
+       }},
+      {"create large",
+       [](FatVolume& v) {
+         FatFile f;
+         std::vector<uint8_t> d(v.bytesPerCluster() * 300, 2);
+         return f.open(&v, "large.bin", O_RDWR | O_CREAT) && f.write(d.data(), d.size()) == d.size() && f.close();
+       }},
+  };
+  // Exit codes for the runner: 0 safe, 1 an unsafe cut point, 2 an operation that did not run.
   int unsafe = 0;
-  unsafe += unsafeCuts("remove", [](FatVolume& v) {
-    FatFile f;
-    f.open(&v, "victim.bin", O_RDWR);
-    f.remove();
-  });
-  unsafe += unsafeCuts("truncate(0)", [](FatVolume& v) {
-    FatFile f;
-    f.open(&v, "victim.bin", O_RDWR);
-    f.truncate(0);
-    f.close();
-  });
-  unsafe += unsafeCuts("truncate(mid)", [](FatVolume& v) {
-    FatFile f;
-    f.open(&v, "victim.bin", O_RDWR);
-    f.truncate(v.bytesPerCluster() * 10);
-    f.close();
-  });
-  unsafe += unsafeCuts("open O_TRUNC", [](FatVolume& v) {
-    FatFile f;
-    f.open(&v, "victim.bin", O_RDWR | O_TRUNC);
-    f.close();
-  });
-  unsafe += unsafeCuts("append", [](FatVolume& v) {
-    FatFile f;
-    f.open(&v, "victim.bin", O_RDWR | O_AT_END);
-    std::vector<uint8_t> d(v.bytesPerCluster() * 50, 1);
-    f.write(d.data(), d.size());
-    f.close();
-  });
-  unsafe += unsafeCuts("create small", [](FatVolume& v) {
-    FatFile f;
-    f.open(&v, "small.bin", O_RDWR | O_CREAT);
-    std::vector<uint8_t> d(v.bytesPerCluster() * 3, 2);
-    f.write(d.data(), d.size());
-    f.close();
-  });
-  unsafe += unsafeCuts("create large", [](FatVolume& v) {
-    FatFile f;
-    f.open(&v, "large.bin", O_RDWR | O_CREAT);
-    std::vector<uint8_t> d(v.bytesPerCluster() * 300, 2);
-    f.write(d.data(), d.size());
-    f.close();
-  });
+  bool failed = false;
+  for (const auto& [name, operation] : operations) {
+    const int cuts = unsafeCuts(name, operation);
+    if (cuts < 0) {
+      failed = true;
+    } else {
+      unsafe += cuts;
+    }
+  }
+  if (failed) return 2;
   return unsafe == 0 ? 0 : 1;
 }
