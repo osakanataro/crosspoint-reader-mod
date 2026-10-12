@@ -1944,6 +1944,7 @@ void CrossPointWebServer::handleFontUploadData() {
         if (memcmp(upload.buf, "CPFONT\0\0", 8) != 0) {
           LOG_ERR("WEB", "Invalid .cpfont magic bytes");
           fontUpload.valid = false;
+          fontUpload.buffer.reset();
           break;
         }
         fontUpload.magicChecked = true;
