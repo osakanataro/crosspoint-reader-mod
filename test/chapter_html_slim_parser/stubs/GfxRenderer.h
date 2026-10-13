@@ -30,7 +30,7 @@ class GfxRenderer {
   int getScreenHeight() const { return 800; }
   int getLineHeight(int, float = 1.0f) const { return 16; }
   int getFontAscenderSize(int) const { return 12; }
-  int getFontDescenderSize(int) const { return 4; }
+  int getFontDescenderSize(int) const { return -4; }  // negative, as FreeType reports it
   int getCjkCellWidth(int) const { return 8; }
   int getSpaceWidth(int, EpdFontFamily::Style) const { return 4; }
   int getTextAdvanceX(int, const char* text, EpdFontFamily::Style, int8_t tracking = 0,
