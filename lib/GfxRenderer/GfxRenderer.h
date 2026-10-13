@@ -15,8 +15,10 @@ class FontCacheManager;
 class SdCardFont;
 class TtfEpdFont;
 
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -75,13 +77,11 @@ class GfxRenderer {
   mutable CjkCellMemo cjkCellWidths_[CJK_CELL_MEMO_SIZE] = {};
   mutable int cjkCellWidthsNext_ = 0;
   void forgetCjkCellWidth(int fontId) const {
-    for (auto& m : cjkCellWidths_) {
-      if (m.width != 0 && m.fontId == fontId) m = CjkCellMemo{};
-    }
+    std::replace_if(
+        std::begin(cjkCellWidths_), std::end(cjkCellWidths_),
+        [fontId](const CjkCellMemo& m) { return m.width != 0 && m.fontId == fontId; }, CjkCellMemo{});
   }
-  void forgetCjkCellWidths() const {
-    for (auto& m : cjkCellWidths_) m = CjkCellMemo{};
-  }
+  void forgetCjkCellWidths() const { std::fill(std::begin(cjkCellWidths_), std::end(cjkCellWidths_), CjkCellMemo{}); }
   mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
   // TTF (vector) fonts: rebuilt per page by ensureSdCardFontReady(). Mutable for
   // the same reason as sdCardFonts_ (const layout path triggers a rebuild).
