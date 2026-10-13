@@ -4,6 +4,7 @@
 #include <Utf8.h>
 
 #include <deque>
+#include <map>
 #include <string>
 
 namespace BidiUtils {
@@ -29,6 +30,8 @@ class GfxRenderer {
   int getScreenHeight() const { return 800; }
   int getLineHeight(int, float = 1.0f) const { return 16; }
   int getFontAscenderSize(int) const { return 12; }
+  int getFontDescenderSize(int) const { return 4; }
+  int getCjkCellWidth(int) const { return 8; }
   int getSpaceWidth(int, EpdFontFamily::Style) const { return 4; }
   int getTextAdvanceX(int, const char* text, EpdFontFamily::Style, int8_t tracking = 0,
                       BidiUtils::BidiBaseDir = BidiUtils::BidiBaseDir::AUTO,
@@ -46,6 +49,17 @@ class GfxRenderer {
     return trackingBetween(left, right, tracking);
   }
   int getSpaceAdvance(int, uint32_t, uint32_t, EpdFontFamily::Style) const { return 4; }
+  void drawTextSideways(int, int, int, const char*, int, bool = true, EpdFontFamily::Style = EpdFontFamily::REGULAR,
+                        bool = false) const {}
+  const std::map<int, EpdFontFamily>& getFontMap() const {
+    static const std::map<int, EpdFontFamily> fonts;
+    return fonts;
+  }
   bool isSdCardFont(int) const { return false; }
   void ensureSdCardFontReady(int, const char* const*, const size_t*, size_t, bool, bool, uint8_t) const {}
+  class FrameBufferLoan {
+   public:
+    explicit FrameBufferLoan(GfxRenderer&) {}
+    void end() {}
+  };
 };

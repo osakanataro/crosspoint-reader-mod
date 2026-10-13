@@ -184,8 +184,11 @@ void expectPageBitmaps(SdCardFont& font, uint32_t first, uint32_t count) {
     }
     ASSERT_NE(nullptr, glyph) << cp;
     ASSERT_EQ(BITMAP_BYTES, glyph->dataLength);
+    // Prewarmed bitmaps live in the chunked arena, not behind data->bitmap.
+    const uint8_t* bitmap = font.miniGlyphBitmap(data->glyphMissCtx, glyph->dataOffset);
+    ASSERT_NE(nullptr, bitmap) << cp;
     for (uint16_t i = 0; i < BITMAP_BYTES; ++i) {
-      ASSERT_EQ((cp - FIRST) % 251, data->bitmap[glyph->dataOffset + i]);
+      ASSERT_EQ((cp - FIRST) % 251, bitmap[i]);
     }
   }
 }
@@ -265,6 +268,9 @@ TEST(SdCardFontTest, FragmentedBitmapGrowthRebuildsMetadataAndKeepsThePrefetch) 
 }
 
 TEST(SdCardFontTest, BitmapAllocationRetriesAfterEvictingRebuildableAdvances) {
+  // Upstream sizes one contiguous bitmap and frees the advance table when it does not fit.
+  // This fork stores bitmaps in 4 KB chunks, so that allocation and its retry do not exist.
+  GTEST_SKIP() << "bitmaps are chunked; no single bitmap allocation to fail";
   makeFont();
   SdCardFont font;
   ASSERT_TRUE(font.load("fixture"));

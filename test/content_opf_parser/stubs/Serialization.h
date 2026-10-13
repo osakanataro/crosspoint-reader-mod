@@ -7,6 +7,9 @@
 namespace serialization {
 
 inline void writeString(HalFile&, const std::string&) {}
-inline void readString(HalFile&, std::string& out) { out.clear(); }
+inline bool readString(HalFile&, std::string& out) {
+  out.clear();
+  return true;
+}
 
 }  // namespace serialization
