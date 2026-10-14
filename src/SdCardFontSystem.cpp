@@ -292,8 +292,11 @@ void SdCardFontSystem::applyUiLanguage(GfxRenderer& renderer) {
     drawable = true;
   } else if (uiDrawsLetters(renderer, letters, /*builtinOnly=*/false)) {
     // When the reader family's UI sizes are the ones drawing it, a UI family
-    // loaded earlier is dead weight.
-    if (!uiFamily_.empty() && !uiManager_.ownsFont(renderer.getFallbackFont(UI_10_FONT_ID))) {
+    // loaded earlier is dead weight. The reader family may lack a UI size and
+    // leave the UI family's fallback in place there, so check every size.
+    if (!uiFamily_.empty() && std::none_of(std::begin(kUiFontSizes), std::end(kUiFontSizes), [&](const UiFontSize& ui) {
+          return uiManager_.ownsFont(renderer.getFallbackFont(ui.fontId));
+        })) {
       unloadUiFamily(renderer);
     }
     drawable = true;
