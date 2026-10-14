@@ -107,10 +107,12 @@ replacement boxes even though the book itself renders fine.** Any missing UI
 size keeps showing boxes for that script at that size. Direct TTF/OTF/TTC
 families use the same file at all three UI sizes.
 
-These UI sizes only take effect if the reader-size font also matches one of
-CrossPoint's built-in fallback-detection codepoints — see `kFallbackProbes` in
-`src/SdCardFontSystem.cpp` for the current list. A script outside that list
-gets no UI fallback even with the correct `.cpfont` sizes present.
+For the reader family, these UI sizes only take effect if the reader-size
+font also matches one of CrossPoint's built-in fallback-detection codepoints —
+see `kFallbackProbes` in `src/SdCardFontSystem.cpp` for the current list. A
+script outside that list gets no UI fallback from the reader family even with
+the correct `.cpfont` sizes present. (The UI language check below tests the
+language's own letters instead.)
 
 For `.cpfont` families, **Settings > Reader > Font Size** lists every size the family ships,
 so a family built at 8,10,12,14,16,18 offers all six as reading sizes — the UI
@@ -144,7 +146,28 @@ What this means in practice:
   width.
 - If no SD font is selected (a built-in reading font is active), there is no
   fallback and the UI again shows boxes for non-Latin text — pick an SD font
-  covering that script to restore it.
+  covering that script to restore it. The UI language is the exception, below.
+
+### UI Languages That Need an SD Font
+
+Some UI languages use letters the built-in UI fonts do not have (Japanese for
+now). For these, CrossPoint draws the UI with an SD font:
+
+- At build time, `scripts/gen_i18n.py` lists the letters each language's
+  strings use (`I18n::getUiLetters()`).
+- If the built-in UI fonts or the reader family's UI sizes draw all of them,
+  nothing else is loaded.
+- Otherwise CrossPoint searches the SD families in name order and loads the
+  first `.cpfont` family that has sizes **8, 10 and 12** and draws every
+  letter. TTF/OTF/TTC families are not used for this.
+- With no such family on the card, the UI shows English and the saved
+  language is kept.
+- Choosing the language in **Settings > Language** while the reader uses a
+  built-in font also sets that family as the reading font.
+
+The download catalog has no Japanese family yet, so for Japanese, convert a
+font with the 8, 10 and 12 pt sizes (see the example above) and copy it to the
+card yourself.
 
 ## Available Pre-Built Fonts
 

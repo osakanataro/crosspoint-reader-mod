@@ -407,6 +407,7 @@ bool SdCardFontRegistry::discover() {
     families_.resize(MAX_SD_FAMILIES);
   }
 
+  generation_.fetch_add(1, std::memory_order_release);
   LOG_DBG("SDREG", "Discovery complete: %d families", static_cast<int>(families_.size()));
   return !families_.empty();
 }
