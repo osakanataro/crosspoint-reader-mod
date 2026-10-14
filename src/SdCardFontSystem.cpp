@@ -253,7 +253,9 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
   if (readerIt == renderer.getFontMap().end()) return;
   // One representative codepoint per script the built-in fonts may lack,
   // matching the non-Latin interval presets the SD-font converter ships
-  // (docs/sd-card-fonts.md).
+  // (docs/sd-card-fonts.md). A UI language in a script missing here is never
+  // drawn by the reader family, and loadUiFamily() skips the reader family,
+  // so add its script before adding such a language.
   static constexpr uint32_t kFallbackProbes[] = {
       0x4E00,  // CJK Unified Ideographs (Han)
       0x3042,  // Hiragana

@@ -164,6 +164,10 @@ now). For these, CrossPoint draws the UI with an SD font:
   language is kept.
 - Choosing the language in **Settings > Language** while the reader uses a
   built-in font also sets that family as the reading font.
+- The reader family only draws the UI language if its script is in
+  `kFallbackProbes` (above), and the search skips the reader family. When
+  adding a UI language in another script, add a codepoint of that script to
+  `kFallbackProbes`.
 
 The download catalog has no Japanese family yet, so for Japanese, convert a
 font with the 8, 10 and 12 pt sizes (see the example above) and copy it to the
