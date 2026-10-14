@@ -4,12 +4,15 @@
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
+#include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <SdCardFontCache.h>
 #include <TtfEpdFont.h>
+#include <Utf8.h>
 #include <esp_heap_caps.h>
 
+#include <algorithm>
 #include <iterator>
 
 #include "CrossPointSettings.h"
@@ -70,6 +73,38 @@ constexpr UiFontSize kUiFontSizes[] = {
     {UI_12_FONT_ID, 12},
 };
 
+// Arabic letters reach the font as presentation forms (shaped before drawing),
+// so fonts that draw them fine lack the base letters the strings hold.
+bool shapedBeforeDrawing(const uint32_t cp) { return cp >= 0x0600 && cp <= 0x06FF; }
+
+// True when `font`, or `fallback` when given, carries every letter in `letters`.
+bool drawsLetters(const EpdFontFamily& font, const EpdFontFamily* fallback, const char* letters) {
+  auto cursor = reinterpret_cast<const unsigned char*>(letters);
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(&cursor))) {
+    if (shapedBeforeDrawing(cp) || font.hasCodepoint(cp)) continue;
+    if (fallback == nullptr || !fallback->hasCodepoint(cp)) return false;
+  }
+  return true;
+}
+
+// True when every UI size draws every letter in `letters` through its built-in
+// font, or (builtinOnly false) through the fallback registered for it.
+bool uiDrawsLetters(const GfxRenderer& renderer, const char* letters, const bool builtinOnly) {
+  const auto& fonts = renderer.getFontMap();
+  for (const auto& ui : kUiFontSizes) {
+    const auto primary = fonts.find(ui.fontId);
+    if (primary == fonts.end()) return false;
+    const EpdFontFamily* fallback = nullptr;
+    if (!builtinOnly) {
+      const auto it = fonts.find(renderer.getFallbackFont(ui.fontId));
+      if (it != fonts.end()) fallback = &it->second;
+    }
+    if (!drawsLetters(primary->second, fallback, letters)) return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 void SdCardFontSystem::begin(GfxRenderer& renderer) {
@@ -109,10 +144,16 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
     }
   }
 
+  applyUiLanguage(renderer);
   LOG_DBG("SDFS", "SD font system ready (%d families discovered)", registry_.getFamilyCount());
 }
 
 void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, const bool forceReload) {
+  loadReaderFamily(renderer, forceReload);
+  applyUiLanguage(renderer);
+}
+
+void SdCardFontSystem::loadReaderFamily(GfxRenderer& renderer, const bool forceReload) {
   // If the web server (or another task) installed/deleted fonts, re-discover.
   // Track whether we just re-discovered so we can force a reload below even
   // when the wanted family/size still maps to the same point size — the file
@@ -179,6 +220,9 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, const bool forceReloa
   if (!currentFamily.empty()) {
     manager_.unloadAll(renderer);
   }
+  // The same family loaded twice would register the same font ids, and the
+  // reader load would be refused. The reader copy serves the UI from here on.
+  if (uiFamily_ == wantedFamily) unloadUiFamily(renderer);
 
   const auto* family = registry_.findFamily(wantedFamily);
   if (family) {
@@ -234,6 +278,103 @@ void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
       LOG_DBG("SDFS", "No %u pt SD glyphs for UI fallback in %s", ui.pointSize, familyName.c_str());
     }
   }
+}
+
+void SdCardFontSystem::applyUiLanguage(GfxRenderer& renderer) {
+  const auto lang = SETTINGS.language < static_cast<uint8_t>(Language::_COUNT)
+                        ? static_cast<Language>(SETTINGS.language)
+                        : Language::EN;
+  const char* letters = I18n::getUiLetters(lang);
+
+  bool drawable = false;
+  if (uiDrawsLetters(renderer, letters, /*builtinOnly=*/true)) {
+    unloadUiFamily(renderer);
+    drawable = true;
+  } else if (uiDrawsLetters(renderer, letters, /*builtinOnly=*/false)) {
+    // When the reader family's UI sizes are the ones drawing it, a UI family
+    // loaded earlier is dead weight.
+    if (!uiFamily_.empty() && !uiManager_.ownsFont(renderer.getFallbackFont(UI_10_FONT_ID))) {
+      unloadUiFamily(renderer);
+    }
+    drawable = true;
+  } else {
+    if (!uiFamily_.empty()) {
+      // A reader font change dropped or replaced the fallbacks: point them back.
+      for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
+        renderer.setFallbackFont(kUiFontSizes[i].fontId, uiFontIds_[i]);
+      }
+      drawable = uiDrawsLetters(renderer, letters, /*builtinOnly=*/false);
+      if (!drawable) unloadUiFamily(renderer);  // loaded for another language
+    }
+    // A search reads every candidate's header from the card; repeat it only
+    // once the family list or the language changed.
+    const uint32_t generation = registry_.generation();
+    const bool searchedInVain =
+        generation == uiSearchFailedGeneration_ && static_cast<int>(lang) == uiSearchFailedLanguage_;
+    if (!drawable && !searchedInVain) {
+      drawable = loadUiFamily(renderer, letters);
+      if (!drawable) {
+        uiSearchFailedGeneration_ = generation;
+        uiSearchFailedLanguage_ = static_cast<int>(lang);
+      }
+    }
+  }
+
+  if (!drawable && !uiLanguageUnavailable_) {
+    LOG_INF("SDFS", "No font on the card draws %s; showing the UI in English", I18N.getLanguageName(lang));
+  }
+  uiLanguageUnavailable_ = !drawable;
+  I18N.setLanguage(drawable ? lang : Language::EN);
+}
+
+bool SdCardFontSystem::adoptUiFamilyForReader(GfxRenderer& renderer) {
+  if (uiFamily_.empty() || SETTINGS.sdFontFamilyName[0] != '\0') return false;
+  strncpy(SETTINGS.sdFontFamilyName, uiFamily_.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
+  SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
+  // Loads the family as the reader font; it then covers the UI through its own fallbacks.
+  ensureLoaded(renderer);
+  LOG_INF("SDFS", "Reader font set to %s for the UI language", SETTINGS.sdFontFamilyName);
+  return true;
+}
+
+bool SdCardFontSystem::loadUiFamily(GfxRenderer& renderer, const char* letters) {
+  const auto& fonts = renderer.getFontMap();
+  for (const auto& family : registry_.getFamilies()) {
+    // The reader family's UI sizes were already tried through its fallbacks.
+    if (family.vector || family.name == manager_.currentFamilyName()) continue;
+    if (!std::all_of(std::begin(kUiFontSizes), std::end(kUiFontSizes),
+                     [&](const UiFontSize& ui) { return family.findFile(ui.pointSize) != nullptr; })) {
+      continue;
+    }
+    // Size by size, so a family that lacks the letters costs one file.
+    bool drawsAll = true;
+    for (size_t i = 0; i < std::size(kUiFontSizes) && drawsAll; i++) {
+      uiFontIds_[i] = uiManager_.loadFamilyExtraSize(family, renderer, kUiFontSizes[i].pointSize);
+      const auto primary = fonts.find(kUiFontSizes[i].fontId);
+      const auto loaded = fonts.find(uiFontIds_[i]);
+      drawsAll = uiFontIds_[i] != 0 && primary != fonts.end() && loaded != fonts.end() &&
+                 drawsLetters(primary->second, &loaded->second, letters);
+    }
+    if (drawsAll) {
+      uiFamily_ = family.name;
+      for (size_t i = 0; i < std::size(kUiFontSizes); i++) {
+        renderer.setFallbackFont(kUiFontSizes[i].fontId, uiFontIds_[i]);
+      }
+      LOG_DBG("SDFS", "UI family %s loaded for the UI language (heap free %u)", uiFamily_.c_str(),
+              static_cast<unsigned>(ESP.getFreeHeap()));
+      return true;
+    }
+    uiManager_.unloadAll(renderer);
+  }
+  std::fill(std::begin(uiFontIds_), std::end(uiFontIds_), 0);
+  return false;
+}
+
+void SdCardFontSystem::unloadUiFamily(GfxRenderer& renderer) {
+  if (uiFamily_.empty()) return;
+  uiManager_.unloadAll(renderer);
+  uiFamily_.clear();
+  std::fill(std::begin(uiFontIds_), std::end(uiFontIds_), 0);
 }
 
 const SdCardFontFileInfo* SdCardFontSystem::cacheCandidate(uint8_t* scaleNum, uint8_t* scaleDen) const {

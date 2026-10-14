@@ -233,6 +233,17 @@ class GfxRenderer {
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
   void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
   void clearFallbackFonts() { fallbackFontMap_.clear(); }
+  // Fallback id registered for primaryFontId, or 0 when none.
+  int getFallbackFont(const int primaryFontId) const {
+    const auto it = fallbackFontMap_.find(primaryFontId);
+    return it != fallbackFontMap_.end() ? it->second : 0;
+  }
+  // Drop the fallbacks that route to fallbackFontId, before its font is freed.
+  void removeFallbacksTo(const int fallbackFontId) {
+    for (auto it = fallbackFontMap_.begin(); it != fallbackFontMap_.end();) {
+      it = (it->second == fallbackFontId) ? fallbackFontMap_.erase(it) : std::next(it);
+    }
+  }
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).

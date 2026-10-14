@@ -20,6 +20,9 @@ class LanguageSelectActivity final : public UiListActivity {
   int listCount() const override { return totalItems; }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
+  // Keeps the chosen language if a font now draws it; otherwise restores
+  // previousLang, or English when that one cannot be drawn either.
+  void keepLanguageOrRevert(uint8_t previousLang);
   const char* headerTitle() const override;
 
   // Only the languages compiled into this build (custom_i18n_builtin_langs), not the whole enum.

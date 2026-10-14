@@ -39,7 +39,7 @@ int SdCardFontManager::loadFile(const SdCardFontFileInfo& file, const char* fami
   }
 
   // The family's first load is the body-text size; the UI fallback sizes follow it.
-  if (!font->load(file.path.c_str(), loaded_.empty(), scaleNum, scaleDen, preferFlash)) {
+  if (!font->load(file.path.c_str(), holdsReaderFont_ && loaded_.empty(), scaleNum, scaleDen, preferFlash)) {
     LOG_ERR("SDMGR", "Failed to load %s", file.path.c_str());
     delete font;
     return 0;
@@ -145,16 +145,24 @@ int SdCardFontManager::loadFamilyExtraSize(const SdCardFontFamilyInfo& family, G
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
-  // Drop UI CJK fallbacks before the SD fonts they point at are freed.
-  renderer.clearFallbackFonts();
-  renderer.clearSdCardFonts();
+  // Only this manager's fonts go: the reader family and the UI family each
+  // have a manager, and one unloading must not strip the other's fonts or the
+  // UI fallbacks that point at them.
   for (auto& lf : loaded_) {
+    renderer.removeFallbacksTo(lf.fontId);
     renderer.removeFont(lf.fontId);
     delete lf.font;
   }
   loaded_.clear();
   loadedFamilyName_.clear();
   loadedPointSize_ = 0;
+}
+
+bool SdCardFontManager::ownsFont(const int fontId) const {
+  for (const auto& lf : loaded_) {
+    if (lf.fontId == fontId) return true;
+  }
+  return false;
 }
 
 int SdCardFontManager::getFontId(const std::string& familyName) const {

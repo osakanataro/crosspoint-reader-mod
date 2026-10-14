@@ -11,7 +11,9 @@ struct SdCardFontFileInfo;
 
 class SdCardFontManager {
  public:
-  SdCardFontManager() = default;
+  // holdsReaderFont: false for a manager that only loads UI sizes, so its
+  // first load is not reported as the reader font.
+  explicit SdCardFontManager(bool holdsReaderFont = true) : holdsReaderFont_(holdsReaderFont) {}
   ~SdCardFontManager();
   SdCardFontManager(const SdCardFontManager&) = delete;
   SdCardFontManager& operator=(const SdCardFontManager&) = delete;
@@ -49,7 +51,11 @@ class SdCardFontManager {
   // or loading failed.
   int loadFamilyExtraSize(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize);
 
-  // Unload everything, unregister from renderer.
+  // True when fontId is one of this manager's loaded fonts.
+  bool ownsFont(int fontId) const;
+
+  // Unload this manager's fonts, unregister them and the UI fallbacks that
+  // point at them from the renderer.
   void unloadAll(GfxRenderer& renderer);
 
   // Look up the font ID for the loaded family. Returns 0 if nothing loaded
@@ -79,6 +85,7 @@ class SdCardFontManager {
   int loadFile(const SdCardFontFileInfo& file, const char* familyName, GfxRenderer& renderer, uint8_t idPointSize,
                uint8_t scaleNum = 1, uint8_t scaleDen = 1, bool preferFlash = false);
 
+  bool holdsReaderFont_;
   std::string loadedFamilyName_;
   uint8_t loadedPointSize_ = 0;
   std::vector<LoadedFont> loaded_;

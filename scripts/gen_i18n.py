@@ -34,6 +34,7 @@ Examples:
 import sys
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -444,6 +445,21 @@ def compute_character_set(translations: Dict[str, List[str]], lang_index: int) -
     return "".join(chr(cp) for cp in sorted(chars))
 
 
+def compute_ui_letters(translations: Dict[str, List[str]], lang_index: int) -> str:
+    """Return the sorted non-ASCII letters a language's strings use.
+
+    The firmware checks these against the loaded UI fonts to decide whether it
+    can show the language. Punctuation and symbols are left out: a missing
+    arrow or quote leaves one blank, not an unreadable screen.
+    """
+    letters = set()
+    for values in translations.values():
+        for ch in values[lang_index]:
+            if ord(ch) >= 0x80 and unicodedata.category(ch).startswith("L"):
+                letters.add(ord(ch))
+    return "".join(chr(cp) for cp in sorted(letters))
+
+
 # ---------------------------------------------------------------------------
 # Code generators
 # ---------------------------------------------------------------------------
@@ -503,6 +519,9 @@ def generate_keys_header(
     lines.append("")
     lines.append("// Character sets for each language (defined in I18nStrings.cpp)")
     lines.append("extern const char* const CHARACTER_SETS[];")
+    lines.append("")
+    lines.append("// Non-ASCII letters each language uses (defined in I18nStrings.cpp)")
+    lines.append("extern const char* const UI_LETTERS[];")
     lines.append("")
 
     # StrId enum
@@ -664,6 +683,16 @@ def generate_strings_cpp(
         in_build = languages[lang_idx] in compiled
         charset = compute_character_set(translations, lang_idx if in_build else 0)
         _append_string_entry(lines, charset, comment=name)
+    lines.append("};")
+    lines.append("")
+
+    # UI_LETTERS array
+    lines.append("// Non-ASCII letters each language uses")
+    lines.append("const char* const UI_LETTERS[] = {")
+    for lang_idx, name in enumerate(language_names):
+        in_build = languages[lang_idx] in compiled
+        letters = compute_ui_letters(translations, lang_idx if in_build else 0)
+        _append_string_entry(lines, letters, comment=name)
     lines.append("};")
     lines.append("")
 
