@@ -7,6 +7,8 @@
 
 using namespace i18n_strings;
 
+I18n::I18n() : _language(Language::EN), _strings(getLanguageStrings(Language::EN)) {}
+
 I18n& I18n::getInstance() {
   static I18n instance;
   return instance;
@@ -18,20 +20,32 @@ const char* I18n::get(StrId id) const {
     return "???";
   }
 
-  // Use generated helper function - no hardcoded switch needed!
-  const LangStrings lang = getLanguageStrings(_language);
-
   // If bit 15 of the offset is set, apply the offset to the English lookup table
-  const uint16_t off = lang.offsets[index];
+  const uint16_t off = _strings.offsets[index];
   if (off & 0x8000) return STRINGS_EN_DATA + (off & 0x7FFF);
-  return lang.data + off;
+  return _strings.data + off;
 }
 
-void I18n::setLanguage(Language lang) {
+bool I18n::setLanguage(Language lang) {
   if (lang >= Language::_COUNT) {
-    return;
+    return false;
   }
-  _language = lang;
+  if (lang == _language) return true;
+  // The loader may rewrite the memory the current pack's strings live in.
+  _language = Language::EN;
+  _strings = getLanguageStrings(Language::EN);
+  if (isLanguageBuiltIn(lang)) {
+    _language = lang;
+    _strings = getLanguageStrings(lang);
+    return true;
+  }
+  LangStrings pack{};
+  if (_packLoader && _packLoader(lang, pack)) {
+    _language = lang;
+    _strings = pack;
+    return true;
+  }
+  return false;
 }
 
 const char* I18n::getLanguageName(Language lang) const {

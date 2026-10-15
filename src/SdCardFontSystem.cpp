@@ -346,8 +346,8 @@ bool SdCardFontSystem::applyUiLanguage(GfxRenderer& renderer, const Language lan
     LOG_INF("SDFS", "No font on the card draws %s; showing the UI in English", I18N.getLanguageName(lang));
   }
   uiLanguageLoggedMissing_ = drawable ? Language::_COUNT : lang;
-  I18N.setLanguage(drawable ? lang : Language::EN);
-  return drawable;
+  // A language that is not built in may still fail here: its SD pack is damaged.
+  return I18N.setLanguage(drawable ? lang : Language::EN) && drawable;
 }
 
 bool SdCardFontSystem::adoptUiFamilyForReader(GfxRenderer& renderer) {

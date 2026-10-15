@@ -12,6 +12,7 @@
 #include "I18nKeys.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
+#include "UiLanguagePackStore.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 
@@ -56,6 +57,14 @@ void LanguageSelectActivity::activateIndex(const int index) {
   const uint8_t langIndex = SORTED_LANGUAGE_INDICES[index];
 
   const auto chosen = static_cast<Language>(langIndex);
+  if (!UiLanguagePackStore::available(chosen)) {
+    // The language ships as an SD pack (/lang) and the card has none.
+    startActivityForResult(
+        std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_UI_LANGUAGE_PACK_MISSING),
+                                               tr(STR_UI_LANGUAGE_PACK_MISSING_BODY)),
+        [](const ActivityResult&) {});
+    return;
+  }
   bool shown;
   {
     // May load or free SD fonts the render task draws with.

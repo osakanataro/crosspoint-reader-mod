@@ -21,7 +21,13 @@ class I18n {
   const char* operator[](StrId id) const { return get(id); }
 
   Language getLanguage() const { return _language; }
-  void setLanguage(Language lang);
+  // Shows `lang`, or English when its strings can't be found (returns false).
+  bool setLanguage(Language lang);
+
+  // Supplies the strings of a language that is not built in, laid out like a
+  // built-in one. The returned memory must stay valid until the next call.
+  using PackLoader = bool (*)(Language lang, LangStrings& out);
+  void setPackLoader(PackLoader loader) { _packLoader = loader; }
   const char* getLanguageName(Language lang) const;
   static Language languageFromCode(const char* code);
 
@@ -34,9 +40,11 @@ class I18n {
   static const char* getUiLetters(Language lang);
 
  private:
-  I18n() : _language(Language::EN) {}
+  I18n();
 
   Language _language;
+  LangStrings _strings;
+  PackLoader _packLoader = nullptr;
 };
 
 // Convenience macros
