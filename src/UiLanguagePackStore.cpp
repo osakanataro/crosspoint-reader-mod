@@ -130,14 +130,17 @@ bool install(HalFile& file, const PackHeader& pack, const char code[4]) {
 
   // Check the whole body before erasing the current copy.
   uint32_t crc = 0;
+  uint8_t lastByte = 0;
   size_t remaining = file.size() - sizeof(PackHeader);
   while (remaining > 0) {
     const size_t n = std::min(COPY_BUFFER_SIZE, remaining);
     if (file.read(buffer.get(), n) != static_cast<int>(n)) return false;
     crc = esp_rom_crc32_le(crc, buffer.get(), n);
+    lastByte = buffer[n - 1];
     remaining -= n;
   }
-  if (crc != pack.crc32) {
+  // The strings end the body; an unterminated last one would read past the copy.
+  if (crc != pack.crc32 || (pack.dataSize > 0 && lastByte != '\0')) {
     LOG_ERR("LANG", "Pack %.4s is damaged", code);
     return false;
   }
