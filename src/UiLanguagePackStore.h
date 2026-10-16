@@ -18,7 +18,12 @@ constexpr size_t CODE_LEN = 8;
 bool load(Language lang, LangStrings& out);
 
 // Whether `lang` can be shown: built in, on the card, or already in flash.
+// Reads only the card pack's header.
 bool available(Language lang);
+
+// available(), but also checks the card pack's body (CRC), as load() does.
+// For the one language being chosen; it reads the whole pack.
+bool loadable(Language lang);
 
 // The card path of `lang`'s pack, e.g. "/lang/ja.cplang" or "/lang/zh_hant.cplang".
 void packPath(Language lang, char* path, size_t size);

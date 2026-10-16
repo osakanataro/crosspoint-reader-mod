@@ -33,6 +33,7 @@ void packPath(const Language lang, char* path, const size_t size) {
 
 bool load(Language, LangStrings&) { return false; }
 bool available(const Language lang) { return isLanguageBuiltIn(lang); }
+bool loadable(const Language lang) { return isLanguageBuiltIn(lang); }
 bool isValidPack(Language, const char*) { return false; }
 
 #else
@@ -238,8 +239,14 @@ bool load(const Language lang, LangStrings& out) {
 
   // The card's pack wins when it differs from the copy (an updated translation).
   if (onCard && (!inFlash || stored.packCrc != pack.crc32)) {
-    if (!install(file, pack, code) || !storeHolds(code, stored)) return false;
-    LOG_INF("LANG", "Copied %s to flash in %lu ms", path, millis() - start);
+    if (install(file, pack, code) && storeHolds(code, stored)) {
+      LOG_INF("LANG", "Copied %s to flash in %lu ms", path, millis() - start);
+    } else if (!storeHolds(code, stored)) {
+      return false;
+    } else {
+      // install() checks the body before erasing: a damaged pack keeps the copy.
+      LOG_ERR("LANG", "Kept the flash copy of %.8s", code);
+    }
   } else if (!inFlash) {
     LOG_INF("LANG", "No language pack %s", path);
     return false;
@@ -258,6 +265,18 @@ bool isValidPack(const Language lang, const char* path) {
   if (!Storage.openFileForRead("LANG", path, file) || !readPackHeader(file, code, pack)) return false;
   auto buffer = makeUniqueNoThrow<uint8_t[]>(COPY_BUFFER_SIZE);
   return buffer && bodyIsValid(file, pack, code, buffer.get());
+}
+
+bool loadable(const Language lang) {
+  if (lang >= Language::_COUNT) return false;
+  if (isLanguageBuiltIn(lang)) return true;
+  char code[CODE_LEN];
+  codeOf(lang, code);
+  StoreHeader stored{};
+  if (openRegion() && storeHolds(code, stored)) return true;
+  char path[32];
+  packPath(lang, path, sizeof(path));
+  return isValidPack(lang, path);
 }
 
 bool available(const Language lang) {

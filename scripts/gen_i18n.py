@@ -527,8 +527,9 @@ def write_language_pack(
     for _, text in entries:
         offsets.append(len(data))
         data += text.encode("utf-8") + b"\0"
-    if len(data) > 0xFFFF:
-        raise ValueError(f"Language {code}: pack strings exceed 64 KB")
+    # Offsets are 15-bit in flash (bit 15 marks English); the loader rejects more.
+    if len(data) > 0x7FFF:
+        raise ValueError(f"Language {code}: pack strings exceed 32 KB")
     body = bytearray()
     body += struct.pack(f"<{len(entries)}I", *(h for h, _ in entries))
     body += struct.pack(f"<{len(entries)}H", *offsets)

@@ -72,7 +72,7 @@ void LanguageSelectActivity::activateIndex(const int index) {
   const uint8_t langIndex = SORTED_LANGUAGE_INDICES[index];
 
   const auto chosen = static_cast<Language>(langIndex);
-  if (!UiLanguagePackStore::available(chosen)) {
+  if (!UiLanguagePackStore::loadable(chosen)) {
     // The language ships as an SD pack (/lang) and the card has none. The
     // download activity switches to the language itself and reboots when it
     // exits, so this screen does not continue.

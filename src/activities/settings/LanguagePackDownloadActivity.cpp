@@ -93,9 +93,9 @@ bool LanguagePackDownloadActivity::download() {
     error_ = StrId::STR_DOWNLOAD_FAILED;
     return false;
   }
-  Storage.remove(path);
-  if (!Storage.rename(tmpPath.c_str(), path)) {
-    LOG_ERR("LANG", "Rename to %s failed", path);
+  // Keeps the old pack if the replace fails.
+  if (!Storage.replaceFile(tmpPath.c_str(), path)) {
+    LOG_ERR("LANG", "Replacing %s failed", path);
     Storage.remove(tmpPath.c_str());
     error_ = StrId::STR_DOWNLOAD_FAILED;
     return false;
