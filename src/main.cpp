@@ -146,7 +146,8 @@ constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
 constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
 constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 2;
 constexpr uint32_t SILENT_REBOOT_TARGET_JOIN_NETWORK = 3;
-constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_JOIN_NETWORK;
+constexpr uint32_t SILENT_REBOOT_TARGET_FONT_BROWSER = 4;
+constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_FONT_BROWSER;
 constexpr uint32_t SILENT_REBOOT_LIGHT_ON = 1U << 0;
 
 // How the device is coming back to life, resolved once at boot. Both resume
@@ -200,20 +201,25 @@ void silentRestartToReader() { silentRestartTo(SILENT_REBOOT_TARGET_READER, "rea
 
 void silentRestartToSettings() { silentRestartTo(SILENT_REBOOT_TARGET_SETTINGS, "settings"); }
 
-void silentRestartToJoinNetwork() {
+// Shared by the reboots on the way *into* a Wi-Fi flow.
+static void silentRestartIntoWifiFlow(const uint32_t target, const char* targetName) {
   if (deepSleepInProgress) return;
 #if FREEINK_CAP_TOUCH
   // A software reset would cycle touch/frontlight rails; those boards proceed
-  // into Join Network without the fresh-heap reboot (return, don't stop WiFi —
-  // this runs on the way *in*, unlike the exit-time silentRestart()).
+  // without the fresh-heap reboot (return, don't stop Wi-Fi: this runs on the
+  // way *in*, unlike the exit-time silentRestart()).
   if (BoardConfig::hasTouch()) return;
 #endif
-  armSilentReboot(SILENT_REBOOT_TARGET_JOIN_NETWORK);
-  LOG_DBG("MAIN", "Silent restart (target=join-network)");
+  armSilentReboot(target);
+  LOG_DBG("MAIN", "Silent restart (target=%s)", targetName);
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   delay(50);
   ESP.restart();
 }
+
+void silentRestartToFontBrowser() { silentRestartIntoWifiFlow(SILENT_REBOOT_TARGET_FONT_BROWSER, "font-browser"); }
+
+void silentRestartToJoinNetwork() { silentRestartIntoWifiFlow(SILENT_REBOOT_TARGET_JOIN_NETWORK, "join-network"); }
 
 void restartToHomeAfterStorageHandoff() {
   if (deepSleepInProgress) return;  // sleeping supersedes the storage handoff reboot
@@ -634,6 +640,9 @@ void setup() {
     // Rebooted on the way *into* File Transfer > Join Network for a fresh heap;
     // resume that flow directly instead of landing on home.
     activityManager.goToJoinNetwork();
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_FONT_BROWSER) {
+    // Rebooted on the way into Settings > Manage fonts for a fresh heap.
+    activityManager.goToFontBrowser();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_SETTINGS) {
     // Back out of the WiFi rows and the user is where they left off, not on Home.
     activityManager.goToSettings();

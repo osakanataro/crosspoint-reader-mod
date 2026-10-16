@@ -421,7 +421,13 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::SdFirmwareUpdate:
         startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);
         break;
-      case SettingAction::DownloadFonts:
+      case SettingAction::DownloadFonts: {
+        {
+          // Fresh heap for Wi-Fi + TLS, as File Transfer > Join Network does.
+          // Does not return on non-touch boards; goToFontBrowser() resumes.
+          RenderLock lock(*this);
+          silentRestartToFontBrowser();
+        }
         startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
                                [this](const ActivityResult&) {
                                  SETTINGS.saveToFile();
@@ -433,6 +439,7 @@ void SettingsActivity::toggleCurrentSetting() {
                                  rebuildSettingsLists();
                                });
         break;
+      }
       case SettingAction::TextSettings:
         startActivityForResult(std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry(),
                                                                       TextSettingsActivity::Tab::Family),
