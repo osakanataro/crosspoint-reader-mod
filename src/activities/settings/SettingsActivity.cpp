@@ -46,6 +46,8 @@ SettingsActivity::SettingsActivity(GfxRenderer& renderer, MappedInputManager& ma
     : UiTabListActivity("Settings", renderer, mappedInput) {}
 
 void SettingsActivity::rebuildSettingsLists() {
+  // The render task reads these lists and rowItems_/rowValues_.
+  RenderLock lock(*this);
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
@@ -199,7 +201,10 @@ void SettingsActivity::rebuildRowItems() {
 
 void SettingsActivity::onTabAction(const int index) {
   if (optionPopup.isActive()) return;
-  selectCategory(index);
+  {
+    RenderLock lock(*this);  // as in stepTab()
+    selectCategory(index);
+  }
   activeNav().selected = 0;  // tab taps land with the tab bar focused
   // The switched-to tab repaints as the selected pill; a flash overlay on top
   // of it just repaints the pill in the focused style.
@@ -248,9 +253,13 @@ void SettingsActivity::stepTab(const int direction) {
   // Ring position 0 stays on the tab bar; a row selection collapses to the
   // new category's first row (per-tab memory is deliberately not kept here).
   const bool onTabBar = ringPos() == 0;
-  selectedCategoryIndex = direction > 0 ? ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount)
-                                        : ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
-  selectCategory(selectedCategoryIndex);
+  {
+    // A render of the previous tab may still be reading rowItems_.
+    RenderLock lock(*this);
+    selectedCategoryIndex = direction > 0 ? ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount)
+                                          : ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
+    selectCategory(selectedCategoryIndex);
+  }
   activeNav().selected = onTabBar ? 0 : 1;
   requestUpdate();
 }
