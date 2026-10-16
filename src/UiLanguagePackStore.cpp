@@ -20,10 +20,20 @@
 
 namespace UiLanguagePackStore {
 
+void packPath(const Language lang, char* path, const size_t size) {
+  char lower[CODE_LEN + 1] = {};
+  const char* code = LANGUAGE_CODES[static_cast<size_t>(lang)];
+  for (size_t i = 0; i < CODE_LEN && code[i]; ++i) {
+    lower[i] = static_cast<char>(tolower(static_cast<unsigned char>(code[i])));
+  }
+  snprintf(path, size, "/lang/%s.cplang", lower);
+}
+
 #if !I18N_LANGUAGE_PACKS
 
 bool load(Language, LangStrings&) { return false; }
 bool available(const Language lang) { return isLanguageBuiltIn(lang); }
+bool isValidPack(Language, const char*) { return false; }
 
 #else
 
@@ -34,14 +44,14 @@ namespace {
 struct PackHeader {
   char magic[4];
   uint8_t version;
-  char code[4];
+  char code[CODE_LEN];
   uint8_t pad[3];
   uint16_t count;
   uint16_t pad2;
   uint32_t dataSize;
   uint32_t crc32;  // of everything after the header
 };
-static_assert(sizeof(PackHeader) == 24);
+static_assert(sizeof(PackHeader) == 28);
 
 // Flash copy: this header, then an offset table in StrId order (built-in
 // layout, English offsets flagged with bit 15), then the strings.
@@ -51,20 +61,21 @@ struct StoreHeader {
   uint16_t keyCount;
   uint32_t buildHash;
   uint32_t packCrc;
-  char code[4];
+  char code[CODE_LEN];
   uint32_t dataSize;
   uint32_t crc32;  // of the fields above
 };
-static_assert(sizeof(StoreHeader) == 28);
+static_assert(sizeof(StoreHeader) == 32);
 
 constexpr uint32_t STORE_MAGIC = 0x534C5043;  // CPLS
-constexpr uint16_t STORE_VERSION = 1;
-constexpr uint8_t PACK_VERSION = 1;
+constexpr uint16_t STORE_VERSION = 2;
+constexpr uint8_t PACK_VERSION = 2;
 constexpr size_t SECTOR_SIZE = 4096;
 // The last 64 KB of the spiffs partition; one mapping page.
 constexpr size_t REGION_SIZE = 64 * 1024;
 constexpr size_t KEY_COUNT = static_cast<size_t>(StrId::_COUNT);
 constexpr size_t TABLE_OFFSET = 32;
+static_assert(sizeof(StoreHeader) <= TABLE_OFFSET);
 constexpr size_t DATA_OFFSET = (TABLE_OFFSET + KEY_COUNT * 2 + 3) & ~size_t{3};
 constexpr size_t MAX_DATA = REGION_SIZE - DATA_OFFSET;
 constexpr size_t COPY_BUFFER_SIZE = 1024;
@@ -79,16 +90,9 @@ uint32_t storeCrc(const StoreHeader& h) {
   return esp_rom_crc32_le(0, reinterpret_cast<const uint8_t*>(&h), offsetof(StoreHeader, crc32));
 }
 
-void codeOf(const Language lang, char code[4]) {
-  memset(code, 0, 4);
-  strncpy(code, LANGUAGE_CODES[static_cast<size_t>(lang)], 4);
-}
-
-void packPath(const Language lang, char* path, const size_t size) {
-  char lower[5] = {};
-  const char* code = LANGUAGE_CODES[static_cast<size_t>(lang)];
-  for (size_t i = 0; i < 4 && code[i]; ++i) lower[i] = static_cast<char>(tolower(static_cast<unsigned char>(code[i])));
-  snprintf(path, size, "/lang/%s.cplang", lower);
+void codeOf(const Language lang, char code[CODE_LEN]) {
+  memset(code, 0, CODE_LEN);
+  strncpy(code, LANGUAGE_CODES[static_cast<size_t>(lang)], CODE_LEN);
 }
 
 bool openRegion() {
@@ -109,41 +113,47 @@ bool openRegion() {
   return true;
 }
 
-bool storeHolds(const char code[4], StoreHeader& out) {
+bool storeHolds(const char code[CODE_LEN], StoreHeader& out) {
   memcpy(&out, mapped, sizeof(out));
   return out.magic == STORE_MAGIC && out.version == STORE_VERSION && out.crc32 == storeCrc(out) &&
-         out.keyCount == KEY_COUNT && out.buildHash == I18N_BUILD_HASH && memcmp(out.code, code, 4) == 0 &&
+         out.keyCount == KEY_COUNT && out.buildHash == I18N_BUILD_HASH && memcmp(out.code, code, CODE_LEN) == 0 &&
          out.dataSize <= MAX_DATA;
 }
 
-bool readPackHeader(HalFile& file, const char code[4], PackHeader& h) {
+bool readPackHeader(HalFile& file, const char code[CODE_LEN], PackHeader& h) {
   if (file.read(&h, sizeof(h)) != static_cast<int>(sizeof(h))) return false;
   const size_t tables = (static_cast<size_t>(h.count) * 6 + 3) & ~size_t{3};
-  return memcmp(h.magic, "CPLG", 4) == 0 && h.version == PACK_VERSION && memcmp(h.code, code, 4) == 0 &&
+  return memcmp(h.magic, "CPLG", 4) == 0 && h.version == PACK_VERSION && memcmp(h.code, code, CODE_LEN) == 0 &&
          h.count <= MAX_PACK_KEYS && h.dataSize <= MAX_DATA && h.dataSize <= 0x7FFF &&
          file.size() == sizeof(h) + tables + h.dataSize;
 }
 
-bool install(HalFile& file, const PackHeader& pack, const char code[4]) {
-  auto buffer = makeUniqueNoThrow<uint8_t[]>(COPY_BUFFER_SIZE);
-  if (!buffer) return false;
-
-  // Check the whole body before erasing the current copy.
+// Reads the body that follows the header; `buffer` holds COPY_BUFFER_SIZE bytes.
+bool bodyIsValid(HalFile& file, const PackHeader& pack, const char code[CODE_LEN], uint8_t* buffer) {
   uint32_t crc = 0;
   uint8_t lastByte = 0;
   size_t remaining = file.size() - sizeof(PackHeader);
   while (remaining > 0) {
     const size_t n = std::min(COPY_BUFFER_SIZE, remaining);
-    if (file.read(buffer.get(), n) != static_cast<int>(n)) return false;
-    crc = esp_rom_crc32_le(crc, buffer.get(), n);
+    if (file.read(buffer, n) != static_cast<int>(n)) return false;
+    crc = esp_rom_crc32_le(crc, buffer, n);
     lastByte = buffer[n - 1];
     remaining -= n;
   }
   // The strings end the body; an unterminated last one would read past the copy.
   if (crc != pack.crc32 || (pack.dataSize > 0 && lastByte != '\0')) {
-    LOG_ERR("LANG", "Pack %.4s is damaged", code);
+    LOG_ERR("LANG", "Pack %.8s is damaged", code);
     return false;
   }
+  return true;
+}
+
+bool install(HalFile& file, const PackHeader& pack, const char code[CODE_LEN]) {
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(COPY_BUFFER_SIZE);
+  if (!buffer) return false;
+
+  // Check the whole body before erasing the current copy.
+  if (!bodyIsValid(file, pack, code, buffer.get())) return false;
 
   // Map each StrId to the pack's string, or to the English one it lacks.
   auto hashes = makeUniqueNoThrow<uint32_t[]>(pack.count);
@@ -197,14 +207,14 @@ bool install(HalFile& file, const PackHeader& pack, const char code[4]) {
   header.keyCount = KEY_COUNT;
   header.buildHash = I18N_BUILD_HASH;
   header.packCrc = pack.crc32;
-  memcpy(header.code, code, 4);
+  memcpy(header.code, code, CODE_LEN);
   header.dataSize = pack.dataSize;
   header.crc32 = storeCrc(header);
   if (esp_partition_write(partition, regionOffset, &header, sizeof(header)) != ESP_OK) {
     LOG_ERR("LANG", "Flash write failed");
     return false;
   }
-  LOG_INF("LANG", "Installed %.4s: %u of %u strings, %u B", code, static_cast<unsigned>(own),
+  LOG_INF("LANG", "Installed %.8s: %u of %u strings, %u B", code, static_cast<unsigned>(own),
           static_cast<unsigned>(KEY_COUNT), static_cast<unsigned>(pack.dataSize));
   return true;
 }
@@ -213,7 +223,7 @@ bool install(HalFile& file, const PackHeader& pack, const char code[4]) {
 
 bool load(const Language lang, LangStrings& out) {
   if (lang >= Language::_COUNT || isLanguageBuiltIn(lang) || !openRegion()) return false;
-  char code[4];
+  char code[CODE_LEN];
   codeOf(lang, code);
   char path[32];
   packPath(lang, path, sizeof(path));
@@ -239,16 +249,30 @@ bool load(const Language lang, LangStrings& out) {
   return true;
 }
 
+bool isValidPack(const Language lang, const char* path) {
+  if (lang >= Language::_COUNT || isLanguageBuiltIn(lang)) return false;
+  char code[CODE_LEN];
+  codeOf(lang, code);
+  HalFile file;
+  PackHeader pack{};
+  if (!Storage.openFileForRead("LANG", path, file) || !readPackHeader(file, code, pack)) return false;
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(COPY_BUFFER_SIZE);
+  return buffer && bodyIsValid(file, pack, code, buffer.get());
+}
+
 bool available(const Language lang) {
   if (lang >= Language::_COUNT) return false;
   if (isLanguageBuiltIn(lang)) return true;
-  char code[4];
+  char code[CODE_LEN];
   codeOf(lang, code);
   StoreHeader stored{};
   if (openRegion() && storeHolds(code, stored)) return true;
   char path[32];
   packPath(lang, path, sizeof(path));
-  return Storage.exists(path);
+  // A pack in an older format counts as missing, so it is downloaded again.
+  HalFile file;
+  PackHeader pack{};
+  return Storage.exists(path) && Storage.openFileForRead("LANG", path, file) && readPackHeader(file, code, pack);
 }
 
 #endif  // I18N_LANGUAGE_PACKS

@@ -23,6 +23,8 @@ class LanguageSelectActivity final : public UiListActivity {
   // Saves `chosen` if a font now draws it; otherwise keeps the saved language,
   // or saves English when that one cannot be drawn either.
   void keepLanguageOrRevert(Language chosen);
+  // Reboots into Settings after the saved language changed.
+  void restartOnFreshHeap();
   const char* headerTitle() const override;
 
   // Only the languages compiled into this build (custom_i18n_builtin_langs), not the whole enum.
@@ -34,4 +36,7 @@ class LanguageSelectActivity final : public UiListActivity {
   // selection, so buildScreen() never needs to see a different "Selected"
   // row within one visit.
   freeink::ui::ListItem rowItems[totalItems]{};
+  // Row values, translated in buildScreen() (see there).
+  enum class RowMark : uint8_t { None, Selected, NeedsDownload };
+  RowMark rowMarks[totalItems]{};
 };

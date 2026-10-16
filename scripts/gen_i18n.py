@@ -474,8 +474,9 @@ def compute_ui_letters(translations: Dict[str, List[str]], lang_index: int) -> s
 # working with a firmware that adds or removes keys; a key the pack lacks shows
 # in English.
 PACK_MAGIC = b"CPLG"
-PACK_VERSION = 1
-PACK_HEADER = struct.Struct("<4sB4s3sHHII")  # magic, version, code, pad, count, pad, data size, crc32
+PACK_VERSION = 2
+PACK_CODE_LEN = 8  # UiLanguagePackStore::CODE_LEN
+PACK_HEADER = struct.Struct("<4sB8s3sHHII")  # magic, version, code, pad, count, pad, data size, crc32
 
 
 def fnv1a32(data: bytes, h: int = 0x811C9DC5) -> int:
@@ -514,6 +515,8 @@ def write_language_pack(
     path: str, code: str, string_keys: List[str], translations: Dict[str, List[str]], lang_idx: int
 ) -> int:
     """Write one language pack and return its size in bytes."""
+    if len(code) > PACK_CODE_LEN:
+        raise ValueError(f"Language code {code} is longer than {PACK_CODE_LEN} characters")
     entries = sorted(
         (key_hash(k), translations[k][lang_idx])
         for k in string_keys

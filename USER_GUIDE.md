@@ -346,8 +346,11 @@ The Settings screen allows you to configure the device's behavior. There are a f
 - **Check for updates**: Check for Crosspoint firmware updates over Wi-Fi. Firmware can also be updated without a USB connection by placing a `firmware.bin` file on the SD card.
 
 - **Language**: Set the UI language. See [i18n.md](./docs/i18n.md#supported-languages) for the supported languages.
-  - Some languages (Japanese for now) need an SD card font that covers their script: a `.cpfont` family with sizes 8, 10 and 12. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
+  - Languages other than English are read from a language file in `/lang` on the SD card. If the file is missing, choosing the language offers to download it over Wi-Fi.
+  - Some languages (Japanese, Chinese and Korean for now) need an SD card font that covers their script: a `.cpfont` family with sizes 8, 10 and 12. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
   - If no such font is on the card, choosing the language shows a warning that offers the font download, and the previous language stays selected.
+  - The list marks languages that need a language file or a font download with "Needs download".
+  - After the language changes, the device restarts. It opens Settings again, or Home when a download was needed.
   - If the font is later removed, the UI shows English and the saved language is kept.
   - When the reader uses a built-in font, choosing such a language also sets **Font Family** to the SD family that draws it.
 

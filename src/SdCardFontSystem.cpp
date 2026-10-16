@@ -5,6 +5,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <SdCardFont.h>
 #include <TtfEpdFont.h>
 #include <Utf8.h>
 #include <esp_heap_caps.h>
@@ -350,6 +351,46 @@ bool SdCardFontSystem::applyUiLanguage(GfxRenderer& renderer, const Language lan
   return I18N.setLanguage(drawable ? lang : Language::EN) && drawable;
 }
 
+void SdCardFontSystem::findDrawableLanguages(const GfxRenderer& renderer, const Language* langs, const size_t count,
+                                             bool* drawable) {
+  size_t missing = 0;
+  for (size_t i = 0; i < count; i++) {
+    drawable[i] = uiDrawsLetters(renderer, I18n::getUiLetters(langs[i]), /*builtinOnly=*/false);
+    if (!drawable[i]) missing++;
+  }
+  const auto& fonts = renderer.getFontMap();
+  const auto builtin = fonts.find(kUiFontSizes[0].fontId);
+  if (builtin == fonts.end()) return;
+  for (const auto& family : registry_.getFamilies()) {
+    if (missing == 0) return;
+    // Same candidates as loadUiFamily(), which skips the reader family. Its sizes
+    // come from one source font, so the smallest stands for all three.
+    if (family.vector || family.name == manager_.currentFamilyName() ||
+        !std::all_of(std::begin(kUiFontSizes), std::end(kUiFontSizes),
+                     [&](const UiFontSize& ui) { return family.findFile(ui.pointSize) != nullptr; })) {
+      continue;
+    }
+    // load() reads the header and the coverage intervals only.
+    auto font = makeUniqueNoThrow<SdCardFont>();
+    if (!font || !font->load(family.findFile(kUiFontSizes[0].pointSize)->path.c_str())) continue;
+    const EpdFont* regular = font->getEpdFont(0);
+    if (regular == nullptr) continue;
+    for (size_t i = 0; i < count; i++) {
+      if (drawable[i]) continue;
+      auto cursor = reinterpret_cast<const unsigned char*>(I18n::getUiLetters(langs[i]));
+      uint32_t cp;
+      bool all = true;
+      while (all && (cp = utf8NextCodepoint(&cursor))) {
+        all = builtin->second.hasCodepoint(cp) || regular->hasCodepoint(cp);
+      }
+      if (all) {
+        drawable[i] = true;
+        missing--;
+      }
+    }
+  }
+}
+
 bool SdCardFontSystem::adoptUiFamilyForReader(GfxRenderer& renderer) {
   if (uiFamily_.empty() || SETTINGS.sdFontFamilyName[0] != '\0') return false;
   strncpy(SETTINGS.sdFontFamilyName, uiFamily_.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
@@ -392,6 +433,19 @@ bool SdCardFontSystem::loadUiFamily(GfxRenderer& renderer, const char* letters) 
   }
   std::fill(std::begin(uiFontIds_), std::end(uiFontIds_), 0);
   return false;
+}
+
+bool SdCardFontSystem::builtinFontsDrawUi(const GfxRenderer& renderer) const {
+  return uiDrawsLetters(renderer, I18n::getUiLetters(I18N.getLanguage()), /*builtinOnly=*/true);
+}
+
+void SdCardFontSystem::unloadAll(GfxRenderer& renderer) {
+  unloadUiFamily(renderer);
+  manager_.unloadAll(renderer);
+#if CROSSPOINT_VECTOR_FONTS
+  unloadTtf(renderer);
+#endif
+  uiSearchFailedLanguage_ = -1;  // the reader family is a UI candidate again
 }
 
 void SdCardFontSystem::unloadUiFamily(GfxRenderer& renderer) {
