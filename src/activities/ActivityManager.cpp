@@ -25,6 +25,7 @@
 #include "network/UsbDriveActivity.h"
 #include "plugins/PluginCatalogActivity.h"
 #include "reader/ReaderActivity.h"
+#include "settings/FontDownloadActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/BmpViewerActivity.h"
@@ -272,6 +273,11 @@ void ActivityManager::goToUsbDrive() {
 }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToFontBrowser() {
+  // Its Wi-Fi exit reboots to Home, as when opened from Settings.
+  replaceActivity(std::make_unique<FontDownloadActivity>(renderer, mappedInput));
+}
 
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));

@@ -64,12 +64,31 @@ class SdCardFontSystem {
   /// the font is removed. Called by begin() and ensureLoaded().
   void applyUiLanguage(GfxRenderer& renderer);
 
+  /// For the language list: sets drawable[i] when langs[i] can be shown without
+  /// a font download, through the loaded fonts or an SD family that
+  /// applyUiLanguage() could load. Reads only each candidate family's 8 pt
+  /// coverage table, not its glyphs. Main task, under a RenderLock.
+  void findDrawableLanguages(const GfxRenderer& renderer, const Language* langs, size_t count, bool* drawable);
+
   /// When the reader uses a built-in font that cannot draw the saved language
   /// and an SD family was loaded for the UI instead, make that family the
   /// reader font too, so books in the language show text rather than boxes.
   /// Returns true when the reader font changed. Same task and lock rules as
   /// applyUiLanguage(); the caller saves the settings.
   bool adoptUiFamilyForReader(GfxRenderer& renderer);
+
+  /// applyUiLanguage(renderer, lang); when `lang` is shown, store it in
+  /// SETTINGS.language and call adoptUiFamilyForReader(). Returns whether `lang`
+  /// is shown. Same task and lock rules; the caller saves the settings.
+  bool switchUiLanguage(GfxRenderer& renderer, Language lang);
+
+  /// Whether the built-in UI fonts alone draw the language shown now.
+  bool builtinFontsDrawUi(const GfxRenderer& renderer) const;
+
+  /// Unload every SD font (reader and UI families) to free heap for a network
+  /// transfer. Nothing on screen may be drawn until ensureLoaded() reloads
+  /// them. Main task, under a RenderLock.
+  void unloadAll(GfxRenderer& renderer);
 
   /// If the registry is dirty, re-scan the SD card now and clear the flag.
   /// Used by the web UI so uploaded/deleted fonts appear in the list

@@ -15,6 +15,9 @@ void silentRestartToSettings();  // settings screen
 // no-op on touch boards (a soft reset would cycle their externally-powered
 // rails); the caller then proceeds without a reboot.
 void silentRestartToJoinNetwork();
+// The same for Settings > Manage fonts: its manifest and font downloads need
+// the same Wi-Fi + TLS working set.
+void silentRestartToFontBrowser();
 
 // Reboots immediately after an activity releases exclusive raw storage. The
 // RTC target ensures setup() lands on Home instead of resuming a reader.

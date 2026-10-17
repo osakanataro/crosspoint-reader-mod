@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
@@ -25,8 +26,11 @@
 
 namespace fui = freeink::ui;
 
-FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : UiListActivity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
+FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                           const Language adoptLanguage)
+    : UiListActivity("FontDownload", renderer, mappedInput),
+      adoptLanguage_(adoptLanguage),
+      fontInstaller_(sdFontSystem.registry()) {}
 
 void FontDownloadActivity::activateIndex(const int index) {
   switch (state_) {
@@ -72,6 +76,24 @@ void FontDownloadActivity::onBackButton() {
 
 void FontDownloadActivity::onEnter() {
   UiListActivity::onEnter();
+  {
+    // TLS needs more heap than the loaded SD fonts leave on X3. When the
+    // built-in fonts draw the UI, nothing here needs them: this activity's
+    // Wi-Fi exit reboots, and adoptLanguageIfDrawable() loads what it uses.
+    RenderLock lock(*this);
+    if (sdFontSystem.builtinFontsDrawUi(renderer)) sdFontSystem.unloadAll(renderer);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    // Handed over from another download on the same Wi-Fi session.
+    onWifiSelectionComplete(true);
+    return;
+  }
+  {
+    // Free glyph caches before Wi-Fi allocates, so caches refilled later do not
+    // split the large free block TLS needs.
+    RenderLock lock(*this);
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
+  }
   WiFi.mode(WIFI_STA);
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
@@ -79,11 +101,22 @@ void FontDownloadActivity::onEnter() {
 
 void FontDownloadActivity::onExit() {
   Activity::onExit();
+  if (adoptLanguage_ != Language::_COUNT) adoptLanguageIfDrawable();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
     silentRestart();
+  }
+}
+
+// Runs from onExit(), which holds the render lock, before the reboot that would
+// otherwise drop the language choice.
+void FontDownloadActivity::adoptLanguageIfDrawable() {
+  if (sdFontSystem.switchUiLanguage(renderer, adoptLanguage_)) {
+    SETTINGS.saveToFile();
+  } else {
+    sdFontSystem.applyUiLanguage(renderer);  // back to the saved language
   }
 }
 
