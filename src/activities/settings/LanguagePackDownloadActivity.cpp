@@ -123,12 +123,8 @@ void LanguagePackDownloadActivity::finishDownload() {
     // Only the UI family is loaded: the exit reboots, and the boot loads the
     // reader family. With it unloaded, the reader family is also a candidate.
     RenderLock lock(*this);
-    shown = sdFontSystem.applyUiLanguage(renderer, lang_);
-    if (shown) {
-      SETTINGS.language = static_cast<uint8_t>(lang_);
-      sdFontSystem.adoptUiFamilyForReader(renderer);
-      state_ = COMPLETE;
-    }
+    shown = sdFontSystem.switchUiLanguage(renderer, lang_);
+    if (shown) state_ = COMPLETE;
   }
   if (shown) {
     SETTINGS.saveToFile();

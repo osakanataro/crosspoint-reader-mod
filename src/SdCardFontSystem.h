@@ -77,6 +77,11 @@ class SdCardFontSystem {
   /// applyUiLanguage(); the caller saves the settings.
   bool adoptUiFamilyForReader(GfxRenderer& renderer);
 
+  /// applyUiLanguage(renderer, lang); when `lang` is shown, store it in
+  /// SETTINGS.language and call adoptUiFamilyForReader(). Returns whether `lang`
+  /// is shown. Same task and lock rules; the caller saves the settings.
+  bool switchUiLanguage(GfxRenderer& renderer, Language lang);
+
   /// Whether the built-in UI fonts alone draw the language shown now.
   bool builtinFontsDrawUi(const GfxRenderer& renderer) const;
 

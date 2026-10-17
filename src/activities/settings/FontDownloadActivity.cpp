@@ -113,9 +113,7 @@ void FontDownloadActivity::onExit() {
 // Runs from onExit(), which holds the render lock, before the reboot that would
 // otherwise drop the language choice.
 void FontDownloadActivity::adoptLanguageIfDrawable() {
-  if (sdFontSystem.applyUiLanguage(renderer, adoptLanguage_)) {
-    SETTINGS.language = static_cast<uint8_t>(adoptLanguage_);
-    sdFontSystem.adoptUiFamilyForReader(renderer);
+  if (sdFontSystem.switchUiLanguage(renderer, adoptLanguage_)) {
     SETTINGS.saveToFile();
   } else {
     sdFontSystem.applyUiLanguage(renderer);  // back to the saved language

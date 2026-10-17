@@ -91,11 +91,7 @@ void LanguageSelectActivity::activateIndex(const int index) {
   {
     // May load or free SD fonts the render task draws with.
     RenderLock lock(*this);
-    shown = sdFontSystem.applyUiLanguage(renderer, chosen);
-    if (shown) {
-      SETTINGS.language = langIndex;
-      sdFontSystem.adoptUiFamilyForReader(renderer);
-    }
+    shown = sdFontSystem.switchUiLanguage(renderer, chosen);
   }
 
   if (shown) {
@@ -125,10 +121,7 @@ void LanguageSelectActivity::keepLanguageOrRevert(const Language chosen) {
     // A downloaded family may draw the chosen language; reverting may free one.
     RenderLock lock(*this);
     const auto previous = static_cast<Language>(SETTINGS.language);
-    if (sdFontSystem.applyUiLanguage(renderer, chosen)) {
-      SETTINGS.language = static_cast<uint8_t>(chosen);
-      sdFontSystem.adoptUiFamilyForReader(renderer);
-    } else if (!sdFontSystem.applyUiLanguage(renderer, previous)) {
+    if (!sdFontSystem.switchUiLanguage(renderer, chosen) && !sdFontSystem.applyUiLanguage(renderer, previous)) {
       // The previous language may have lost its font too (it was removed from the card).
       SETTINGS.language = static_cast<uint8_t>(Language::EN);
       sdFontSystem.applyUiLanguage(renderer, Language::EN);

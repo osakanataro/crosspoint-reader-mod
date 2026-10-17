@@ -391,6 +391,13 @@ void SdCardFontSystem::findDrawableLanguages(const GfxRenderer& renderer, const 
   }
 }
 
+bool SdCardFontSystem::switchUiLanguage(GfxRenderer& renderer, const Language lang) {
+  if (!applyUiLanguage(renderer, lang)) return false;
+  SETTINGS.language = static_cast<uint8_t>(lang);
+  adoptUiFamilyForReader(renderer);
+  return true;
+}
+
 bool SdCardFontSystem::adoptUiFamilyForReader(GfxRenderer& renderer) {
   if (uiFamily_.empty() || SETTINGS.sdFontFamilyName[0] != '\0') return false;
   strncpy(SETTINGS.sdFontFamilyName, uiFamily_.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
