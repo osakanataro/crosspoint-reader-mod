@@ -324,14 +324,17 @@ bool SdCardFontSystem::applyUiLanguage(GfxRenderer& renderer, const Language lan
     drawable = true;
   } else {
     if (!uiFamily_.empty()) {
-      unloadUiFamily(renderer);  // loaded for another language
+      // Loaded for another language, in place of the reader family's UI sizes,
+      // which may draw this one.
+      unloadUiFamily(renderer);
+      drawable = uiDrawsLetters(renderer, letters, /*builtinOnly=*/false);
     }
     // A search reads every candidate's header from the card; repeat it only
     // once the family list or the language changed.
     const uint32_t generation = registry_.generation();
     const bool searchedInVain =
         generation == uiSearchFailedGeneration_ && static_cast<int>(lang) == uiSearchFailedLanguage_;
-    if (!searchedInVain) {
+    if (!drawable && !searchedInVain) {
       // A family that fails to load (bad file, or low heap) counts as not
       // drawing; the search runs again once the families or the reader change.
       drawable = loadUiFamily(renderer, letters);
