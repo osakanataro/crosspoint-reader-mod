@@ -13,6 +13,7 @@
 #include "CrossPointSettings.h"
 #include "HapticFeedback.h"
 #include "OpdsServerStore.h"
+#include "UiLangTiming.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -76,7 +77,14 @@ void ActivityManager::renderTaskLoop() {
       // Night mode is a global output polarity applied to every activity.
       // The sleep screen forces normal polarity itself (SleepActivity).
       display.setInverted(SETTINGS.screenInverted != 0);
+#ifdef UILANG_TIMING
+      const unsigned long t = millis();
+      const std::string activityName = currentActivity->name;
       currentActivity->render(std::move(lock));
+      UILANG_TIMING_NOTE("render %s %lu ms", activityName.c_str(), millis() - t);
+#else
+      currentActivity->render(std::move(lock));
+#endif
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
@@ -91,6 +99,13 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
+#ifdef UILANG_TIMING
+  static unsigned long lastFlush = 0;
+  if (millis() - lastFlush > 2000) {
+    lastFlush = millis();
+    UiLangTiming::flush();
+  }
+#endif
   if (mappedInput.consumeSuppressedRelease()) return;
 
   if (currentActivity && currentActivity->requiresExclusiveStorageLoop()) {

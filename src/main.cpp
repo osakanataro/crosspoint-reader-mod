@@ -31,6 +31,7 @@
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "UiLangTiming.h"
 #include "UiLanguagePackStore.h"
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
@@ -191,6 +192,10 @@ static void silentRestartTo(const uint32_t target, const char* targetName) {
   // selectorIndex=0 opens the most-recent book, looking like a trampoline back
   // to the reader they just exited.
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+#ifdef UILANG_TIMING
+  UILANG_TIMING_NOTE("restart");
+  UiLangTiming::flush();
+#endif
   delay(50);
   ESP.restart();
 }
@@ -213,6 +218,10 @@ static void silentRestartIntoWifiFlow(const uint32_t target, const char* targetN
   armSilentReboot(target);
   LOG_DBG("MAIN", "Silent restart (target=%s)", targetName);
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+#ifdef UILANG_TIMING
+  UILANG_TIMING_NOTE("restart");
+  UiLangTiming::flush();
+#endif
   delay(50);
   ESP.restart();
 }
@@ -525,7 +534,11 @@ void setup() {
   timezones::applyToClock();
   RECENT_BOOKS.loadFromFile();
   I18N.setPackLoader(UiLanguagePackStore::load);
-  I18N.setLanguage(static_cast<Language>(SETTINGS.language));
+  {
+    [[maybe_unused]] const unsigned long t = micros();
+    [[maybe_unused]] const bool ok = I18N.setLanguage(static_cast<Language>(SETTINGS.language));
+    UILANG_TIMING_NOTE("boot setLanguage(%u) ok=%d %lu us", SETTINGS.language, ok, micros() - t);
+  }
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
@@ -683,6 +696,10 @@ void setup() {
   }
 
   allowSleepAt = millis() + 2000;
+#ifdef UILANG_TIMING
+  UiLangTiming::benchmarkStrings();
+  UiLangTiming::flush();
+#endif
 }
 
 void loop() {

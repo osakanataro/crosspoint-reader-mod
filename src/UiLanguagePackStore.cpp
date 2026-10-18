@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "UiLangTiming.h"
+
 #if I18N_LANGUAGE_PACKS
 #include <Arduino.h>
 #include <esp_partition.h>
@@ -230,16 +232,23 @@ bool load(const Language lang, LangStrings& out) {
   packPath(lang, path, sizeof(path));
 
   const unsigned long start = millis();
+  [[maybe_unused]] const unsigned long startUs = micros();
   StoreHeader stored{};
   const bool inFlash = storeHolds(code, stored);
   HalFile file;
   PackHeader pack{};
   const bool onCard =
       Storage.exists(path) && Storage.openFileForRead("LANG", path, file) && readPackHeader(file, code, pack);
+  UILANG_TIMING_NOTE("load %s check flash=%d card=%d same=%d %lu us", path, inFlash, onCard,
+                     inFlash && onCard && stored.packCrc == pack.crc32, micros() - startUs);
 
   // The card's pack wins when it differs from the copy (an updated translation).
   if (onCard && (!inFlash || stored.packCrc != pack.crc32)) {
-    if (install(file, pack, code) && storeHolds(code, stored)) {
+    [[maybe_unused]] const unsigned long installUs = micros();
+    const bool installed = install(file, pack, code);
+    UILANG_TIMING_NOTE("load %s install ok=%d %lu us (%u bytes)", path, installed, micros() - installUs,
+                       static_cast<unsigned>(pack.dataSize));
+    if (installed && storeHolds(code, stored)) {
       LOG_INF("LANG", "Copied %s to flash in %lu ms", path, millis() - start);
     } else if (!storeHolds(code, stored)) {
       return false;

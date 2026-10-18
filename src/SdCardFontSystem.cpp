@@ -15,6 +15,7 @@
 
 #include "CrossPointSettings.h"
 #include "ReaderFontSizes.h"
+#include "UiLangTiming.h"
 #include "fontIds.h"
 
 namespace {
@@ -392,7 +393,10 @@ void SdCardFontSystem::findDrawableLanguages(const GfxRenderer& renderer, const 
 }
 
 bool SdCardFontSystem::switchUiLanguage(GfxRenderer& renderer, const Language lang) {
-  if (!applyUiLanguage(renderer, lang)) return false;
+  [[maybe_unused]] const unsigned long t = millis();
+  [[maybe_unused]] const bool shown = applyUiLanguage(renderer, lang);
+  UILANG_TIMING_NOTE("switchUiLanguage(%u) shown=%d %lu ms", static_cast<unsigned>(lang), shown, millis() - t);
+  if (!shown) return false;
   SETTINGS.language = static_cast<uint8_t>(lang);
   adoptUiFamilyForReader(renderer);
   return true;
