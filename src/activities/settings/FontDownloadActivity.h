@@ -159,6 +159,8 @@ class FontDownloadActivity final : public UiListActivity {
   void promptDeleteSelectedFamily();
   void onDeleteConfirmationResult(const ActivityResult& result);
   int familyIndexFromList(int listIndex) const;
+  // Index into families_ of the family called `name`, or -1.
+  int findFamily(const char* name) const;
   int listItemCount() const;
   bool hasGroupScreen() const { return !scriptGroupLabels_.empty(); }
   int groupListItemCount() const { return 1 + static_cast<int>(scriptGroupLabels_.size()); }

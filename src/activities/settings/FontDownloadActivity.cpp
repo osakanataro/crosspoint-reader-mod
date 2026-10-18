@@ -26,6 +26,27 @@
 
 namespace fui = freeink::ui;
 
+namespace {
+
+// The family the list opens on when a UI language needs a font. Languages the
+// built-in fonts draw have none.
+const char* defaultFamilyName(const Language lang) {
+  switch (lang) {
+    case Language::JA:
+      return "NotoSansJP";
+    case Language::KO:
+      return "RIDIBatang";
+    case Language::ZH_HANS:
+      return "NotoSansSC";
+    case Language::ZH_HANT:
+      return "NotoSansTC";
+    default:
+      return nullptr;
+  }
+}
+
+}  // namespace
+
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                            const Language adoptLanguage)
     : UiListActivity("FontDownload", renderer, mappedInput),
@@ -144,12 +165,25 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
-  if (!hasGroupScreen()) buildFilteredIndices(0);
+  // Open on the language's default family, in its first script group.
+  const int defaultFamily = findFamily(defaultFamilyName(adoptLanguage_));
+  int groupListIndex = 0;
+  if (defaultFamily >= 0 && hasGroupScreen() && families_[defaultFamily].scriptMask != 0) {
+    groupListIndex = __builtin_ctz(families_[defaultFamily].scriptMask) + 1;
+  }
+  if (!hasGroupScreen() || defaultFamily >= 0) buildFilteredIndices(groupListIndex);
 
   {
     RenderLock lock(*this);
     rowsDirty_ = true;  // families_ just loaded
-    if (hasGroupScreen()) {
+    if (defaultFamily >= 0) {
+      groupNav_.reset();
+      groupNav_.selected = groupListIndex;
+      nav.reset();
+      const auto it = std::find(filteredIndices_.begin(), filteredIndices_.end(), defaultFamily);
+      nav.selected = specialRowCount() + static_cast<int>(std::distance(filteredIndices_.begin(), it));
+      state_ = FAMILY_LIST;
+    } else if (hasGroupScreen()) {
       groupNav_.reset();
       state_ = GROUP_LIST;
     } else {
@@ -479,6 +513,14 @@ int FontDownloadActivity::familyIndexFromList(const int listIndex) const {
   const int filteredIndex = listIndex - specialRowCount();
   if (filteredIndex < 0 || filteredIndex >= static_cast<int>(filteredIndices_.size())) return -1;
   return filteredIndices_[filteredIndex];
+}
+
+int FontDownloadActivity::findFamily(const char* name) const {
+  if (name == nullptr) return -1;
+  for (int familyIndex = 0; familyIndex < static_cast<int>(families_.size()); familyIndex++) {
+    if (strcmp(str(families_[familyIndex].name), name) == 0) return familyIndex;
+  }
+  return -1;
 }
 
 int FontDownloadActivity::groupMemberCount(const int scriptGroupIndex) const {
