@@ -67,6 +67,7 @@ If you'd like to add your name to this list, please open a PR adding yourself an
 - [hajisan](https://github.com/hajisan)
 
 ## Japanese
+- [aBER0724](https://github.com/aBER0724) (from crosspoint-reader-cjk)
 - [eszter007](https://github.com/eszter007) (from matcha-reader)
 - [osakanataro](https://github.com/osakanataro)
 
