@@ -29,7 +29,11 @@ class SdCardFontManager {
   // or loading failed.
   int loadFamilyExtraSize(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize);
 
-  // Unload everything, unregister from renderer.
+  // True when fontId is one of this manager's loaded fonts.
+  bool ownsFont(int fontId) const;
+
+  // Unload this manager's fonts, unregister them and the UI fallbacks that
+  // point at them from the renderer.
   void unloadAll(GfxRenderer& renderer);
 
   // Look up the font ID for the loaded family. Returns 0 if nothing loaded
