@@ -154,6 +154,11 @@ void LanguagePackUpdateActivity::render(RenderLock&&) {
     case FAILED:
       renderer.drawCenteredText(UI_12_FONT_ID, midY - 20, tr(STR_UPDATE_FAILED), true, EpdFontFamily::BOLD);
       if (error_ != StrId::STR_UPDATE_FAILED) renderer.drawCenteredText(UI_10_FONT_ID, midY + 10, I18N.get(error_));
+      // Packs replaced before the failure stay replaced.
+      if (!updated_.empty()) {
+        const std::string done = std::string(tr(STR_UPDATE_COMPLETE)) + ": " + updated_;
+        renderer.drawCenteredText(UI_10_FONT_ID, midY + 40, done.c_str());
+      }
       break;
   }
 
