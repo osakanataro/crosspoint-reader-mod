@@ -56,6 +56,38 @@ void LanguagePackDownloadActivity::onWifiSelectionComplete(const bool connected)
   requestUpdate();
 }
 
+bool LanguagePackDownloadActivity::fetchPack(const Language lang, const char* tmpPath, StrId& error) {
+  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
+      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
+    LOG_ERR("LANG", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    error = StrId::STR_MEMORY_ERROR;
+    return false;
+  }
+
+  char path[32];
+  UiLanguagePackStore::packPath(lang, path, sizeof(path));
+  const char* name = path + sizeof("/lang/") - 1;
+  const std::string url = std::string(LANG_PACK_BASE_URL) + name;
+
+  Storage.mkdir("/lang");
+  // No HTTP downgrade: nothing outside the pack itself vouches for its bytes.
+  const auto result = HttpDownloader::downloadToFile(url, tmpPath, nullptr);
+  if (result != HttpDownloader::OK) {
+    LOG_ERR("LANG", "Download of %s failed (%d, HTTP %d)", url.c_str(), static_cast<int>(result),
+            HttpDownloader::lastStatus());
+    Storage.remove(tmpPath);
+    error = StrId::STR_DOWNLOAD_FAILED;
+    return false;
+  }
+  // Only an intact pack replaces the card's copy.
+  if (!UiLanguagePackStore::isValidPack(lang, tmpPath)) {
+    Storage.remove(tmpPath);
+    error = StrId::STR_DOWNLOAD_FAILED;
+    return false;
+  }
+  return true;
+}
+
 bool LanguagePackDownloadActivity::download() {
   {
     // TLS needs more heap than the loaded SD fonts leave on X3. The downloading
@@ -64,35 +96,10 @@ bool LanguagePackDownloadActivity::download() {
     if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
     sdFontSystem.unloadAll(renderer);
   }
-  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
-      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
-    LOG_ERR("LANG", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
-    error_ = StrId::STR_MEMORY_ERROR;
-    return false;
-  }
-
   char path[32];
   UiLanguagePackStore::packPath(lang_, path, sizeof(path));
-  const char* name = path + sizeof("/lang/") - 1;
-  const std::string url = std::string(LANG_PACK_BASE_URL) + name;
   const std::string tmpPath = std::string(path) + ".tmp";
-
-  Storage.mkdir("/lang");
-  // No HTTP downgrade: nothing outside the pack itself vouches for its bytes.
-  const auto result = HttpDownloader::downloadToFile(url, tmpPath, nullptr);
-  if (result != HttpDownloader::OK) {
-    LOG_ERR("LANG", "Download of %s failed (%d, HTTP %d)", url.c_str(), static_cast<int>(result),
-            HttpDownloader::lastStatus());
-    Storage.remove(tmpPath.c_str());
-    error_ = StrId::STR_DOWNLOAD_FAILED;
-    return false;
-  }
-  // Only an intact pack replaces the card's copy.
-  if (!UiLanguagePackStore::isValidPack(lang_, tmpPath.c_str())) {
-    Storage.remove(tmpPath.c_str());
-    error_ = StrId::STR_DOWNLOAD_FAILED;
-    return false;
-  }
+  if (!fetchPack(lang_, tmpPath.c_str(), error_)) return false;
   // Keeps the old pack if the replace fails.
   if (!Storage.replaceFile(tmpPath.c_str(), path)) {
     LOG_ERR("LANG", "Replacing %s failed", path);

@@ -17,7 +17,8 @@ class LanguageSelectActivity final : public UiListActivity {
   void onEnter() override;
 
  private:
-  int listCount() const override { return totalItems; }
+  // The languages, then the row that updates the language files on the card.
+  int listCount() const override { return totalItems + 1; }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
   // Saves `chosen` if a font now draws it; otherwise keeps the saved language,
@@ -35,7 +36,7 @@ class LanguageSelectActivity final : public UiListActivity {
   // onEnter() — activateIndex() finishes the activity immediately on
   // selection, so buildScreen() never needs to see a different "Selected"
   // row within one visit.
-  freeink::ui::ListItem rowItems[totalItems]{};
+  freeink::ui::ListItem rowItems[totalItems + 1]{};
   // Row values, translated in buildScreen() (see there).
   enum class RowMark : uint8_t { None, Selected, NeedsDownload };
   RowMark rowMarks[totalItems]{};

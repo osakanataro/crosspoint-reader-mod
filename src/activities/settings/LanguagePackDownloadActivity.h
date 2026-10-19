@@ -25,6 +25,10 @@ class LanguagePackDownloadActivity final : public Activity {
   bool preventAutoSleep() override { return state_ == DOWNLOADING; }
   void render(RenderLock&&) override;
 
+  // Downloads `lang`'s pack to `tmpPath` and keeps it only if load() would
+  // accept it. On failure sets `error`. Needs Wi-Fi and the SD fonts unloaded.
+  static bool fetchPack(Language lang, const char* tmpPath, StrId& error);
+
  private:
   enum State { WIFI_SELECTION, DOWNLOADING, COMPLETE, FAILED };
 

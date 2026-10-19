@@ -11,6 +11,7 @@
 #include "FontDownloadActivity.h"
 #include "I18nKeys.h"
 #include "LanguagePackDownloadActivity.h"
+#include "LanguagePackUpdateActivity.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
@@ -69,6 +70,12 @@ void LanguageSelectActivity::activateIndex(const int index) {
   // unrelated element on the next render.
   app.clearTapFlash();
   nav.selected = index;
+  if (index == totalItems) {
+    // Wi-Fi is used only here, on request; the exit reboots.
+    startActivityForResult(std::make_unique<LanguagePackUpdateActivity>(renderer, mappedInput),
+                           [this](const ActivityResult&) { finish(); });
+    return;
+  }
   const uint8_t langIndex = SORTED_LANGUAGE_INDICES[index];
 
   const auto chosen = static_cast<Language>(langIndex);
@@ -159,9 +166,11 @@ void LanguageSelectActivity::buildScreen(UiScreen& screen) {
                         : rowMarks[i] == RowMark::NeedsDownload ? tr(STR_LANGUAGE_NEEDS_DOWNLOAD)
                                                                 : nullptr;
   }
+  rowItems[totalItems].label = tr(STR_UPDATE_LANGUAGE_FILES);
+  rowItems[totalItems].actionValue = static_cast<int16_t>(totalItems);
   fui::ListProps props;
   props.items = rowItems;
-  props.count = static_cast<uint16_t>(totalItems);
+  props.count = static_cast<uint16_t>(totalItems + 1);
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;  // physical buttons stay in loop()
   // Label at the value's font size: both sides of the row read as one unit.
