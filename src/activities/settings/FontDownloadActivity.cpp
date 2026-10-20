@@ -968,6 +968,9 @@ bool FontDownloadActivity::handleCustomInput() {
       requestUpdate();
     } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
       if (downloadingFamilyIndex_ >= 0 && downloadingFamilyIndex_ < static_cast<int>(families_.size())) {
+        // A retry fetches the failed family again from its first file.
+        currentFileIndex_ = 0;
+        currentFileTotal_ = families_[downloadingFamilyIndex_].fileCount;
         downloadFamily(families_[downloadingFamilyIndex_]);
         requestUpdateAndWait();
         return true;
@@ -984,6 +987,9 @@ bool FontDownloadActivity::handleCustomInput() {
       int y = 0;
       if (mappedInput.wasScreenTapped(x, y)) {
         if (downloadingFamilyIndex_ >= 0 && downloadingFamilyIndex_ < static_cast<int>(families_.size())) {
+          // A retry fetches the failed family again from its first file.
+          currentFileIndex_ = 0;
+          currentFileTotal_ = families_[downloadingFamilyIndex_].fileCount;
           downloadFamily(families_[downloadingFamilyIndex_]);
           requestUpdateAndWait();
           return true;
