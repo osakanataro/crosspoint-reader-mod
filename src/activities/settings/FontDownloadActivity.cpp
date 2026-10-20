@@ -576,6 +576,15 @@ size_t FontDownloadActivity::totalUpdateSize() const {
   return total;
 }
 
+// Loaded SD fonts keep the file's glyph index from load time, so a replaced or
+// deleted file they read from draws garbage until they are loaded again.
+void FontDownloadActivity::reloadFontsIfUsing(const char* familyName) {
+  if (!sdFontSystem.usesFamily(familyName)) return;
+  RenderLock lock(*this);
+  sdFontSystem.markRegistryDirty();
+  sdFontSystem.ensureLoaded(renderer);
+}
+
 // Standard CRC32 matching zlib/Python zlib.crc32().
 bool FontDownloadActivity::computeFileCrc32(const char* path, uint32_t& outCrc) {
   HalFile f;
@@ -673,6 +682,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       if (goHomeRequested_) {
@@ -690,6 +700,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (result != HttpDownloader::OK) {
       LOG_ERR("FONT", "Download failed: %s (%d)", str(file.name), result);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -702,6 +713,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (!computeFileCrc32(destPath, actualCrc)) {
       LOG_ERR("FONT", "Failed to open file for CRC check: %s", destPath);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -712,6 +724,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (actualCrc != file.crc32) {
       LOG_ERR("FONT", "CRC32 mismatch for %s: got %08x expected %08x", str(file.name), actualCrc, file.crc32);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -724,6 +737,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (!fontInstaller_.validateCpfontFile(destPath)) {
       LOG_ERR("FONT", "Invalid .cpfont: %s", destPath);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -731,6 +745,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
       errorMessage_ = std::string("Invalid font file: ") + str(file.name);
       return;
     }
+    reloadFontsIfUsing(str(family.name));
     currentFileIndex_++;
   }
 
@@ -776,6 +791,7 @@ void FontDownloadActivity::onDeleteConfirmationResult(const ActivityResult& resu
     errorMessage_ = "Failed to delete font";
   } else {
     fontInstaller_.refreshRegistry();
+    reloadFontsIfUsing(str(family.name));
     family.installed = false;
     family.hasUpdate = false;
     // Unlike the other family_ mutations, this one stays in FAMILY_LIST (no
