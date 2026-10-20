@@ -95,6 +95,15 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
                                  sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(int8_t) +
                                  sizeof(uint8_t) + sizeof(bool);
+
+// For the lookups that read a LUT straight from the file: a file left by
+// another layout version would answer with that layout's pages.
+bool hasCurrentLayout(HalFile& f) {
+  if (f.size() < HEADER_SIZE) return false;
+  uint8_t version;
+  serialization::readPod(f, version);
+  return version == SECTION_FILE_VERSION || version == SECTION_FILE_PARTIAL_VERSION;
+}
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -915,7 +924,7 @@ std::optional<uint16_t> Section::getCachedPageCount() const {
 
 std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!Storage.openFileForRead("SCT", filePath, f) || !hasCurrentLayout(f)) {
     return std::nullopt;
   }
 
@@ -948,7 +957,7 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
 
 std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!Storage.openFileForRead("SCT", filePath, f) || !hasCurrentLayout(f)) {
     return std::nullopt;
   }
 
@@ -987,7 +996,7 @@ std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex)
 
 std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!Storage.openFileForRead("SCT", filePath, f) || !hasCurrentLayout(f)) {
     return std::nullopt;
   }
 
@@ -1019,7 +1028,7 @@ std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) c
 
 std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!Storage.openFileForRead("SCT", filePath, f) || !hasCurrentLayout(f)) {
     return std::nullopt;
   }
 
