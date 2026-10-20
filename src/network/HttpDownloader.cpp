@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <Logging.h>
 #include <ResumableFetch.h>
+#include <lwip/dns.h>
+#include <lwip/tcpip.h>
 
 #include <functional>
 #include <string>
@@ -22,6 +24,17 @@ int g_lastStatus = 0;
 // Whether the last answer came from another origin than the request started at.
 bool g_lastRedirected = false;
 
+// Arduino-ESP32 3.3's hostByName() clears the DNS cache without the lwIP core
+// lock on its first lookup after the IP state changes. A lookup SNTP still has
+// pending then runs its callback, which rearms timers, and lwIP asserts
+// (crosspoint-reader#3048). Clearing the cache here, under the lock, first
+// leaves no pending lookup for that unlocked clear to call back.
+void clearDnsCacheLocked() {
+  LOCK_TCPIP_CORE();
+  dns_clear_cache();
+  UNLOCK_TCPIP_CORE();
+}
+
 // All HTTP(S) fetches go through wolfSSL (the firmware's only TLS stack: it
 // speaks TLS 1.3 and reads large bodies reliably). Plain-http URLs still use a
 // WiFiClient here, so this is safe for non-TLS targets too. A body cut short
@@ -32,6 +45,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
                                            const freeink::FetchSink& sink, const bool* cancelFlag = nullptr,
                                            size_t* bytesOut = nullptr, const bool downgradeRedirectsToHttp = false) {
   WifiPowerSaveGuard psGuard;
+  clearDnsCacheLocked();
   freeink::FetchOptions options;
   options.redirectToHttp = downgradeRedirectsToHttp;
   bool answeredBySameOrigin = true;

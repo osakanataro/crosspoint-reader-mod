@@ -1,5 +1,7 @@
 #pragma once
 
+#include <I18nKeys.h>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -28,7 +30,10 @@
 
 class FontDownloadActivity final : public UiListActivity {
  public:
-  explicit FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
+  // `adoptLanguage`: the UI language to switch to on exit if a font drawing it
+  // is then on the card (the language picker sends it here for a font).
+  explicit FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                Language adoptLanguage = Language::_COUNT);
 
   void onEnter() override;
   void onExit() override;
@@ -77,6 +82,7 @@ class FontDownloadActivity final : public UiListActivity {
   static constexpr size_t MAX_SCRIPT_GROUPS = 32;
 
   State state_ = WIFI_SELECTION;
+  const Language adoptLanguage_;
   FontInstaller fontInstaller_;
 
   // Manifest data
@@ -133,6 +139,7 @@ class FontDownloadActivity final : public UiListActivity {
   void activateSelected();
 
   void onWifiSelectionComplete(bool success);
+  void adoptLanguageIfDrawable();
   bool fetchAndParseManifest();
   // cppcheck-suppress arithOperationsOnVoidPointer // unique_ptr<char[]>::get() is char*, not void*
   const char* str(StrRef ref) const { return stringArena_ ? stringArena_.get() + ref : ""; }
@@ -140,6 +147,7 @@ class FontDownloadActivity final : public UiListActivity {
   bool internString(const char* text, StrRef& outRef);
   void clearManifest();
   void downloadFamily(ManifestFamily& family);
+  void reloadFontsIfUsing(const char* familyName);
   void downloadAll();
   void updateAll();
   static bool computeFileCrc32(const char* path, uint32_t& outCrc);
@@ -152,6 +160,8 @@ class FontDownloadActivity final : public UiListActivity {
   void promptDeleteSelectedFamily();
   void onDeleteConfirmationResult(const ActivityResult& result);
   int familyIndexFromList(int listIndex) const;
+  // Index into families_ of the family called `name`, or -1.
+  int findFamily(const char* name) const;
   int listItemCount() const;
   bool hasGroupScreen() const { return !scriptGroupLabels_.empty(); }
   int groupListItemCount() const { return 1 + static_cast<int>(scriptGroupLabels_.size()); }

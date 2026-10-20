@@ -150,8 +150,8 @@ What this means in practice:
 
 ### UI Languages That Need an SD Font
 
-Some UI languages use letters the built-in UI fonts do not have (Japanese for
-now). For these, CrossPoint draws the UI with an SD font:
+Some UI languages use letters the built-in UI fonts do not have (Japanese,
+Chinese and Korean for now). For these, CrossPoint draws the UI with an SD font:
 
 - At build time, `scripts/gen_i18n.py` lists the letters each language's
   strings use (`I18n::getUiLetters()`).

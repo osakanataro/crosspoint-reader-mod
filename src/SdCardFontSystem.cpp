@@ -5,6 +5,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <SdCardFont.h>
 #include <TtfEpdFont.h>
 #include <Utf8.h>
 #include <esp_heap_caps.h>
@@ -349,8 +350,56 @@ bool SdCardFontSystem::applyUiLanguage(GfxRenderer& renderer, const Language lan
     LOG_INF("SDFS", "No font on the card draws %s; showing the UI in English", I18N.getLanguageName(lang));
   }
   uiLanguageLoggedMissing_ = drawable ? Language::_COUNT : lang;
-  I18N.setLanguage(drawable ? lang : Language::EN);
-  return drawable;
+  // A language that is not built in may still fail here: its SD pack is damaged.
+  return I18N.setLanguage(drawable ? lang : Language::EN) && drawable;
+}
+
+void SdCardFontSystem::findDrawableLanguages(const GfxRenderer& renderer, const Language* langs, const size_t count,
+                                             bool* drawable) {
+  size_t missing = 0;
+  for (size_t i = 0; i < count; i++) {
+    drawable[i] = uiDrawsLetters(renderer, I18n::getUiLetters(langs[i]), /*builtinOnly=*/false);
+    if (!drawable[i]) missing++;
+  }
+  const auto& fonts = renderer.getFontMap();
+  const auto builtin = fonts.find(kUiFontSizes[0].fontId);
+  if (builtin == fonts.end()) return;
+  for (const auto& family : registry_.getFamilies()) {
+    if (missing == 0) return;
+    // Same candidates as applyUiLanguage(): the reader family is one only while
+    // a UI family stands in for its UI sizes. The sizes come from one source
+    // font, so the smallest stands for all three.
+    if (family.vector || (family.name == manager_.currentFamilyName() && uiFamily_.empty()) ||
+        !std::all_of(std::begin(kUiFontSizes), std::end(kUiFontSizes),
+                     [&](const UiFontSize& ui) { return family.findFile(ui.pointSize) != nullptr; })) {
+      continue;
+    }
+    // load() reads the header and the coverage intervals only.
+    auto font = makeUniqueNoThrow<SdCardFont>();
+    if (!font || !font->load(family.findFile(kUiFontSizes[0].pointSize)->path.c_str())) continue;
+    const EpdFont* regular = font->getEpdFont(0);
+    if (regular == nullptr) continue;
+    for (size_t i = 0; i < count; i++) {
+      if (drawable[i]) continue;
+      auto cursor = reinterpret_cast<const unsigned char*>(I18n::getUiLetters(langs[i]));
+      uint32_t cp;
+      bool all = true;
+      while (all && (cp = utf8NextCodepoint(&cursor))) {
+        all = builtin->second.hasCodepoint(cp) || regular->hasCodepoint(cp);
+      }
+      if (all) {
+        drawable[i] = true;
+        missing--;
+      }
+    }
+  }
+}
+
+bool SdCardFontSystem::switchUiLanguage(GfxRenderer& renderer, const Language lang) {
+  if (!applyUiLanguage(renderer, lang)) return false;
+  SETTINGS.language = static_cast<uint8_t>(lang);
+  adoptUiFamilyForReader(renderer);
+  return true;
 }
 
 bool SdCardFontSystem::adoptUiFamilyForReader(GfxRenderer& renderer) {
@@ -395,6 +444,19 @@ bool SdCardFontSystem::loadUiFamily(GfxRenderer& renderer, const char* letters) 
   }
   std::fill(std::begin(uiFontIds_), std::end(uiFontIds_), 0);
   return false;
+}
+
+bool SdCardFontSystem::builtinFontsDrawUi(const GfxRenderer& renderer) const {
+  return uiDrawsLetters(renderer, I18n::getUiLetters(I18N.getLanguage()), /*builtinOnly=*/true);
+}
+
+void SdCardFontSystem::unloadAll(GfxRenderer& renderer) {
+  unloadUiFamily(renderer);
+  manager_.unloadAll(renderer);
+#if CROSSPOINT_VECTOR_FONTS
+  unloadTtf(renderer);
+#endif
+  uiSearchFailedLanguage_ = -1;  // the reader family is a UI candidate again
 }
 
 void SdCardFontSystem::unloadUiFamily(GfxRenderer& renderer) {

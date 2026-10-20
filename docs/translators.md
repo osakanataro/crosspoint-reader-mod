@@ -70,3 +70,12 @@ If you'd like to add your name to this list, please open a PR adding yourself an
 - [aBER0724](https://github.com/aBER0724) (from crosspoint-reader-cjk)
 - [eszter007](https://github.com/eszter007) (from matcha-reader)
 - [osakanataro](https://github.com/osakanataro)
+
+## Chinese (Simplified)
+- [aBER0724](https://github.com/aBER0724) (from crosspoint-reader-cjk)
+
+## Chinese (Traditional)
+- [aBER0724](https://github.com/aBER0724) (from crosspoint-reader-cjk)
+
+## Korean
+- [eunchurn](https://github.com/eunchurn) (from crosspoint-reader-ko)

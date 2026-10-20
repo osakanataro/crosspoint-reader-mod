@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
@@ -25,8 +26,32 @@
 
 namespace fui = freeink::ui;
 
-FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : UiListActivity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
+namespace {
+
+// The family the list opens on when a UI language needs a font. Languages the
+// built-in fonts draw have none.
+const char* defaultFamilyName(const Language lang) {
+  switch (lang) {
+    case Language::JA:
+      return "NotoSansJP";
+    case Language::KO:
+      return "RIDIBatang";
+    case Language::ZH_HANS:
+      return "NotoSansSC";
+    case Language::ZH_HANT:
+      return "NotoSansTC";
+    default:
+      return nullptr;
+  }
+}
+
+}  // namespace
+
+FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                           const Language adoptLanguage)
+    : UiListActivity("FontDownload", renderer, mappedInput),
+      adoptLanguage_(adoptLanguage),
+      fontInstaller_(sdFontSystem.registry()) {}
 
 void FontDownloadActivity::activateIndex(const int index) {
   switch (state_) {
@@ -72,6 +97,24 @@ void FontDownloadActivity::onBackButton() {
 
 void FontDownloadActivity::onEnter() {
   UiListActivity::onEnter();
+  {
+    // TLS needs more heap than the loaded SD fonts leave on X3. When the
+    // built-in fonts draw the UI, nothing here needs them: this activity's
+    // Wi-Fi exit reboots, and adoptLanguageIfDrawable() loads what it uses.
+    RenderLock lock(*this);
+    if (sdFontSystem.builtinFontsDrawUi(renderer)) sdFontSystem.unloadAll(renderer);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    // Handed over from another download on the same Wi-Fi session.
+    onWifiSelectionComplete(true);
+    return;
+  }
+  {
+    // Free glyph caches before Wi-Fi allocates, so caches refilled later do not
+    // split the large free block TLS needs.
+    RenderLock lock(*this);
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
+  }
   WiFi.mode(WIFI_STA);
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
@@ -79,11 +122,22 @@ void FontDownloadActivity::onEnter() {
 
 void FontDownloadActivity::onExit() {
   Activity::onExit();
+  if (adoptLanguage_ != Language::_COUNT) adoptLanguageIfDrawable();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
     silentRestart();
+  }
+}
+
+// Runs from onExit(), which holds the render lock, before the reboot that would
+// otherwise drop the language choice.
+void FontDownloadActivity::adoptLanguageIfDrawable() {
+  if (sdFontSystem.switchUiLanguage(renderer, adoptLanguage_)) {
+    SETTINGS.saveToFile();
+  } else {
+    sdFontSystem.applyUiLanguage(renderer);  // back to the saved language
   }
 }
 
@@ -111,12 +165,25 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
-  if (!hasGroupScreen()) buildFilteredIndices(0);
+  // Open on the language's default family, in its first script group.
+  const int defaultFamily = findFamily(defaultFamilyName(adoptLanguage_));
+  int groupListIndex = 0;
+  if (defaultFamily >= 0 && hasGroupScreen() && families_[defaultFamily].scriptMask != 0) {
+    groupListIndex = __builtin_ctz(families_[defaultFamily].scriptMask) + 1;
+  }
+  if (!hasGroupScreen() || defaultFamily >= 0) buildFilteredIndices(groupListIndex);
 
   {
     RenderLock lock(*this);
     rowsDirty_ = true;  // families_ just loaded
-    if (hasGroupScreen()) {
+    if (defaultFamily >= 0) {
+      groupNav_.reset();
+      groupNav_.selected = groupListIndex;
+      nav.reset();
+      const auto it = std::find(filteredIndices_.begin(), filteredIndices_.end(), defaultFamily);
+      nav.selected = specialRowCount() + static_cast<int>(std::distance(filteredIndices_.begin(), it));
+      state_ = FAMILY_LIST;
+    } else if (hasGroupScreen()) {
       groupNav_.reset();
       state_ = GROUP_LIST;
     } else {
@@ -448,6 +515,14 @@ int FontDownloadActivity::familyIndexFromList(const int listIndex) const {
   return filteredIndices_[filteredIndex];
 }
 
+int FontDownloadActivity::findFamily(const char* name) const {
+  if (name == nullptr) return -1;
+  for (int familyIndex = 0; familyIndex < static_cast<int>(families_.size()); familyIndex++) {
+    if (strcmp(str(families_[familyIndex].name), name) == 0) return familyIndex;
+  }
+  return -1;
+}
+
 int FontDownloadActivity::groupMemberCount(const int scriptGroupIndex) const {
   if (scriptGroupIndex < 0 || scriptGroupIndex >= static_cast<int>(scriptGroupLabels_.size())) return 0;
   const uint32_t groupBit = uint32_t{1} << scriptGroupIndex;
@@ -499,6 +574,15 @@ size_t FontDownloadActivity::totalUpdateSize() const {
     if (families_[familyIndex].hasUpdate) total += families_[familyIndex].totalSize;
   }
   return total;
+}
+
+// Loaded SD fonts keep the file's glyph index from load time, so a replaced or
+// deleted file they read from draws garbage until they are loaded again.
+void FontDownloadActivity::reloadFontsIfUsing(const char* familyName) {
+  if (!sdFontSystem.usesFamily(familyName)) return;
+  RenderLock lock(*this);
+  sdFontSystem.markRegistryDirty();
+  sdFontSystem.ensureLoaded(renderer);
 }
 
 // Standard CRC32 matching zlib/Python zlib.crc32().
@@ -598,6 +682,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       if (goHomeRequested_) {
@@ -615,6 +700,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (result != HttpDownloader::OK) {
       LOG_ERR("FONT", "Download failed: %s (%d)", str(file.name), result);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -627,6 +713,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (!computeFileCrc32(destPath, actualCrc)) {
       LOG_ERR("FONT", "Failed to open file for CRC check: %s", destPath);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -637,6 +724,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (actualCrc != file.crc32) {
       LOG_ERR("FONT", "CRC32 mismatch for %s: got %08x expected %08x", str(file.name), actualCrc, file.crc32);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -649,6 +737,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (!fontInstaller_.validateCpfontFile(destPath)) {
       LOG_ERR("FONT", "Invalid .cpfont: %s", destPath);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -656,6 +745,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
       errorMessage_ = std::string("Invalid font file: ") + str(file.name);
       return;
     }
+    reloadFontsIfUsing(str(family.name));
     currentFileIndex_++;
   }
 
@@ -701,6 +791,7 @@ void FontDownloadActivity::onDeleteConfirmationResult(const ActivityResult& resu
     errorMessage_ = "Failed to delete font";
   } else {
     fontInstaller_.refreshRegistry();
+    reloadFontsIfUsing(str(family.name));
     family.installed = false;
     family.hasUpdate = false;
     // Unlike the other family_ mutations, this one stays in FAMILY_LIST (no
@@ -877,6 +968,9 @@ bool FontDownloadActivity::handleCustomInput() {
       requestUpdate();
     } else if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
       if (downloadingFamilyIndex_ >= 0 && downloadingFamilyIndex_ < static_cast<int>(families_.size())) {
+        // A retry fetches the failed family again from its first file.
+        currentFileIndex_ = 0;
+        currentFileTotal_ = families_[downloadingFamilyIndex_].fileCount;
         downloadFamily(families_[downloadingFamilyIndex_]);
         requestUpdateAndWait();
         return true;
@@ -893,6 +987,9 @@ bool FontDownloadActivity::handleCustomInput() {
       int y = 0;
       if (mappedInput.wasScreenTapped(x, y)) {
         if (downloadingFamilyIndex_ >= 0 && downloadingFamilyIndex_ < static_cast<int>(families_.size())) {
+          // A retry fetches the failed family again from its first file.
+          currentFileIndex_ = 0;
+          currentFileTotal_ = families_[downloadingFamilyIndex_].fileCount;
           downloadFamily(families_[downloadingFamilyIndex_]);
           requestUpdateAndWait();
           return true;
