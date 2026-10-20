@@ -244,6 +244,7 @@ inline bool isUprightInVertical(uint32_t cp) {
   if (cp >= 0x3040 && cp <= 0x309F) return true;  // Hiragana
   if (cp >= 0x30A0 && cp <= 0x30FF) return true;  // Katakana
   if (cp >= 0x3000 && cp <= 0x303F) return true;  // CJK Symbols and Punctuation
+  if (cp >= 0x2E80 && cp <= 0x2FFF) return true;  // CJK/Kangxi radicals, ideographic description chars
   // Halfwidth and Fullwidth Forms is not one class: the fullwidth forms are upright,
   // but halfwidth katakana and halfwidth punctuation (FF61-FF9F) are vo=R in UAX #50
   // and must rotate. Excluding them here routes them to the sideways draw path, which

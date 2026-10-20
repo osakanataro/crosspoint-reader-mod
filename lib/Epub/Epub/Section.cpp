@@ -71,7 +71,8 @@ namespace {
 // v55: A vertical page holding a single image centres it horizontally.
 // v57: The halves of a vertical kana repeat mark (〳〵, 〴〵) are no longer split across lines.
 // v58: SD-font kerning survives requests served from glyphs cached without kerning.
-constexpr uint8_t SECTION_FILE_VERSION = 58;
+// v59: CJK and Kangxi radicals (U+2E80-2FFF) stand upright in vertical text.
+constexpr uint8_t SECTION_FILE_VERSION = 59;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
