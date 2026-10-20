@@ -1,0 +1,10 @@
+# CJK Compatibility Ideographs (U+F900-FAFF) used in Japanese books.
+# Some publishers encode these instead of the unified form. Add one hex
+# codepoint per line. BIZ UD has F999 only; the other faces have all three.
+#
+# F9EC: 溺 (unified U+6EBA)
+# F999: 蓮 (unified U+84EE)
+# F993: 煉 (unified U+7149)
+F9EC
+F999
+F993

@@ -150,6 +150,17 @@ def extract_static_instance(source_path: Path, axes: dict, family_name: str, sty
     return cached
 
 
+def resolve_extra_fallbacks(family: dict) -> list:
+    """Resolve a family's extra_fallbacks ({url: ...} or {path: ...}) to local paths.
+
+    They are tried after DEFAULT_FALLBACK_FONT, in the order listed.
+    """
+    resolved = []
+    for i, spec in enumerate(family.get("extra_fallbacks", [])):
+        resolved.append(resolve_font_path(spec, family["name"], f"fallback{i}"))
+    return resolved
+
+
 def resolve_font_path(style_spec: dict, family_name: str, style_name: str) -> Path:
     """Resolve a style spec (path or url) to a local font file path.
 
@@ -202,6 +213,7 @@ def build_family(
         resolved_styles = {}
         for style_name, style_spec in styles.items():
             resolved_styles[style_name] = resolve_font_path(style_spec, name, style_name)
+        extra_fallbacks = resolve_extra_fallbacks(family)
     except (FileNotFoundError, RuntimeError) as e:
         return name, False, str(e)
 
@@ -216,6 +228,8 @@ def build_family(
         for style_name, font_path in resolved_styles.items():
             cmd.extend([f"--{style_name}", str(font_path)])
             cmd.extend([f"--fallback-{style_name}", str(DEFAULT_FALLBACK_FONT)])
+            for extra in extra_fallbacks:
+                cmd.extend([f"--fallback-{style_name}", str(extra)])
     else:
         # Single-style mode
         style_name = next(iter(resolved_styles))
@@ -223,6 +237,8 @@ def build_family(
         cmd.append(str(font_path))
         cmd.extend(["--style", style_name])
         cmd.extend([f"--fallback-{style_name}", str(DEFAULT_FALLBACK_FONT)])
+        for extra in extra_fallbacks:
+            cmd.extend([f"--fallback-{style_name}", str(extra)])
 
     cmd.extend(["--intervals", intervals])
     cmd.extend(["--sizes", sizes])
@@ -231,6 +247,11 @@ def build_family(
 
     if family.get("force_autohint", False):
         cmd.append("--force-autohint")
+
+    if "codepoints_file" in family:
+        spec = family["codepoints_file"]
+        for entry in [spec] if isinstance(spec, str) else spec:
+            cmd.extend(["--codepoints-file", str(SCRIPT_DIR / entry)])
 
     # Run fontconvert_sdcard.py
     start = time.monotonic()
