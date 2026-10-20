@@ -1,0 +1,8 @@
+# Supplementary-plane kanji (above U+FFFF) used in Japanese books.
+# japanese_jis0213.txt covers the BMP only. Add one hex codepoint per line;
+# the family also needs the "cjk-ext-supplementary" interval preset.
+#
+# 20B9F: 𠮟 (shikaru), the JIS X 0213 form of 叱 (U+53F1).
+# 20BB7: 𠮷 (tsuchiyoshi), a variant of 吉 used in names.
+20B9F
+20BB7

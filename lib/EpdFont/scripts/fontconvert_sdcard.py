@@ -56,6 +56,16 @@ INTERVAL_PRESETS = {
     "punctuation": [(0x2000, 0x206F)],
     "cjk":         [(0x3000, 0x303F), (0x3040, 0x309F), (0x30A0, 0x30FF),
                     (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0xFF00, 0xFFEF)],
+    # JIS X 0213 symbol rows the "cjk" preset lacks: letterlike symbols, circled
+    # numbers, Kangxi radicals, enclosed and unit forms, and CJK presentation forms.
+    "cjk-symbols": [(0x2100, 0x214F), (0x2312, 0x2312), (0x2318, 0x2318),
+                    (0x2460, 0x24FF), (0x29BF, 0x29BF), (0x2B05, 0x2B07), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50),
+                    (0x2E80, 0x2EFF), (0x2F00, 0x2FDF), (0x3190, 0x319F),
+                    (0x31F0, 0x31FF), (0x3200, 0x32FF), (0x3300, 0x33FF),
+                    (0xFE10, 0xFE19), (0xFE30, 0xFE4F)],
+    # Supplementary-plane ideographs. Use only with --codepoints-file, which keeps
+    # just the listed codepoints of this range.
+    "cjk-ext-supplementary": [(0x20000, 0x2FFFF)],
     "hangul":      [(0xAC00, 0xD7AF), (0x1100, 0x11FF), (0x3130, 0x318F)],
     "cherokee":    [(0x13A0, 0x13FF), (0xAB70, 0xABBF)],
     "tifinagh":    [(0x2D30, 0x2D7F)],
@@ -237,6 +247,83 @@ def extract_ligature_glyph_indices_fonttools(font_path):
                         lig_cp = STANDARD_LIGATURE_MAP.get(seq)
                         if lig_cp is not None and lig_cp not in cmap:
                             overrides[lig_cp] = glyph_indices[lig.LigGlyph]
+
+    font.close()
+    return overrides
+
+
+# Presentation form -> base punctuation whose 'vert' alternate has the same shape.
+# Used when a face has the vertical glyph but no cmap entry for the form (BIZ UD).
+VERTICAL_FORM_BASE = {
+    0xFE10: 0xFF0C,  # ︐ <- ，
+    0xFE11: 0x3001,  # ︑ <- 、
+    0xFE12: 0x3002,  # ︒ <- 。
+    0xFE13: 0xFF1A,  # ︓ <- ：
+    0xFE14: 0xFF1B,  # ︔ <- ；
+    0xFE15: 0xFF01,  # ︕ <- ！
+    0xFE16: 0xFF1F,  # ︖ <- ？
+    0xFE17: 0x3016,  # ︗ <- 〖
+    0xFE18: 0x3017,  # ︘ <- 〗
+    0xFE19: 0x2026,  # ︙ <- …
+    # FE31 uses U+2015, not the U+2014 of its decomposition: BIZ UD has a vert
+    # alternate only for U+2015.
+    0xFE30: 0x2025,  # ︰ <- ‥
+    0xFE31: 0x2015,  # ︱ <- ―
+    0xFE35: 0xFF08,  # ︵ <- （
+    0xFE36: 0xFF09,  # ︶ <- ）
+    0xFE37: 0xFF5B,  # ︷ <- ｛
+    0xFE38: 0xFF5D,  # ︸ <- ｝
+    0xFE39: 0x3014,  # ︹ <- 〔
+    0xFE3A: 0x3015,  # ︺ <- 〕
+    0xFE3B: 0x3010,  # ︻ <- 【
+    0xFE3C: 0x3011,  # ︼ <- 】
+    0xFE3D: 0x300A,  # ︽ <- 《
+    0xFE3E: 0x300B,  # ︾ <- 》
+    0xFE3F: 0x3008,  # ︿ <- 〈
+    0xFE40: 0x3009,  # ﹀ <- 〉
+    0xFE41: 0x300C,  # ﹁ <- 「
+    0xFE42: 0x300D,  # ﹂ <- 」
+    0xFE43: 0x300E,  # ﹃ <- 『
+    0xFE44: 0x300F,  # ﹄ <- 』
+    # Not mapped: FE32 (BIZ UD has no vert en dash) and FE33/FE34, which share
+    # the base U+FF3F and so cannot be told apart.
+}
+
+
+def extract_vertical_forms_fonttools(font_path):
+    """Map vertical presentation forms without a cmap entry to 'vert' alternate glyph IDs.
+
+    A vert alternate keeps the base glyph's advance, so it rasterizes as a drop-in cell.
+    """
+    from fontTools.ttLib import TTFont
+
+    font = TTFont(font_path)
+    cmap = font.getBestCmap() or {}
+    glyph_indices = {gname: index for index, gname in enumerate(font.getGlyphOrder())}
+    overrides = {}
+
+    vert_map = {}
+    if 'GSUB' in font:
+        gsub = font['GSUB'].table
+        if gsub.FeatureList:
+            vert_lookup_indices = set()
+            for fr in gsub.FeatureList.FeatureRecord:
+                if fr.FeatureTag in ('vert', 'vrt2'):
+                    vert_lookup_indices.update(fr.Feature.LookupListIndex)
+            for li in vert_lookup_indices:
+                lookup = gsub.LookupList.Lookup[li]
+                for st in lookup.SubTable:
+                    actual = st.ExtSubTable if lookup.LookupType == 7 and hasattr(st, 'ExtSubTable') else st
+                    if hasattr(actual, 'mapping'):
+                        vert_map.update(actual.mapping)
+
+    for form_cp, base_cp in VERTICAL_FORM_BASE.items():
+        if form_cp in cmap:
+            continue  # the interval rasterizes it through the cmap as usual
+        base_gname = cmap.get(base_cp)
+        sub_gname = vert_map.get(base_gname) if base_gname else None
+        if sub_gname in glyph_indices:
+            overrides[form_cp] = glyph_indices[sub_gname]
 
     font.close()
     return overrides
@@ -569,7 +656,7 @@ def extract_ligatures_fonttools(font_path, codepoints):
 
 
 def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=False,
-                         fallback_fontfile=None):
+                         fallback_fontfiles=None):
     """Rasterize all glyphs for one font style. Returns StyleRasterData."""
     import freetype
 
@@ -583,10 +670,13 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     # Invalid_Size_Handle on some fonts.
     face.set_char_size(size << 6, size << 6, 150, 150)
     ligature_glyph_indices = extract_ligature_glyph_indices_fonttools(fontfile)
-    fallback_face = None
-    if fallback_fontfile:
-        fallback_face = freetype.Face(fallback_fontfile)
-        fallback_face.set_char_size(size << 6, size << 6, 150, 150)
+    ligature_glyph_indices.update(extract_vertical_forms_fonttools(fontfile))
+    # Tried in order; the first face with the codepoint wins.
+    fallback_faces = []
+    for fb_path in fallback_fontfiles or []:
+        fb_face = freetype.Face(fb_path)
+        fb_face.set_char_size(size << 6, size << 6, 150, 150)
+        fallback_faces.append(fb_face)
 
     load_flags = freetype.FT_LOAD_RENDER
     if force_autohint:
@@ -599,11 +689,11 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
         if glyph_index > 0:
             face.load_glyph(glyph_index, load_flags)
             return face
-        if fallback_face:
-            fallback_glyph_index = fallback_face.get_char_index(code_point)
+        for fb_face in fallback_faces:
+            fallback_glyph_index = fb_face.get_char_index(code_point)
             if fallback_glyph_index > 0:
-                fallback_face.load_glyph(fallback_glyph_index, load_flags)
-                return fallback_face
+                fb_face.load_glyph(fallback_glyph_index, load_flags)
+                return fb_face
         return None
 
     # Validate intervals: remove codepoints not present in the font.
@@ -616,7 +706,7 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
         start = i_start
         for code_point in range(i_start, i_end + 1):
             has_primary = face.get_char_index(code_point) != 0 or code_point in ligature_glyph_indices
-            has_fallback = fallback_face and fallback_face.get_char_index(code_point) != 0
+            has_fallback = any(fb.get_char_index(code_point) != 0 for fb in fallback_faces)
             if not has_primary and not has_fallback:
                 if start < code_point:
                     validated_intervals.append((start, code_point - 1))
@@ -626,6 +716,28 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
 
     intervals = validated_intervals
     total_glyphs = sum(end - start + 1 for start, end in intervals)
+
+    # The firmware keeps interval tables in RAM (6 bytes per interval per style)
+    # and rejects more than 4096. A CJK face filtered to a standard's subset has
+    # thousands of one-codepoint holes, so close the narrowest gaps until 256
+    # remain. Each closed codepoint becomes an empty glyph in the file and draws blank.
+    MAX_INTERVALS = 256
+    if len(intervals) > MAX_INTERVALS:
+        gap_order = sorted(range(len(intervals) - 1),
+                           key=lambda i: intervals[i + 1][0] - intervals[i][1] - 1)
+        to_close = set(gap_order[:len(intervals) - MAX_INTERVALS])
+        merged = []
+        for i, (start, end) in enumerate(intervals):
+            if merged and (i - 1) in to_close:
+                merged[-1] = (merged[-1][0], end)
+            else:
+                merged.append((start, end))
+        placeholders = sum(e - s + 1 for s, e in merged) - total_glyphs
+        print(f"  [{style_label}] Interval cap: {len(intervals)} -> {len(merged)} intervals "
+              f"(+{placeholders} empty placeholders)", file=sys.stderr)
+        intervals = merged
+        total_glyphs = sum(end - start + 1 for start, end in intervals)
+
     print(f"  [{style_label}] Validated: {len(intervals)} intervals, {total_glyphs} glyphs", file=sys.stderr)
 
     # Rasterize all glyphs
@@ -832,7 +944,8 @@ def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
     """Generate a multi-style v4 .cpfont file.
 
     style_fonts: dict of {style_id: fontfile_path} e.g. {0: "Regular.ttf", 2: "Italic.ttf"}
-    fallback_style_fonts: optional dict of {style_id: fallback_fontfile_path}
+    fallback_style_fonts: optional dict of {style_id: [fallback_fontfile_path, ...]},
+                          tried in the order given
     """
     MAGIC = b"CPFONT\x00\x00"
     HEADER_SIZE = 32
@@ -845,12 +958,12 @@ def generate_cpfont_multistyle(style_fonts, size, intervals, output_path,
     fallback_style_fonts = fallback_style_fonts or {}
     for style_id in sorted(style_fonts.keys()):
         fontfile = style_fonts[style_id]
-        fallback_fontfile = fallback_style_fonts.get(style_id)
+        fallback_fontfiles = fallback_style_fonts.get(style_id)
         print(f"  Rasterizing style {style_id}...", file=sys.stderr)
         raster_data[style_id] = rasterize_font_style(
             fontfile, size, intervals, style_id=style_id,
             force_autohint=force_autohint,
-            fallback_fontfile=fallback_fontfile)
+            fallback_fontfiles=fallback_fontfiles)
 
     # Pack binary sections for each style
     packed_sections = {}  # style_id -> tuple of section bytearrays
@@ -961,14 +1074,18 @@ def main():
                         help="Font file for italic style.")
     parser.add_argument("--bolditalic", dest="font_bolditalic",
                         help="Font file for bold-italic style.")
-    parser.add_argument("--fallback-regular", dest="fallback_regular",
-                        help="Fallback font file for regular style.")
-    parser.add_argument("--fallback-bold", dest="fallback_bold",
-                        help="Fallback font file for bold style.")
-    parser.add_argument("--fallback-italic", dest="fallback_italic",
-                        help="Fallback font file for italic style.")
-    parser.add_argument("--fallback-bolditalic", dest="fallback_bolditalic",
-                        help="Fallback font file for bold-italic style.")
+    parser.add_argument("--fallback-regular", dest="fallback_regular", action="append",
+                        help="Fallback font file for regular style. Repeatable; tried in the order given.")
+    parser.add_argument("--fallback-bold", dest="fallback_bold", action="append",
+                        help="Fallback font file for bold style. Repeatable; tried in the order given.")
+    parser.add_argument("--fallback-italic", dest="fallback_italic", action="append",
+                        help="Fallback font file for italic style. Repeatable; tried in the order given.")
+    parser.add_argument("--fallback-bolditalic", dest="fallback_bolditalic", action="append",
+                        help="Fallback font file for bold-italic style. Repeatable; tried in the order given.")
+    parser.add_argument("--codepoints-file", dest="codepoints_file", action="append",
+                        help="File of allowed ideograph codepoints (hex, one per line). "
+                             "Ideographs not listed are dropped; other codepoints are kept. "
+                             "Repeatable; the files are unioned.")
 
     args = parser.parse_args()
 
@@ -1010,6 +1127,55 @@ def main():
         sys.exit(1)
 
     intervals = resolve_intervals(args.intervals)
+
+    # --codepoints-file filters only the ideograph ranges, where a CJK face carries
+    # far more glyphs than a standard defines. Symbol blocks pass through unfiltered.
+    IDEOGRAPH_RANGES = ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0x20000, 0x3FFFF))
+
+    def is_gated(cp):
+        return any(lo <= cp <= hi for lo, hi in IDEOGRAPH_RANGES)
+
+    if args.codepoints_file:
+        allowed = set()
+        for path in args.codepoints_file:
+            with open(path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    allowed.add(int(line, 16))
+
+        filtered = []
+        for start, end in intervals:
+            run_start = None
+            for cp in range(start, end + 1):
+                if cp in allowed or not is_gated(cp):
+                    if run_start is None:
+                        run_start = cp
+                else:
+                    if run_start is not None:
+                        filtered.append((run_start, cp - 1))
+                        run_start = None
+            if run_start is not None:
+                filtered.append((run_start, end))
+
+        # Bridge small gaps so scattered kanji do not become thousands of intervals.
+        GAP_TOLERANCE = 4
+        if len(filtered) > 1:
+            merged = [filtered[0]]
+            for start, end in filtered[1:]:
+                prev_start, prev_end = merged[-1]
+                if start - prev_end - 1 <= GAP_TOLERANCE:
+                    merged[-1] = (prev_start, end)
+                else:
+                    merged.append((start, end))
+            filtered = merged
+
+        before = sum(e - s + 1 for s, e in intervals)
+        after = sum(e - s + 1 for s, e in filtered)
+        print(f"  Codepoints filter: {before} -> {after} codepoints, "
+              f"{len(filtered)} intervals ({len(allowed)} in whitelist)", file=sys.stderr)
+        intervals = filtered
 
     # Determine sizes
     if args.sizes:

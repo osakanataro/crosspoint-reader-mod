@@ -205,6 +205,8 @@ To make `.cpfont` files for any device, convert your TrueType/OpenType fonts:
 | `ipa-chars` | IPA Extensions + Spacing Modifier Letters (phonetic transcription) |
 | `punctuation` | General punctuation (U+2000–U+206F) |
 | `cjk` | CJK Unified Ideographs + Hiragana + Katakana + Fullwidth |
+| `cjk-symbols` | JIS X 0213 symbol rows: letterlike, circled numbers, Kangxi radicals, enclosed and unit forms, CJK presentation forms |
+| `cjk-ext-supplementary` | Supplementary-plane ideographs (U+20000–U+2FFFF); use with `--codepoints-file` |
 | `hangul` | Korean Hangul syllables + Jamo + Compatibility Jamo |
 | `cherokee` | Cherokee (historic + supplement block) |
 | `tifinagh` | Tifinagh |
@@ -216,6 +218,10 @@ Combine presets with commas: `--intervals latin-ext,greek,cyrillic`
 
 You can also specify arbitrary Unicode ranges directly:
 `--intervals 'latin-ext,(0x2190-0x21FF)'`
+
+To keep only the ideographs a standard defines, pass `--codepoints-file` with a
+list of hex codepoints (one per line). It filters the ideograph ranges only; see
+`lib/EpdFont/scripts/codepoints/` for the Japanese lists.
 
 To list all presets with codepoint counts:
 

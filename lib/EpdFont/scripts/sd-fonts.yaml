@@ -12,6 +12,10 @@
 #   intervals:   Comma-separated Unicode interval presets for fontconvert_sdcard.py
 #   sizes:       Point sizes to generate
 #   force_autohint: (optional) Force FreeType auto-hinter instead of native hinting
+#   codepoints_file: (optional) File or list of files (relative to this directory)
+#                limiting which ideographs are kept; see fontconvert_sdcard.py
+#   extra_fallbacks: (optional) List of {url: ...} or {path: ...} faces tried
+#                after Noto Sans for codepoints the family lacks
 #   styles:      Map of style name -> font source
 #                  path: relative to lib/EpdFont (for committed fonts)
 #                  url:  download URL (for fonts not in the repo)
@@ -423,3 +427,52 @@ families:
     styles:
       regular: {url: "https://raw.githubusercontent.com/fonts-archive/MaruBuri/977eeff68d1d40bcef341f09c1f56cce1903bb8a/MaruBuri-SemiBold.otf"}
       bold:    {url: "https://raw.githubusercontent.com/fonts-archive/MaruBuri/977eeff68d1d40bcef341f09c1f56cce1903bb8a/MaruBuri-Bold.otf"}
+
+  # ── Japanese ───────────────────────────────────────────────────────────
+  # Ideographs are limited to the JIS X 0208/0212/0213 kanji; Noto Sans Math
+  # supplies symbols such as U+223C that neither face nor Noto Sans has.
+
+  - name: BIZUDGothic
+    description: "Morisawa UD sans-serif (Japanese, JIS X 0213)"
+    scripts: [cjk]
+    intervals: ascii,latin1,latin-ext,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols,cjk-ext-supplementary
+    codepoints_file:
+      - codepoints/japanese_jis0213.txt
+      - codepoints/japanese_supplementary_kanji.txt
+      - codepoints/japanese_compat_kanji.txt
+    extra_fallbacks:
+      - {url: "https://raw.githubusercontent.com/notofonts/notofonts.github.io/55773c3eb233b5a0eaa07de6226da189b136b4f0/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
+    sizes: [8, 10, 12, 14, 16, 18]
+    styles:
+      regular: {url: "https://raw.githubusercontent.com/googlefonts/morisawa-biz-ud-gothic/18934af56b9c003ca58c54bffbf226848cb11032/fonts/ttf/BIZUDGothic-Regular.ttf"}
+      bold:    {url: "https://raw.githubusercontent.com/googlefonts/morisawa-biz-ud-gothic/18934af56b9c003ca58c54bffbf226848cb11032/fonts/ttf/BIZUDGothic-Bold.ttf"}
+
+  - name: BIZUDMincho
+    description: "Morisawa UD serif (Japanese, JIS X 0213)"
+    scripts: [cjk]
+    intervals: ascii,latin1,latin-ext,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols,cjk-ext-supplementary
+    codepoints_file:
+      - codepoints/japanese_jis0213.txt
+      - codepoints/japanese_supplementary_kanji.txt
+      - codepoints/japanese_compat_kanji.txt
+    extra_fallbacks:
+      - {url: "https://raw.githubusercontent.com/notofonts/notofonts.github.io/55773c3eb233b5a0eaa07de6226da189b136b4f0/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
+    sizes: [8, 10, 12, 14, 16, 18]
+    styles:
+      regular: {url: "https://raw.githubusercontent.com/googlefonts/morisawa-biz-ud-mincho/c30a6221b1f3d09afae9137ffe73c7cbec649947/fonts/ttf/BIZUDMincho-Regular.ttf"}
+      bold:    {url: "https://raw.githubusercontent.com/googlefonts/morisawa-biz-ud-mincho/c30a6221b1f3d09afae9137ffe73c7cbec649947/fonts/ttf/BIZUDMincho-Bold.ttf"}
+
+  - name: NotoSansJP
+    description: "Noto Sans CJK JP (Japanese, JIS X 0213)"
+    scripts: [cjk]
+    intervals: ascii,latin1,latin-ext,punctuation,greek,cyrillic,ipa-chars,symbols,cjk,cjk-symbols,cjk-ext-supplementary
+    codepoints_file:
+      - codepoints/japanese_jis0213.txt
+      - codepoints/japanese_supplementary_kanji.txt
+      - codepoints/japanese_compat_kanji.txt
+    extra_fallbacks:
+      - {url: "https://raw.githubusercontent.com/notofonts/notofonts.github.io/55773c3eb233b5a0eaa07de6226da189b136b4f0/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf"}
+    sizes: [8, 10, 12, 14, 16, 18]
+    styles:
+      regular: {url: "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"}
+      bold:    {url: "https://raw.githubusercontent.com/notofonts/noto-cjk/f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"}
