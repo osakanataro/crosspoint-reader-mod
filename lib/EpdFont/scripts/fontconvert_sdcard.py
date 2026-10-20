@@ -57,12 +57,12 @@ INTERVAL_PRESETS = {
     "cjk":         [(0x3000, 0x303F), (0x3040, 0x309F), (0x30A0, 0x30FF),
                     (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0xFF00, 0xFFEF)],
     # JIS X 0213 symbol rows the "cjk" preset lacks: letterlike symbols, circled
-    # numbers, enclosed and unit forms, and the CJK presentation forms.
+    # numbers, Kangxi radicals, enclosed and unit forms, and CJK presentation forms.
     "cjk-symbols": [(0x2100, 0x214F), (0x2312, 0x2312), (0x2318, 0x2318),
                     (0x2460, 0x24FF), (0x29BF, 0x29BF), (0x2B05, 0x2B07), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50),
-                    (0x2E80, 0x2EFF), (0x3190, 0x319F),
+                    (0x2E80, 0x2EFF), (0x2F00, 0x2FDF), (0x3190, 0x319F),
                     (0x31F0, 0x31FF), (0x3200, 0x32FF), (0x3300, 0x33FF),
-                    (0xFE10, 0xFE19), (0xFE30, 0xFE46)],
+                    (0xFE10, 0xFE19), (0xFE30, 0xFE4F)],
     # Supplementary-plane ideographs. Use only with --codepoints-file, which keeps
     # just the listed codepoints of this range.
     "cjk-ext-supplementary": [(0x20000, 0x2FFFF)],
