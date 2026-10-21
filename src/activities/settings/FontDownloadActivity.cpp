@@ -528,6 +528,22 @@ bool FontDownloadActivity::computeFileCrc32(const char* path, uint32_t& outCrc) 
   return true;
 }
 
+// Rebuildable SD-font caches (glyph/kern arenas, CJK fallback tables) can
+// hold tens of KB the TLS session needs; release them before each transfer
+// rather than starving it. They repopulate on demand after the download.
+bool FontDownloadActivity::freeHeapForTransfer() {
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseSdFontCaches();
+    LOG_DBG("FONT", "Free heap after SD font cache release: %d bytes", ESP.getFreeHeap());
+  }
+  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
+      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
+    LOG_ERR("FONT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    return false;
+  }
+  return true;
+}
+
 void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   {
     RenderLock lock(*this);
@@ -540,19 +556,9 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   }
   requestUpdateAndWait();
 
-  // Rebuildable SD-font caches (glyph/kern arenas, CJK fallback tables) can
-  // hold tens of KB the TLS session needs; release them up front rather than
-  // starving the transfer. They repopulate on demand after the download.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseSdFontCaches();
-    LOG_DBG("FONT", "Free heap after SD font cache release: %d bytes", ESP.getFreeHeap());
-  }
-
   // Check before touching the family directory so a failed update leaves the
   // installed family unchanged.
-  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
-      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
-    LOG_ERR("FONT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  if (!freeHeapForTransfer()) {
     RenderLock lock(*this);
     state_ = ERROR;
     errorMessage_ = tr(STR_MEMORY_ERROR);
@@ -568,6 +574,18 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
   for (uint32_t i = 0; i < family.fileCount; i++) {
     const ManifestFile& file = files_[family.fileStart + i];
+
+    // Reloading a family in use after the previous file takes heap back.
+    if (i > 0 && !freeHeapForTransfer()) {
+      fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
+      family.installed = false;
+      family.hasUpdate = false;
+      RenderLock lock(*this);
+      state_ = ERROR;
+      errorMessage_ = tr(STR_MEMORY_ERROR);
+      return;
+    }
 
     {
       RenderLock lock(*this);
