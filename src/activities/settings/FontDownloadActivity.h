@@ -140,6 +140,8 @@ class FontDownloadActivity final : public UiListActivity {
   bool internString(const char* text, StrRef& outRef);
   void clearManifest();
   void downloadFamily(ManifestFamily& family);
+  void reloadFontsIfUsing(const char* familyName);
+  bool freeHeapForTransfer();
   void downloadAll();
   void updateAll();
   static bool computeFileCrc32(const char* path, uint32_t& outCrc);

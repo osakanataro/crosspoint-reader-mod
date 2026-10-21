@@ -501,6 +501,15 @@ size_t FontDownloadActivity::totalUpdateSize() const {
   return total;
 }
 
+// Loaded SD fonts keep the file's glyph index from load time, so a replaced or
+// deleted file they read from draws garbage until they are loaded again.
+void FontDownloadActivity::reloadFontsIfUsing(const char* familyName) {
+  if (!sdFontSystem.usesFamily(familyName)) return;
+  RenderLock lock(*this);
+  sdFontSystem.markRegistryDirty();
+  sdFontSystem.ensureLoaded(renderer);
+}
+
 // Standard CRC32 matching zlib/Python zlib.crc32().
 bool FontDownloadActivity::computeFileCrc32(const char* path, uint32_t& outCrc) {
   HalFile f;
@@ -519,6 +528,22 @@ bool FontDownloadActivity::computeFileCrc32(const char* path, uint32_t& outCrc) 
   return true;
 }
 
+// Rebuildable SD-font caches (glyph/kern arenas, CJK fallback tables) can
+// hold tens of KB the TLS session needs; release them before each transfer
+// rather than starving it. They repopulate on demand after the download.
+bool FontDownloadActivity::freeHeapForTransfer() {
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseSdFontCaches();
+    LOG_DBG("FONT", "Free heap after SD font cache release: %d bytes", ESP.getFreeHeap());
+  }
+  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
+      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
+    LOG_ERR("FONT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+    return false;
+  }
+  return true;
+}
+
 void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   {
     RenderLock lock(*this);
@@ -531,19 +556,9 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
   }
   requestUpdateAndWait();
 
-  // Rebuildable SD-font caches (glyph/kern arenas, CJK fallback tables) can
-  // hold tens of KB the TLS session needs; release them up front rather than
-  // starving the transfer. They repopulate on demand after the download.
-  if (auto* fcm = renderer.getFontCacheManager()) {
-    fcm->releaseSdFontCaches();
-    LOG_DBG("FONT", "Free heap after SD font cache release: %d bytes", ESP.getFreeHeap());
-  }
-
   // Check before touching the family directory so a failed update leaves the
   // installed family unchanged.
-  if (ESP.getFreeHeap() < HttpDownloader::MIN_TLS_FREE_HEAP ||
-      ESP.getMaxAllocHeap() < HttpDownloader::MIN_TLS_MAX_ALLOC) {
-    LOG_ERR("FONT", "Low heap for download (%u free, %u max block)", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  if (!freeHeapForTransfer()) {
     RenderLock lock(*this);
     state_ = ERROR;
     errorMessage_ = tr(STR_MEMORY_ERROR);
@@ -559,6 +574,18 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
   for (uint32_t i = 0; i < family.fileCount; i++) {
     const ManifestFile& file = files_[family.fileStart + i];
+
+    // Reloading a family in use after the previous file takes heap back.
+    if (i > 0 && !freeHeapForTransfer()) {
+      fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
+      family.installed = false;
+      family.hasUpdate = false;
+      RenderLock lock(*this);
+      state_ = ERROR;
+      errorMessage_ = tr(STR_MEMORY_ERROR);
+      return;
+    }
 
     {
       RenderLock lock(*this);
@@ -598,6 +625,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
 
     if (result == HttpDownloader::ABORTED) {
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       if (goHomeRequested_) {
@@ -615,6 +643,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (result != HttpDownloader::OK) {
       LOG_ERR("FONT", "Download failed: %s (%d)", str(file.name), result);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -627,6 +656,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (!computeFileCrc32(destPath, actualCrc)) {
       LOG_ERR("FONT", "Failed to open file for CRC check: %s", destPath);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -637,6 +667,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (actualCrc != file.crc32) {
       LOG_ERR("FONT", "CRC32 mismatch for %s: got %08x expected %08x", str(file.name), actualCrc, file.crc32);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -649,6 +680,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     if (!fontInstaller_.validateCpfontFile(destPath)) {
       LOG_ERR("FONT", "Invalid .cpfont: %s", destPath);
       fontInstaller_.deleteFamily(str(family.name));
+      reloadFontsIfUsing(str(family.name));
       family.installed = false;
       family.hasUpdate = false;
       RenderLock lock(*this);
@@ -656,6 +688,7 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
       errorMessage_ = std::string("Invalid font file: ") + str(file.name);
       return;
     }
+    reloadFontsIfUsing(str(family.name));
     currentFileIndex_++;
   }
 
@@ -701,6 +734,7 @@ void FontDownloadActivity::onDeleteConfirmationResult(const ActivityResult& resu
     errorMessage_ = "Failed to delete font";
   } else {
     fontInstaller_.refreshRegistry();
+    reloadFontsIfUsing(str(family.name));
     family.installed = false;
     family.hasUpdate = false;
     // Unlike the other family_ mutations, this one stays in FAMILY_LIST (no
