@@ -52,6 +52,14 @@ class SdCardFontSystem {
   /// Thread-safe: can be called from the web server task.
   void markRegistryDirty() { registryDirty_.store(true, std::memory_order_release); }
 
+  /// Whether `name` is the loaded reader family.
+  bool usesFamily(const char* name) const {
+#if CROSSPOINT_VECTOR_FONTS
+    if (ttfFamily_ == name) return true;
+#endif
+    return manager_.currentFamilyName() == name;
+  }
+
   /// If the registry is dirty, re-scan the SD card now and clear the flag.
   /// Used by the web UI so uploaded/deleted fonts appear in the list
   /// without waiting for the reader activity to run ensureLoaded().
