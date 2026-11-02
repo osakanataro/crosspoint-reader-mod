@@ -12,6 +12,8 @@
 #include <cstring>
 #include <string_view>
 
+#include "CssSelectorUsage.h"
+
 namespace {
 
 // Stack-allocated string buffer to avoid heap reallocations during parsing
@@ -420,14 +422,17 @@ std::string_view stripTrailingImportant(std::string_view value) {
 }
 
 constexpr std::array STYLE_LENGTH_FIELDS = {
-    &CssStyle::textIndent,   &CssStyle::marginTop,   &CssStyle::marginBottom,  &CssStyle::marginLeft,
-    &CssStyle::marginRight,  &CssStyle::paddingTop,  &CssStyle::paddingBottom, &CssStyle::paddingLeft,
-    &CssStyle::paddingRight, &CssStyle::imageHeight, &CssStyle::imageWidth,    &CssStyle::fontSize,
+    &CssStyle::textIndent,     &CssStyle::marginTop,     &CssStyle::marginBottom,  &CssStyle::marginLeft,
+    &CssStyle::marginRight,    &CssStyle::paddingTop,    &CssStyle::paddingBottom, &CssStyle::paddingLeft,
+    &CssStyle::paddingRight,   &CssStyle::imageHeight,   &CssStyle::imageWidth,    &CssStyle::fontSize,
+    &CssStyle::imageMaxHeight, &CssStyle::imageMaxWidth,
 };
 constexpr size_t STYLE_LENGTH_FIELD_COUNT = STYLE_LENGTH_FIELDS.size();
 constexpr size_t STYLE_WIRE_BYTES =
-    5 + STYLE_LENGTH_FIELD_COUNT * (sizeof(decltype(CssLength::value)) + 1) + 6 + 13 + sizeof(uint32_t);
+    5 + STYLE_LENGTH_FIELD_COUNT * (sizeof(decltype(CssLength::value)) + 1) + 6 + 13 + 2 + sizeof(uint32_t) + 1;
 constexpr uint32_t CSS_DEFINED_BITS_MASK = (1u << 31) - 1;
+// Second defined-flags byte: text-emphasis, text-orientation, max-height, max-width.
+constexpr uint8_t CSS_DEFINED_EXTRA_MASK = 0x0f;
 constexpr uint8_t MAX_INITIAL_LETTER = 6;
 
 void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
@@ -461,6 +466,8 @@ void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   out[offset++] = style.floatLeft ? 1 : 0;
   out[offset++] = style.initialLetter;
   out[offset++] = style.preserveWhitespace ? 1 : 0;
+  out[offset++] = static_cast<uint8_t>(style.textEmphasis);
+  out[offset++] = static_cast<uint8_t>(style.textOrientation);
 
   uint32_t definedBits = 0;
   if (style.defined.textAlign) definedBits |= 1 << 0;
@@ -495,6 +502,13 @@ void encodeStyleWire(const CssStyle& style, uint8_t (&out)[STYLE_WIRE_BYTES]) {
   if (style.defined.initialLetter) definedBits |= 1 << 29;
   if (style.defined.whiteSpace) definedBits |= 1u << 30;
   memcpy(out + offset, &definedBits, sizeof(definedBits));
+  offset += sizeof(definedBits);
+  uint8_t extraBits = 0;
+  if (style.defined.textEmphasis) extraBits |= 1 << 0;
+  if (style.defined.textOrientation) extraBits |= 1 << 1;
+  if (style.defined.imageMaxHeight) extraBits |= 1 << 2;
+  if (style.defined.imageMaxWidth) extraBits |= 1 << 3;
+  out[offset] = extraBits;
 }
 
 bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
@@ -567,6 +581,14 @@ bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
   const uint8_t preserveWhitespace = in[offset++];
   if (preserveWhitespace > 1) return false;
   style.preserveWhitespace = preserveWhitespace != 0;
+  const uint8_t textEmphasis = in[offset++];
+  const uint8_t textOrientation = in[offset++];
+  if (textEmphasis > static_cast<uint8_t>(CssTextEmphasis::OpenDoubleCircle) ||
+      textOrientation > static_cast<uint8_t>(CssTextOrientation::Combine)) {
+    return false;
+  }
+  style.textEmphasis = static_cast<CssTextEmphasis>(textEmphasis);
+  style.textOrientation = static_cast<CssTextOrientation>(textOrientation);
 
   uint32_t definedBits = 0;
   memcpy(&definedBits, in + offset, sizeof(definedBits));
@@ -602,6 +624,13 @@ bool decodeStyleWire(const uint8_t (&in)[STYLE_WIRE_BYTES], CssStyle& style) {
   style.defined.floatLeft = (definedBits & 1 << 28) != 0;
   style.defined.initialLetter = (definedBits & 1 << 29) != 0;
   style.defined.whiteSpace = (definedBits & 1u << 30) != 0;
+  offset += sizeof(definedBits);
+  const uint8_t extraBits = in[offset];
+  if ((extraBits & ~CSS_DEFINED_EXTRA_MASK) != 0) return false;
+  style.defined.textEmphasis = (extraBits & 1 << 0) != 0;
+  style.defined.textOrientation = (extraBits & 1 << 1) != 0;
+  style.defined.imageMaxHeight = (extraBits & 1 << 2) != 0;
+  style.defined.imageMaxWidth = (extraBits & 1 << 3) != 0;
   return true;
 }
 
@@ -819,6 +848,49 @@ CssFontWeight CssParser::interpretFontWeight(std::string_view val) {
     return numericWeight >= 700 ? CssFontWeight::Bold : CssFontWeight::Normal;
   }
   return CssFontWeight::Normal;
+}
+
+CssTextEmphasis CssParser::interpretTextEmphasis(std::string_view val) {
+  // Shorthand grammar is "<fill> || <shape>" in either order, with the colour of the
+  // text-emphasis shorthand ignored here. An omitted fill is "filled" and an omitted
+  // shape is "sesame", matching what a bare "text-emphasis: dot" or ": open" means.
+  bool none = false;
+  bool open = false;
+  CssTextEmphasis shape = CssTextEmphasis::FilledSesame;
+  forEachDelimitedToken(stripTrailingImportant(val), isAsciiWhitespace, [&](const std::string_view token) {
+    if (iequalsAscii(token, "none")) {
+      none = true;
+    } else if (iequalsAscii(token, "open")) {
+      open = true;
+    } else if (iequalsAscii(token, "filled")) {
+      open = false;
+    } else if (iequalsAscii(token, "sesame")) {
+      shape = CssTextEmphasis::FilledSesame;
+    } else if (iequalsAscii(token, "double-circle")) {
+      shape = CssTextEmphasis::FilledDoubleCircle;
+    } else if (iequalsAscii(token, "circle")) {
+      shape = CssTextEmphasis::FilledCircle;
+    } else if (iequalsAscii(token, "triangle")) {
+      shape = CssTextEmphasis::FilledTriangle;
+    } else if (iequalsAscii(token, "dot")) {
+      shape = CssTextEmphasis::FilledDot;
+    }
+  });
+
+  if (none) return CssTextEmphasis::None;
+  if (!open) return shape;
+  switch (shape) {
+    case CssTextEmphasis::FilledDoubleCircle:
+      return CssTextEmphasis::OpenDoubleCircle;
+    case CssTextEmphasis::FilledCircle:
+      return CssTextEmphasis::OpenCircle;
+    case CssTextEmphasis::FilledTriangle:
+      return CssTextEmphasis::OpenTriangle;
+    case CssTextEmphasis::FilledDot:
+      return CssTextEmphasis::OpenDot;
+    default:
+      return CssTextEmphasis::OpenSesame;
+  }
 }
 
 CssTextDecoration CssParser::interpretDecoration(std::string_view val) {
@@ -1083,6 +1155,49 @@ void CssParser::parseDeclarationIntoStyle(std::string_view decl, CssStyle& style
     const std::string_view listStyleValue = stripTrailingImportant(value);
     style.listStyleType = iequalsAscii(listStyleValue, "none") ? CssListStyleType::None : CssListStyleType::Disc;
     style.defined.listStyleType = 1;
+  } else if (iequalsAscii(name, "max-height")) {
+    CssLength len;
+    if (tryInterpretLength(value, len)) {
+      style.imageMaxHeight = len;
+      style.defined.imageMaxHeight = 1;
+    }
+  } else if (iequalsAscii(name, "max-width")) {
+    CssLength len;
+    if (tryInterpretLength(value, len)) {
+      style.imageMaxWidth = len;
+      style.defined.imageMaxWidth = 1;
+    }
+  } else if (iequalsAscii(name, "text-emphasis-style") || iequalsAscii(name, "text-emphasis") ||
+             iequalsAscii(name, "-epub-text-emphasis-style") || iequalsAscii(name, "-epub-text-emphasis") ||
+             iequalsAscii(name, "-webkit-text-emphasis-style") || iequalsAscii(name, "-webkit-text-emphasis")) {
+    style.textEmphasis = interpretTextEmphasis(value);
+    style.defined.textEmphasis = 1;
+  } else if (iequalsAscii(name, "text-orientation") || iequalsAscii(name, "-epub-text-orientation") ||
+             iequalsAscii(name, "-webkit-text-orientation")) {
+    // sideways-right is the pre-standard spelling of sideways; use-glyph-orientation and
+    // anything else fall back to mixed, which is what a reader without the property does.
+    const std::string_view orientation = stripTrailingImportant(value);
+    if (iequalsAscii(orientation, "upright")) {
+      style.textOrientation = CssTextOrientation::Upright;
+      style.defined.textOrientation = 1;
+    } else if (iequalsAscii(orientation, "sideways") || iequalsAscii(orientation, "sideways-right")) {
+      style.textOrientation = CssTextOrientation::Sideways;
+      style.defined.textOrientation = 1;
+    } else if (iequalsAscii(orientation, "mixed")) {
+      style.textOrientation = CssTextOrientation::Mixed;
+      style.defined.textOrientation = 1;
+    }
+  } else if (iequalsAscii(name, "text-combine-upright") || iequalsAscii(name, "-epub-text-combine") ||
+             iequalsAscii(name, "-webkit-text-combine") || iequalsAscii(name, "-epub-text-combine-upright") ||
+             iequalsAscii(name, "-webkit-text-combine-upright")) {
+    // "all" is the standard value; "horizontal" the old -webkit- one. "none" is left alone
+    // rather than recorded as Mixed so it cannot cancel an upright text-orientation on the
+    // same element (the two properties share one slot here).
+    const std::string_view combine = stripTrailingImportant(value);
+    if (iequalsAscii(combine, "all") || iequalsAscii(combine, "horizontal")) {
+      style.textOrientation = CssTextOrientation::Combine;
+      style.defined.textOrientation = 1;
+    }
   }
 }
 
@@ -1721,7 +1836,7 @@ bool CssParser::saveToCache(const bool complete) const {
   return true;
 }
 
-CssParser::CacheLoadResult CssParser::loadFromCache() {
+CssParser::CacheLoadResult CssParser::loadFromCache(const CssSelectorUsage* usage) {
   if (cachePath.empty()) {
     return CacheLoadResult::Invalid;
   }
@@ -1811,6 +1926,12 @@ CssParser::CacheLoadResult CssParser::loadFromCache() {
     if (!decodeStyleWire(styleWire, style)) {
       clear();
       return CacheLoadResult::Invalid;
+    }
+
+    // Skip rules that can never match the scanned chapter; generic publisher templates register
+    // hundreds of rules of which a chapter uses a handful, and the bytes have already been consumed.
+    if (usage != nullptr && !usage->matches(std::string_view(selectorBuffer.get(), selectorLen))) {
+      continue;
     }
 
     KeyPieces key;

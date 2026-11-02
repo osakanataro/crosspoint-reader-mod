@@ -9,6 +9,8 @@
 
 #include "CssStyle.h"
 
+class CssSelectorUsage;
+
 /**
  * Lightweight CSS parser for EPUB stylesheets
  *
@@ -58,7 +60,8 @@ class CssParser {
   };
 
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 19;
+  // OST: +1 over upstream for text-emphasis, text-orientation and max-width/height.
+  static constexpr uint8_t CSS_CACHE_VERSION = 20;
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -150,7 +153,8 @@ class CssParser {
    * Clears any existing rules before loading.
    * @return Complete when loaded, LowMemory when it should be retried, otherwise Invalid
    */
-  CacheLoadResult loadFromCache();
+  // usage, when given, skips cached rules naming a tag or class the chapter never uses.
+  CacheLoadResult loadFromCache(const CssSelectorUsage* usage = nullptr);
 
  private:
   enum class RuleInsertResult : uint8_t {
@@ -233,6 +237,7 @@ class CssParser {
   static CssFontStyle interpretFontStyle(std::string_view val);
   static CssFontWeight interpretFontWeight(std::string_view val);
   static CssTextDecoration interpretDecoration(std::string_view val);
+  static CssTextEmphasis interpretTextEmphasis(std::string_view val);
   static CssLength interpretLength(std::string_view val);
   static bool tryInterpretFontSize(std::string_view val, CssLength& out);
   /** Returns true only when a numeric length was parsed (e.g. 2em, 50%). False for auto/inherit/initial. */

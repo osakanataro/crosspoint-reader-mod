@@ -1,0 +1,109 @@
+# Screenshot regression scenarios for the desktop simulator (scripts/sim_regress.py).
+#
+# Each scenario boots the simulator with a fresh card (fonts kept), optionally opens a book
+# straight into the reader, then walks the steps. Steps are single-key items:
+#   - shot: <name>        capture the screen (PNG <name>.png, compared with the baseline)
+#   - press: <KEY>        BACK ENTER LEFT RIGHT UP DOWN POWER SLEEP HOME, optionally KEY:<hold ms>
+#   - wait: <ms>          extra settle time
+# In a vertical (right-to-left) book UP turns the page forward and DOWN turns it back.
+# Timing: the first step runs at settle_ms after boot (the section build happens before it);
+# a press is followed by press_ms, a shot by shot_ms.
+
+defaults:
+  env: simulator_x3
+  font: NotoSansJP
+  settle_ms: 9000
+  press_ms: 2500
+  shot_ms: 800
+  settings:
+    fontSize: 3          # 18pt, the user's everyday size
+
+scenarios:
+  - name: home
+    settle_ms: 2500
+    steps:
+      - shot: home
+
+  - name: vertical-ja
+    book: test_vertical_ja.epub
+    steps:
+      - shot: p1
+      - press: UP
+      - shot: p2
+      - press: UP
+      - shot: p3
+      - press: UP
+      - shot: p4
+      - press: UP
+      - shot: p5
+
+  - name: horizontal-ja
+    book: test_horizontal_ja.epub
+    steps:
+      - shot: p1
+      - press: DOWN
+      - shot: p2
+      - press: DOWN
+      - shot: p3
+      - press: DOWN
+      - shot: p4
+
+  - name: vertical-suite
+    book: vertical-test-suite.epub
+    settle_ms: 12000
+    steps:
+      - shot: p1
+      - press: UP
+      - shot: p2
+      - press: UP
+      - shot: p3
+      - press: UP
+      - shot: p4
+      - press: UP
+      - shot: p5
+      - press: UP
+      - shot: p6
+      - press: UP
+      - shot: p7
+      - press: UP
+      - shot: p8
+
+  - name: vertical-rule-table
+    book: vertical-rule-table-test.epub
+    steps:
+      - shot: p1
+      - press: UP
+      - shot: p2
+      - press: UP
+      - shot: p3
+
+  - name: horizontal-regression
+    book: horizontal-regression-test.epub
+    settle_ms: 12000
+    steps:
+      - shot: p1
+      - press: DOWN
+      - shot: p2
+      - press: DOWN
+      - shot: p3
+      - press: DOWN
+      - shot: p4
+
+  - name: kerning-toolbar
+    book: kerning-toolbar-test.epub
+    steps:
+      - shot: guide
+      - press: DOWN
+      - shot: p2
+      - press: ENTER
+      - shot: toolbar
+      - press: BACK
+      - shot: closed
+
+  - name: cover-svg
+    book: cover-svg-test.epub
+    steps:
+      - shot: p1
+      - press: BACK
+      - wait: 2500
+      - shot: home

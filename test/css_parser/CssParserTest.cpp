@@ -18,7 +18,7 @@ constexpr size_t kMaxRules = 1500;
 constexpr size_t kMaxUniqueStyles = 256;
 constexpr size_t kCacheHeaderBytes = sizeof(uint8_t) * 2 + sizeof(uint16_t);
 constexpr size_t kStyleEnumPrefixBytes = 5;
-constexpr size_t kStyleLengthFieldCount = 12;
+constexpr size_t kStyleLengthFieldCount = 14;  // OST adds max-height and max-width
 constexpr size_t kStyleLengthBytes = sizeof(decltype(CssLength::value)) + sizeof(uint8_t);
 
 class CssParserTest : public ::testing::Test {

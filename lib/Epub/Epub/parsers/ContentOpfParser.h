@@ -21,6 +21,7 @@ class ContentOpfParser final : public Print {
     IN_BOOK_LANGUAGE,
     IN_BOOK_IDENTIFIER,
     IN_META_TEXT,
+    IN_FILE_AS,
     IN_MANIFEST,
     IN_SPINE,
     IN_GUIDE,
@@ -58,6 +59,27 @@ class ContentOpfParser final : public Print {
   std::vector<CollectionMetadata> collectionCandidates;
   std::string calibreSeries;
   std::optional<float> calibreSeriesIndex;
+  // EPUB 3 sort forms: <meta refines="#id" property="file-as"> names the
+  // element it refines by id, and may precede it, so ids are remembered until
+  // </metadata>. Bounded: past MAX_CREATORS further creators keep their display
+  // text but cannot take a reading.
+  static constexpr size_t MAX_CREATORS = 8;
+  struct Creator {
+    std::string id;
+    std::string name;    // this creator's display text, for a fallback when only some carry readings
+    std::string fileAs;  // sort form, from file-as (EPUB 3) or opf:file-as (EPUB 2)
+  };
+  std::string titleId;
+  std::vector<Creator> creators;
+  size_t creatorStart = 0;      // author.size() when the current <creator> opened
+  bool creatorTracked = false;  // the current <creator> has a slot in `creators`
+  std::string fileAsTarget;     // id being refined while IN_FILE_AS
+  std::string fileAsText;
+  std::vector<Creator> pendingFileAs;  // refines seen before their element: {id, "", text}
+
+  static const char* attributeValue(const XML_Char** atts, const char* localName);
+  void resolveFileAs(const std::string& id, const std::string& text);
+  void finishMetadata();
 
   // Index for fast idref→href lookup (binary search over .items.bin)
   struct ItemIndexEntry {
@@ -85,6 +107,13 @@ class ContentOpfParser final : public Print {
  public:
   std::string title;
   std::string author;
+  // Sort forms of title and author from the package's file-as metadata; empty
+  // when the book gives none. Japanese books carry the kana reading here, which
+  // is the only way to order 漢字 titles. authorFileAs lists every creator in
+  // the order of `author`, falling back to a creator's display name when only
+  // the others carry a reading; it is empty when the FIRST creator has none.
+  std::string titleFileAs;
+  std::string authorFileAs;
   std::string language;
   std::string isbn;
   std::string asin;
@@ -96,6 +125,7 @@ class ContentOpfParser final : public Print {
   std::string guideCoverPageHref;  // Guide reference with type="cover" or "cover-page" (points to XHTML wrapper)
   std::string textReferenceHref;
   std::vector<std::string> cssFiles;  // CSS stylesheet paths
+  bool pageProgressionRtl = false;    // spine page-progression-direction="rtl" (RTL / vertical book)
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
                             BookMetadataCache* cache, const bool metadataOnly = false)

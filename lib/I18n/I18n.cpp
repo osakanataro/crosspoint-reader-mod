@@ -58,3 +58,10 @@ const char* I18n::getCharacterSet(Language lang) {
 
   return CHARACTER_SETS[static_cast<size_t>(lang)];
 }
+
+const char* I18n::getUiLetters(Language lang) {
+  if (lang >= Language::_COUNT) {
+    lang = Language::EN;
+  }
+  return UI_LETTERS[static_cast<size_t>(lang)];
+}

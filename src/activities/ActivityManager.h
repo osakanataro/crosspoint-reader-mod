@@ -18,7 +18,7 @@
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
 
-enum class HomeMenuItem { NONE, FILE_BROWSER, LIBRARY, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU };
+enum class HomeMenuItem { NONE, FILE_BROWSER, LIBRARY, OPDS_BROWSER, FILE_TRANSFER, SETTINGS_MENU, CLOCK_MODE };
 
 /**
  * ActivityManager
@@ -89,6 +89,7 @@ class ActivityManager {
   void goToUsbDrive();
   // openSection jumps straight into one group (End = the section list).
   void goToSettings(SettingsSection openSection = SettingsSection::End);
+  void goToClock();
   void goToFileBrowser(std::string path = {});
   void goToLibrary();
   void goToBrowser();
@@ -108,6 +109,7 @@ class ActivityManager {
   void popActivity();
 
   bool preventAutoSleep() const;
+  bool needsFullSpeed() const;
   bool requiresExclusiveStorageLoop() const;
   bool isReaderActivity() const;
   // Bluetooth page turner (lib/BlePageTurner): the book in front, whether it has painted a page, and

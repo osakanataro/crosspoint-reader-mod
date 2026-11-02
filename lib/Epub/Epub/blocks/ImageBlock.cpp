@@ -1,6 +1,7 @@
 #include "ImageBlock.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -12,6 +13,20 @@
 
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/PngStreamDecoder.h"
+
+#if INPUT_DIAG
+#include "../../../../src/util/InputDiag.h"
+// Page-time image outcomes go to /image-diag.txt next to the heap at that moment.
+#define IMG_DIAG(fmt, ...)                                        \
+  do {                                                            \
+    char imgDiagBuf[72];                                          \
+    snprintf(imgDiagBuf, sizeof(imgDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(imgDiagBuf);                        \
+  } while (0)
+#else
+#define IMG_DIAG(fmt, ...)
+#endif
 
 // Cache file format:
 // - uint16_t width
@@ -285,6 +300,18 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
 }  // namespace
 
+std::string ImageBlock::cachePathFor(const std::string& imagePath) { return getCachePath(imagePath); }
+
+bool ImageBlock::hasValidCacheFor(const std::string& imagePath, const int width, const int height) {
+  const auto cachePath = getCachePath(imagePath);
+  HalFile cacheFile;
+  if (!Storage.openFileForRead("IMG", cachePath, cacheFile)) {
+    return false;
+  }
+  uint16_t cachedWidth, cachedHeight;
+  return readValidCacheHeader(cacheFile, width, height, cachedWidth, cachedHeight);
+}
+
 bool ImageBlock::hasValidCache() const {
   const auto cachePath = getCachePath(imagePath);
   HalFile cacheFile;
@@ -358,6 +385,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
     LOG_DBG("IMG", "Lazy-extracting %s -> %s", srcPath.c_str(), imagePath.c_str());
     if (!extractFn(extractCtx, srcPath.c_str(), imagePath.c_str())) {
       LOG_ERR("IMG", "Lazy extraction failed: %s", srcPath.c_str());
+      IMG_DIAG("page img extract FAIL %.36s", srcPath.c_str());
     }
   }
 
@@ -366,6 +394,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
+    IMG_DIAG("page img missing %.40s", srcPath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -375,8 +404,19 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
+    IMG_DIAG("page img empty %.40s", srcPath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
+    return;
+  }
+
+  // Streamed PNG path first: its inflate state is two separate heap blocks of 11KB and 32KB,
+  // both available mid-read where PNGdec's single ~62KB object (and its 60KB free-heap gate)
+  // is not -- measured 43-55KB free while a page draws, so every PNG came out as its frame.
+  // On success the .pxc exists and the cache render takes over, for this pass and every future one.
+  if (FsHelpers::hasPngExtension(imagePath) && PngStreamDecoder::decodeToCache(imagePath, cachePath, width, height) &&
+      renderFromCache(renderer, cachePath, x, y, width, height)) {
+    renderer.preserveImagePolarity(x, y, width, height);
     return;
   }
 
@@ -406,6 +446,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
+    IMG_DIAG("page img decode FAIL %dx%d %.30s", width, height, srcPath.c_str());
     rememberImageFailure(imagePath);
     renderPlaceholder(renderer, x, y);
     return;
@@ -413,6 +454,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
 
   renderer.preserveImagePolarity(x, y, width, height);
   LOG_DBG("IMG", "Decode successful");
+  IMG_DIAG("page img decode ok %dx%d", width, height);
 }
 
 bool ImageBlock::serialize(HalFile& file) {
@@ -426,8 +468,10 @@ bool ImageBlock::serialize(HalFile& file) {
 std::unique_ptr<ImageBlock> ImageBlock::deserialize(HalFile& file) {
   std::string path;
   std::string src;
-  serialization::readString(file, path);
-  serialization::readString(file, src);
+  if (!serialization::readString(file, path) || !serialization::readString(file, src)) {
+    LOG_ERR("IMG", "Deserialization failed: corrupt path/src length");
+    return nullptr;
+  }
   int16_t w, h;
   serialization::readPod(file, w);
   serialization::readPod(file, h);

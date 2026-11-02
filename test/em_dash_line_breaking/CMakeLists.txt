@@ -1,6 +1,7 @@
 add_executable(EmDashLineBreakingTest
   EmDashLineBreakingTest.cpp
   FocusReadingTest.cpp
+  ${REPO_ROOT}/test/chapter_html_slim_parser/ImageBlockStubs.cpp
   ${REPO_ROOT}/lib/Epub/Epub/ParsedText.cpp
   ${REPO_ROOT}/lib/Epub/Epub/WordStore.cpp
   ${REPO_ROOT}/lib/Epub/Epub/blocks/TextBlock.cpp
@@ -20,6 +21,7 @@ target_include_directories(EmDashLineBreakingTest PRIVATE
   ${REPO_ROOT}/lib/Epub
   ${REPO_ROOT}/lib/Epub/Epub
   ${REPO_ROOT}/lib/EpdFont
+  ${REPO_ROOT}/lib/GfxRenderer
   ${REPO_ROOT}/lib/Utf8
   ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/lib/Serialization

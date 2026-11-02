@@ -10,7 +10,9 @@
 
 #include <algorithm>
 
+#include "../../../src/util/InputDiag.h"
 #include "Epub/css/CssParser.h"
+#include "Epub/css/CssSelectorUsage.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
@@ -81,7 +83,11 @@ namespace {
 // v71: Focus split offsets follow the visual run order for RTL words.
 // v72: Make ruby rendering closer to how Chromium renders ruby by default.
 // v73: TrueType vector fonts load and advance .notdef for missing glyphs.
-constexpr uint8_t SECTION_FILE_VERSION = 73;
+// OST (vertical-2.0.0): CJK line breaks follow JLREQ; variation selectors are dropped; vertical
+//   writing (header isVertical, vertical TextBlocks with ypos and cell width), images honour
+//   max-width/max-height, Kangxi radicals stand upright, kana repeat marks stay whole.
+// v74: OST additions above on top of upstream v73.
+constexpr uint8_t SECTION_FILE_VERSION = 74;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects
@@ -103,7 +109,16 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
                                  sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(int8_t) +
-                                 sizeof(uint8_t) + sizeof(uint8_t);
+                                 sizeof(uint8_t) + sizeof(uint8_t) + sizeof(bool);
+
+// For the lookups that read a LUT straight from the file: a file left by
+// another layout version would answer with that layout's pages.
+bool hasCurrentLayout(HalFile& f) {
+  if (f.size() < HEADER_SIZE) return false;
+  uint8_t version;
+  serialization::readPod(f, version);
+  return version == SECTION_FILE_VERSION || version == SECTION_FILE_PARTIAL_VERSION;
+}
 }  // namespace
 
 // Out-of-line so the unique_ptr<ChapterHtmlSlimParser> in BuildContext can be
@@ -125,12 +140,17 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
     return 0;
   }
 
+  // Timed apart from the rest of the build: writing a laid-out page to the card is the one
+  // phase that is storage-bound rather than parse- or measure-bound, so it has to be separable
+  // before anything is attributed to "the build being slow".
+  const unsigned long writeStartMs = millis();
   const uint32_t position = file.position();
   if (!page->serialize(file)) {
     LOG_ERR("SCT", "Failed to serialize page %d", builtPageCount_);
     return 0;
   }
   LOG_DBG("SCT", "Page %d processed", builtPageCount_);
+  InputDiag::noteBuildPageWrite(millis() - writeStartMs);
 
   builtPageCount_++;
   // pageCount is the pages available to read: a rebuild over a partial only raises it
@@ -152,8 +172,8 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
                                    sizeof(spec.viewportHeight) + sizeof(pageCount) + sizeof(spec.hyphenationEnabled) +
                                    sizeof(spec.embeddedStyle) + sizeof(spec.imageRendering) +
                                    sizeof(spec.focusReadingEnabled) + sizeof(spec.characterSpacing) +
-                                   sizeof(spec.wordSpacingPercent) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
+                                   sizeof(spec.wordSpacingPercent) + sizeof(spec.isVertical) + sizeof(uint32_t) +
+                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   // Written as the incomplete sentinel; finalizeBuild() patches it to
   // SECTION_FILE_VERSION as the last step, committing the file.
@@ -171,6 +191,7 @@ void Section::writeSectionFileHeader(const ReaderRenderSpec& spec) {
   serialization::writePod(file, spec.focusReadingEnabled);
   serialization::writePod(file, spec.characterSpacing);
   serialization::writePod(file, spec.wordSpacingPercent);
+  serialization::writePod(file, spec.isVertical);
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -210,6 +231,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     bool fileFocusReadingEnabled;
     int8_t fileCharacterSpacing;
     uint8_t fileWordSpacingPercent;
+    bool fileIsVertical;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -223,6 +245,7 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
     serialization::readPod(file, fileFocusReadingEnabled);
     serialization::readPod(file, fileCharacterSpacing);
     serialization::readPod(file, fileWordSpacingPercent);
+    serialization::readPod(file, fileIsVertical);
 
     if (spec.fontId != fileFontId || spec.lineCompression != fileLineCompression ||
         spec.extraParagraphSpacing != fileExtraParagraphSpacing ||
@@ -230,7 +253,8 @@ bool Section::loadSectionFile(const ReaderRenderSpec& spec) {
         spec.viewportWidth != fileViewportWidth || spec.viewportHeight != fileViewportHeight ||
         spec.hyphenationEnabled != fileHyphenationEnabled || spec.embeddedStyle != fileEmbeddedStyle ||
         spec.imageRendering != fileImageRendering || spec.focusReadingEnabled != fileFocusReadingEnabled ||
-        spec.characterSpacing != fileCharacterSpacing || spec.wordSpacingPercent != fileWordSpacingPercent) {
+        spec.characterSpacing != fileCharacterSpacing || spec.wordSpacingPercent != fileWordSpacingPercent ||
+        spec.isVertical != fileIsVertical) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       clearCache();
@@ -304,6 +328,11 @@ bool Section::createSectionFile(const ReaderRenderSpec& spec, const std::functio
 }
 
 bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void()>& popupFn) {
+  // A build measures and never draws, so every uncached codepoint's width comes from the glyph
+  // record on the card rather than a bitmap load into the overflow ring (see readAdvanceOnly).
+  // Scoped over the whole build, not just ParsedText's layout: the parser measures too (list
+  // markers, table cells, inline-image decisions).
+  const GfxRenderer::MeasureOnlyScope measureOnly(renderer);
   if (build_) {
     LOG_ERR("SCT", "startBuild called while a build is already active");
     return false;
@@ -430,7 +459,13 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   if (spec.embeddedStyle) {
     ctx->cssParser = epub->getCssParser();
     if (ctx->cssParser) {
-      const CssParser::CacheLoadResult cacheResult = ctx->cssParser->loadFromCache();
+      // Load only the cached rules this chapter can reference: publisher templates (the EBPAJ /
+      // KADOKAWA ones most Japanese EPUBs carry) register hundreds of rules of which a chapter uses
+      // a handful, and the full set costs tens of KB right while the build needs the heap. If the
+      // scan fails, load everything.
+      CssSelectorUsage usage;
+      const bool scanned = usage.scanHtmlFile(ctx->parsePath);
+      const CssParser::CacheLoadResult cacheResult = ctx->cssParser->loadFromCache(scanned ? &usage : nullptr);
       if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
         LOG_ERR("SCT", "Insufficient heap to hydrate CSS; section build deferred");
         ctx->cssParser->clear();
@@ -466,14 +501,21 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
   ctx->parser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, ctxPtr->parsePath, renderer, spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
       spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled,
-      spec.focusReadingEnabled,
-      [this, ctxPtr](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
-                     const uint32_t visibleTextOffset) {
+      spec.focusReadingEnabled, spec.isVertical,
+      [this, ctxPtr, isVertical = spec.isVertical, viewportWidth = spec.viewportWidth](
+          std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
+          const uint32_t visibleTextOffset) {
+        // Vertical flow places an image at the column cursor, i.e. against the right edge; a
+        // page holding nothing but that image is an illustration page and centres instead.
+        if (isVertical && page->elements.size() == 1 && page->elements[0]->getTag() == TAG_PageImage) {
+          const int width = static_cast<const PageImage&>(*page->elements[0]).getImageBlock().getWidth();
+          if (width < viewportWidth) page->elements[0]->xPos = static_cast<int16_t>((viewportWidth - width) / 2);
+        }
         ctxPtr->lut.push_back(
             {this->onPageComplete(std::move(page)), paragraphIndex, listItemIndex, visibleTextOffset});
       },
       spec.embeddedStyle, ctxPtr->contentBase, ctxPtr->imageBasePath, spec.imageRendering, std::move(tocAnchors),
-      popupFn, ctxPtr->cssParser);
+      popupFn, ctxPtr->cssParser, spec.rightMargin);
   if (!ctx->parser) {
     LOG_ERR("SCT", "OOM: ChapterHtmlSlimParser");
     if (ctx->cssParser) ctx->cssParser->clear();
@@ -498,6 +540,7 @@ bool Section::startBuild(const ReaderRenderSpec& spec, const std::function<void(
 }
 
 bool Section::buildSomeMore(const int maxPages, bool (*yieldNow)()) {
+  const GfxRenderer::MeasureOnlyScope measureOnly(renderer);  // see startBuild()
   if (!build_ || !build_->parser) {
     LOG_ERR("SCT", "buildSomeMore with no active build");
     return false;
@@ -972,7 +1015,7 @@ std::optional<uint16_t> Section::getCachedPageCount() const {
 }
 
 bool Section::openAnchorMap(HalFile& f, uint16_t& count) const {
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!Storage.openFileForRead("SCT", filePath, f) || !hasCurrentLayout(f)) {
     return false;
   }
 
@@ -996,7 +1039,10 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
   for (uint16_t i = 0; i < count; i++) {
     std::string key;
     uint16_t page;
-    serialization::readString(f, key);
+    if (!serialization::readString(f, key)) {
+      LOG_ERR("SCT", "getPageForAnchor: corrupt anchor-map entry %u, aborting scan", i);
+      return std::nullopt;
+    }
     serialization::readPod(f, page);
     if (key == anchor) {
       return page;
@@ -1008,7 +1054,7 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
 
 std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!Storage.openFileForRead("SCT", filePath, f) || !hasCurrentLayout(f)) {
     return std::nullopt;
   }
 
@@ -1047,7 +1093,7 @@ std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex)
 
 std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!Storage.openFileForRead("SCT", filePath, f) || !hasCurrentLayout(f)) {
     return std::nullopt;
   }
 
@@ -1079,7 +1125,7 @@ std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) c
 
 std::optional<uint16_t> Section::getPageForListItemIndex(const uint16_t liIndex) const {
   HalFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  if (!Storage.openFileForRead("SCT", filePath, f) || !hasCurrentLayout(f)) {
     return std::nullopt;
   }
 

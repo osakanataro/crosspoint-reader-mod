@@ -1,300 +1,332 @@
-# CrossPoint Reader
-
-[![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
-
-CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
-
-### Now running on:
-
-- **ESP32C3-based** Xteink X4 and X3.
-- **ESP32S3-based** Xteink X4Pro and X4Classic, Seeed reTerminal Sticky, M5PaperMono, Metalio E-Ink 4, EEGOREAD A4 and Boox Picco.
-
-Check [our Devices page](https://crosspointreader.com/devices) for the full list.
-
-![CrossPoint Reader running on Xteink device](./docs/images/cover.jpg)
-
-> If you're planning to buy an Xteink device, consider purchasing an **X3/X4 Developer Edition** through https://crosspointreader.com. CrossPoint receives a small share of each sale, helping fund development costs.
-
-## What can CrossPoint do?
-
-- **Reader engine**: EPUB 2/3 rendering with embedded-style option, image handling, hyphenation, kerning, adaptive table layouts, native CJK ruby annotations, chapter navigation, footnotes, bookmarks, dictionary lookups ([StarDict](docs/dictionary.md)), go-to-percent, auto page turn, orientation control, focus reading, KOReader progress sync and more.
-
-- **Various formats**: native handling for `.epub`, `.xtc/.xtch`, `.txt`, and `.bmp`.
-
-- **Touch reading**: follow EPUB links and look up words in the dictionary on touch-enabled devices.
-
-- **Highlights and clippings**: highlight text in EPUBs and save excerpts as clippings. Use the reader menu on button devices, or hold a word and drag the selection handles on touch devices. Look up selected words or phrases in the dictionary. Enable Sync Clippings to sync saved excerpts through a compatible CrossPoint Sync server. See [Clippings and Highlights](USER_GUIDE.md#53-clippings-and-highlights).
-
-- **Screenshots.**
-
-- **Custom fonts**: install your favorite fonts on the SD card.
-
-- **Tilt page turn (X3 and Sticky)**.
-
-- **Bluetooth page turners**: pair a remote under Settings → Connectivity → Bluetooth Page Turner. Map short and long presses to page turns, chapter navigation, the reader menu, or clipping selection.
-
-- **USB Drive mode (X4Pro)**: access the SD card as USB mass storage.
-
-- **Library workflow**: indexed title/author search, recently-added and alphabetical views, multilingual grouping, folder browser, recent books, and SD-cache management.
-
-- **Wireless workflows**:
-  
-  - File transfer web UI
-  - EPUB Optimizer
-  - Web settings UI/API (edit many device settings from browser)
-  - WebSocket fast uploads
-  - WebDAV handler
-  - AP mode (hotspot) and STA mode (join existing Wi-Fi), both with QR helpers
-  - Calibre wireless connect flow
-  - OPDS browser with saved servers (up to 8), search, pagination, and direct download
-  - OTA update checks and installs from GitHub releases
-
-- **Customization**: night mode, multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes including transparent overlays, front/side button remapping, status bar controls, power-button behavior, refresh cadence, and more.
-
-- **Localization**: 34 UI languages and counting, including CJK font fallback and RTL support.
-
-- **SD card plugins**: install plugins for book catalogs, downloads, and tools in the device's web interface. Enable Plugins under Settings → Connectivity to show them on Home. On-device plugins use existing firmware screens and operations. JavaScript runs in a browser on your phone or computer, and its page must stay open while it works. Plugins follow [CrossPoint's reading-focused scope](SCOPE.md#out-of-scope). See the [plugin guide](docs/sd-plugins.md).
-
-### Coming soon:
-
-- More themes.
-
-- Much more! stay tuned.
-
----
-
-## USB-locked devices (Xteink Unlocker)
-
-Some Xteink units purchased from third-party stores (e.g. AliExpress) ship with USB flashing locked from the factory.
-If your device is locked, you will need to use the **Xteink Unlocker** tool available at
-https://crosspointreader.com/#unlock-tool before you can flash CrossPoint.
-
-**You do not need this tool if you bought your device directly from xteink.com.** Those units are not locked.
-
-**Not sure if your device is locked?** Power it on, connect the USB-C cable, and try flashing via the web flasher first (see
-[Install firmware](#install-firmware) below). If the browser's serial device picker does not show your device, try a different
-USB port or browser before assuming the device is locked. Only reach for the unlocker if the device still doesn't appear.
-
-> ### ⚠️ WARNING: READ THIS BEFORE USING THE UNLOCKER ⚠️
-> 
-> **The only officially supported firmwares in the unlock tool are CrossPoint and CrossInk.**
-> 
-> Flashing any other firmware on a USB-locked device may **permanently brick the device** or leave it **permanently
-> stuck on that firmware with no recovery path**. Once USB flashing is re-locked, your only way back is via OTA, and if
-> the firmware you flashed doesn't support OTA, **there is no way out**.
-
-## Install firmware
-
-### Web installer (recommended)
-
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Go to https://crosspointreader.com/#flash-tools, select your device (X3, X4, Xteink X4Pro, Seeed reTerminal Sticky, or M5PaperMono), and choose an official CrossPoint release.
-
-### Web installer (specific version)
-
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Download the firmware file for your device from [Releases](https://github.com/crosspoint-reader/crosspoint-reader/releases), or compile yourself.
-3. Go to https://crosspointreader.com/#flash-tools, select your device, click "Custom .bin" and upload the firmware file.
-
-### Revert to Official Firmware
-
-To revert to the official firmware, you can also flash the latest official firmware using https://crosspointreader.com/#flash-tools.
-
-### Command line
-
-1. Install [`esptool`](https://github.com/espressif/esptool):
-
-```bash
-pip install esptool
-```
-
-2. Download the firmware file for your device from the [releases page](https://github.com/crosspoint-reader/crosspoint-reader/releases).
-3. Connect your device via USB-C.
-4. Find the device port. On Linux, run `dmesg` after connecting. On macOS:
-
-```bash
-log stream --predicate 'subsystem == "com.apple.iokit"' --info
-```
-
-5. Flash an X3 or X4:
-
-```bash
-esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 write_flash 0x10000 /path/to/firmware.bin
-```
-
-   Flash an Xteink X4Pro, Seeed reTerminal Sticky, or M5PaperMono:
-
-```bash
-esptool.py --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write_flash 0x10000 /path/to/firmware.bin
-```
-
-### Manual
-
-See [Development quick start](#development-quick-start) below.
-
----
-
-## Custom SD-card fonts
-
-On devices with external RAM enabled in CrossPoint, copy `.ttf`, `.otf`, or `.ttc` files to the SD card and select them as reader fonts. Put one file in `/fonts/` or `/.fonts/`, or put one family's files in a subfolder. See the [SD card font guide](./docs/sd-card-fonts.md) for the folder layout and styles.
-
-On other devices, convert the font to `.cpfont` first. `.cpfont` files also work on devices with external RAM enabled and have better performance. No firmware reflash is needed to add fonts.
-
-To make `.cpfont` files:
-
-1. Go to https://crosspointreader.com/fonts and open the "SD-card font builder" form.
-2. Upload up to four styles (regular, bold, italic, bold-italic), set the family name, point sizes, and Unicode range.
-3. Download the generated `.cpfont` files.
-4. Copy them to your SD card under `/fonts/YourFont/` (or `/.fonts/YourFont/` to hide the folder).
-5. Select the font on the device from the font settings.
-
-Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` script unmodified, so output matches a local host build.
-
----
-
-## Documentation
-
-- [User Guide](./USER_GUIDE.md)
-- [Web server usage](./docs/webserver.md)
-- [Web server endpoints](./docs/webserver-endpoints.md)
-- [Project scope](./SCOPE.md)
-- [Contributing docs](./docs/contributing/README.md)
-- [Touch and UI development](./docs/contributing/touch-and-ui.md) - how to build new screens on the FreeInkUI activity bases (UiListActivity and friends), plus build envs for the non-Xteink touch devices
-
----
-
-## Development quick start
-
-### Prerequisites
-
-- [pioarduino PlatformIO Core](https://github.com/pioarduino/platformio-core) or [VS Code + pioarduino IDE](https://github.com/pioarduino/pioarduino-vscode-ide)
-- Python 3.8+
-- `clang-format` 21
-- USB-C cable supporting data transfer
-
-### Setup
-
-```bash
-git clone --recursive https://github.com/crosspoint-reader/crosspoint-reader
-cd crosspoint-reader
-
-# if cloned without --recursive:
-git submodule update --init --recursive
-```
-
-### Nix/NixOS
-
-Nix/NixOS users can enter the development shell with either `nix develop` (flakes) or `nix-shell`:
-
-```bash
-nix develop -f nix
-# or
-nix-shell nix
-```
-
-To flash a connected ESP32-C3 device, enable PlatformIO's udev rules in your NixOS configuration:
-
-```nix
-services.udev.packages = with pkgs; [ platformio-core.udev ];
-```
-
-After rebuilding the system configuration, reconnect the device or reload udev rules.
-
-### Build / flash / monitor
-
-```bash
-pio run --target upload
-```
-
-### Contributor pre-PR checks
-
-```bash
-./bin/clang-format-fix
-pio check -e default
-pio run -e default
-```
-
-### Debugging
-
-After flashing the new features, it’s recommended to capture detailed logs from the serial port.
-
-First, make sure all required Python packages are installed:
-
-```python
-python3 -m pip install pyserial colorama matplotlib
-```
-
-After that run the script:
-
-```sh
-# For Linux
-# This was tested on Debian and should work on most Linux systems.
-python3 scripts/debugging_monitor.py
-
-# For macOS
-python3 scripts/debugging_monitor.py /dev/cu.usbmodem2101
-```
-
-Minor adjustments may be required for Windows.
-
----
-
-## Internals
-
-CrossPoint Reader is pretty aggressive about caching data down to the SD card to minimise RAM usage. The ESP32-C3 only has ~380KB of usable RAM, so we have to be careful. A lot of the decisions made in the design of the firmware were based on this constraint.
-
-### Data caching
-
-The first time chapters of a book are loaded, they are cached to the SD card. Subsequent loads are served from the
-cache. This cache directory exists at `.crosspoint` on the SD card. The structure is as follows:
-
-```text
-.crosspoint/
-├── epub_<hash>/         # one directory per book, named by content hash
-│   ├── progress.bin     # reading position (chapter, page, etc.)
-│   ├── cover.bmp        # generated cover image
-│   ├── book.bin         # metadata: title, author, spine, TOC
-│   ├── css_rules.cache  # parsed CSS rule cache
-│   ├── img_*            # rendered image cache files
-│   └── sections/        # per-chapter layout cache
-│       ├── 0.bin
-│       ├── 1.bin
-│       └── ...
-├── settings.json        # device settings
-├── state.json           # resume/runtime state
-└── recent.json          # recent books list
-```
-
-Removing `/.crosspoint` clears all cached metadata and forces a full regeneration on next open. Book deletes, overwrites, and moves done through the firmware or web UI clear or re-key matching caches; manual SD-card edits may leave stale cache directories behind.
-
-For more details on the internal file structures, see the [file formats document](./docs/file-formats.md).
-
----
-
-## Contributing
-
-Contributions are welcome. If you're new to the codebase, start with the [contributing docs](./docs/contributing/README.md). For things to work on, check the [ideas discussion board](https://github.com/crosspoint-reader/crosspoint-reader/discussions/categories/ideas) — leave a comment before starting so we don't duplicate effort.
-
-Everyone here is a volunteer, so please be respectful and patient. For governance and community expectations, see [GOVERNANCE.md](./GOVERNANCE.md).
-
----
-
-## Community forks
-
-One of the best things about open source is that anyone can take the code in a different direction. If you need something outside CrossPoint's [scope](./SCOPE.md), check out the community forks:
-
-- [CrossInk](https://github.com/uxjulia/CrossInk) — UX focused with minimal reading stats and broader customizations for the reading experience.
-
-- [papyrix-reader](https://github.com/bigbag/papyrix-reader) — Adds FB2 and MD format support. Actively maintained with Arabic script support. Custom themes.
-
-- [inx](https://github.com/obijuankenobiii/inx) — Completely reimagines the user interface with tabbed navigation.
-
-- [Witch(hunt) Reader](https://github.com/jpirnay/witchhunt-reader) — More faithful CSS styling and background work for slightly snappier interaction. Weather information panel. Markdown support.
-
-**Note:** Many of these features will make their way into CrossPoint over time. Each project chooses its own priorities and tradeoffs.
-
-Want to build your own device? Be sure to check out the [Silkscreen](https://silkscreenreader.com) project or [OnePage Reader](https://github.com/MoveCall/onepage-reader).
-
----
-
-CrossPoint Reader is **not affiliated with Xteink or any device manufacturer**.
+# CrossPoint Reader OST 改造版
+
+XTEINK X3上で日本語EPUBファイルを読むために、CrossPoint Reader を改造しています。
+命名は面倒くさくなったのでOSakanaTaro版ってことでOST版です。
+
+### 2026/11/03時点の開発方針
+- XTEINK X3とXTEINK X4 Pro向けに開発
+  - Xteink X3はaliexpressで買ったUSB接続ができないバージョンを使用
+  - Xteink X4 Proは [Xteink公式](https://go.sjv.io/aNGBAW)で購入したバージョンを使用
+- Claude Codeで開発する
+  - コンパイルなどはUbuntu 24.04仮想マシン上で実施
+- 本家をベースにする
+  - X3の最近のバージョンは液晶パネルが違う件への対応などが本家には入っているため
+  - 2026/08/09から1.5.0ベースで開発開始。本家にXteink x4 pro対応が入ったあたりで乖離が始まった
+  - 2026/08/20から1.6.0rcをベースにして再構成開始
+  - 2026/09/06から1.6.0リリース版をベースに再構成
+  - 2026/09/28から1.6.5リリース版をベースに再構成（ブランチ `vertical-1.6.5`）
+  - 2026/11/02から2.0.0リリース版をベースに再構成（ブランチ `vertical-2.0.0`）
+- ブランチの使い分け（2026/09/30〜）
+  - 既定のブランチは `vertical-1.6.5review`。CodeRabbit のレビューを通った状態で、先行版・リリースはここから作る
+  - 日々の細かい修正は `vertical-1.6.5` で行う
+  - 1日1回程度、`vertical-1.6.5` から `vertical-1.6.5review` への PR を作って CodeRabbit のレビューを受け、指摘を直してから反映する
+- 日本語訳を本体に組み込む（2.0.0 から。それより前の版は日本語訳なし）
+  - 日本語の画面にするには、SDカードに日本語フォントを置いておく必要がある
+- フォントはSDカード上に配置する
+  - 容量食うのでSDカード上に置く
+- ページめくりボタンは左が進むで、右が戻る
+  - 縦書きフォーマット(RTL)のEPUBを開いた時だけその動作をする
+- 青空文庫ダウンロードなどの機能は付けない
+- 時計表示機能を追加
+  - 磁石で貼り付けることができるので作業時の時計表示に使えるな、と実装
+  - [Settings]-[System]-[Clock]の[Time Zone]を「Tokyo / Seoul」とすることで日本時間表示に（1.6.5 から。1.6.0 ベースの版では[Settings]-[Reader]-[Customize Status Bar]の[Clock UTC Offset]を「UTC+9:00」）
+- テスト用EPUBファイルにて動作を確認
+  - 一部、特殊なフォントを必要とする文字以外について表示できることが期待される
+- ルビ表示について対応
+  - 横書きであればルビに対応してるなら縦書きでも対応しておくかな、って
+- 電書連 EPUB 3 制作ガイド ver.1.1.4に準拠したEPUB表示についての対策
+  - ~~CSSが巨大すぎてメモリクラッシュを起こす件についての対応をやる必要があるのかという問題~~
+  - ~~[Setings]-[Reader]-[Text Settings]にある[Style]にて「Embedded Style」を「OFF」にするとCSSを使わないため回避できる~~
+  - こんな小さな端末で著者がやりたいという複雑な表現をやって期待通りの表示になるのか？と思いつつ対応
+- 本家との付き合い方
+  - UIの大きな変更は個別に追随しない。本家のタグが更新された時点でforkしなおし再実装する
+  - 基本的に縦書き・挿絵・フォントに関わる本家修正だけ取り込む
+- フォントの明朝／ゴシック混植は実施しない
+  - 1冊のなかでフォント指定を途中から変える機能について
+  - 商業EPUBの91%が指定を持つが1冊あたり中央値40箇所で、2書体常駐のメモリ代償に見合わない
+- 組版やレイアウトについての出典として下記を採用している
+  - EPUB 3.3 仕様書 https://www.w3.org/TR/epub/
+  - EPUB 3.4 テスト仕様 https://w3c.github.io/epub-tests/index.html
+  - 日本語組版処理の要件(JLREQ) https://www.w3.org/TR/jlreq/
+    - 特に JLREQ 3.3.2 ルビの付け方
+  - Unicode Vertical Text Layout(UAX #50) https://www.unicode.org/reports/tr50/
+  - Unicode Line Breaking Algorithm(UAX #14) https://www.unicode.org/reports/tr14/
+  - 電書協 EPUB 3 制作ガイド https://dpfj.or.jp/counsel/guide
+  - KADOKAWA-EPUB 制作仕様 および KADOKAWA-EPUB 再現指標 https://kadokawa-epub.bookwalker.co.jp/%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89
+- 開発に際して下記URLをClaude codeに読み込ませている(実装内容まとめで使う略語)
+  - 本家 https://github.com/crosspoint-reader/crosspoint-reader
+  - JP版 https://github.com/zrn-ns/crosspoint-jp
+  - CJK版 https://github.com/CrossPoint-CJK/crosspoint-reader-cjk (旧URL https://github.com/aBER0724/crosspoint-reader-cjk )
+  - Yomuka版 https://github.com/ponto1216-ai/crosspoint-jp
+  - 抹茶版 https://github.com/eszter007/matcha-reader
+  - freeink-sdk https://github.com/Free-Ink/freeink-sdk
+  - 以下は日本語縦書きには直接関係しない実装で、UIなどの機能面の参考として読む（2026/09/09 追加。同日、3つとも縦書き・ルビ・禁則・text-orientation などの実装が無いことをソースと履歴で確認済み）
+    - Papyrix版 https://github.com/bigbag/papyrix-reader
+    - Inx版 https://github.com/obijuankenobiii/inx
+    - witchhunt版 https://github.com/jpirnay/witchhunt-reader
+    - crossmux版 https://github.com/0x1abin/crossmux
+    - CrossInk版 https://github.com/uxjulia/CrossInk （2026/10/08 追加。X3・X4・X4 Pro 対象。書体とテーマ、読書統計、しおり、読了の管理、読書画面だけのボタン割り当てなど）
+  - 以下はゲームなどの追加機能の参考として読む（2026/10/08 追加。いずれも縦書きの実装は無い）
+    - crosspet版 https://github.com/trilwu/crosspet （X3・X4 対象。仮想ペット、チェス、数独、マインスイーパー、2048、単語帳など。本家 1.5.0 起点で旧 SDK）
+    - crossplay版 https://github.com/ma-r-s/crossplay （X4 Pro などの ESP32-S3 機専用で X3 には入らない。25 のゲームと 8 の道具、2台での近距離対戦、単語帳、漫画など）
+    - KatiePoint版 https://github.com/InsiderPhD/crosspoint-reader （X3・X4・X4 Pro 対象。BookFusion・Hardcover との同期、Bluetooth のページめくり、読書統計、操作の割り当て、表紙の本棚、ページ内脚注、辞書など。縦書きなし）
+
+各フォークが本家のどのリリースまで取り込んでいるか（2026/10/13時点、GitHubの履歴を照合）。
+
+| 版 | 取り込み済みの最新 | 本家との世代差 | 使用しているfreeink-sdk |
+|---|---|---|---|
+| 本家 | 1.6.5（2026/09/27）。develop の先端（10/12 `ba39565c`）はさらに63件先（#3960 X3 のアンチエイリアスでの固まりを SDK で修正、#3831 読書中の SD 書体の保存がヒープを細切れにしない、#3727 段落の字下げの設定、#3704 TXT／Markdown を EPUB の経路で表示、#3589 本文の抜き書き、#3712 スワイプで削除、#3950 Web 画面の見た目 など） | ― | 7fcd3b34（1.6.5 は 111fdcc7） |
+| **OST版** `vertical-1.6.5review` | 1.6.5（2026/09/27） | develop の先端から63件遅れ。うち21件（#3685 FAT の区画を別の置き場に、#3764 リンクで飛んだあとの再開位置、#3838 SD 書体の字詰めと合字、#3830 閉じた本の記憶、#3824 認証情報のファイルの保護、#3114 アップロードの作業領域 など）は個別に取り込み済み。#3727（段落の字下げ）は当版の縦書きの字下げと同じ箇所を触る | 111fdcc7 |
+| 抹茶版 | develop の先端（10/12 `ba39565c`）まで | 遅れなし（develop の枝。独自 2,905件）。最新は 1.7.0-nightly-2（2026/10/11 先行版）。10/01 以降: 縦書き・横書きで共通の抜き書きの選択（つまみのドラッグ、辞書の無い語の長押しで抜き書き）、ラテン文字と CJK で別々の文字設定、Back で最後の本に戻る設定、状態行に読み終わりまでの見込み時間、縦書きの文字の重なりと括弧の空きの修正、縦書きの字間設定、胡麻点を図形で描く、中国語の SD 書体に CJK 拡張 A | 7fcd3b34 |
+| CJK版 | **本家タグを1つも含まない**（0.4.2、2026/09/05） | 本家と共通の祖先は develop 08/27 `68a43ce4`（以後340件遅れ）。09/05 以降の更新なし | 自前fork 62976c52 |
+| JP版 | 1.2.0（2026/04/03） | 1.3.0 以降すべて未取り込み（develop の先端から693件遅れ、独自 688件）。09/19 の v0.3.2 以降の更新なし | 61f0b2b5 |
+| Yomuka版 | 1.2.0（2026/04/03） | JP版からの派生のため同じ（develop の先端から693件遅れ、独自 985件）。最新は yomuka-v0.8.2（2026/10/10）: 読書データ（進み具合など）を Wi-Fi で端末どうし直接やり取りする共有機能、縦書きの読点・句点が列からはみ出さない修正、途中で区切った段落の字下げを保つ、組版中の送り幅の保存をその場で伸ばす | 18e73e16 |
+| crossmux版 | 1.6.5 と develop 10/02 時点 `38280863` | develop の先端から44件遅れ、独自 734件。中国語（簡体字）対応の community fork。10/01 以降: ベクター書体の 16 段階のアンチエイリアスとページをまたぐ字形の保持、ページ送りの向きの設定、ファイル一覧で JPEG、眠り画面を描く前に白で流す、AirPage の画像の保持、Read Pico の画像の先読み。**縦書き・禁則なし** | 自前fork 96de1be6 |
+
+各版の最新リリース（先行版を含む。安定版だけを見るとJP版・Yomuka版の日付つき開発版や、
+Inx版・witchhunt版・抹茶版の先行版を取り落とす）:
+
+| 版 | 最新 | 日付 |
+|---|---|---|
+| crossmux版 | 毎日ビルド（nightly、先行版） | 2026/10/12 |
+| witchhunt版 | 2.39.rc（先行版） | 2026/10/12 |
+| 抹茶版 | 1.7.0-nightly-2（先行版） | 2026/10/11 |
+| Yomuka版 | yomuka-v0.8.2 | 2026/10/10 |
+| crossplay版 | v1.14.2 | 2026/10/10 |
+| Papyrix版 | v1.33.1 | 2026/10/05 |
+| CrossInk版 | v1.6.1（独自の版番号） | 2026/10/04 |
+| KatiePoint版 | 1.12.0（独自の版番号） | 2026/10/02 |
+| **OST版** | 20260929（先行版、1.6.5 ベース） | 2026/09/29 |
+| 本家 | 1.6.5 | 2026/09/27 |
+| JP版 | v0.3.2 | 2026/09/19 |
+| Inx版 | 1.0.20-BETA（先行版） | 2026/09/11 |
+| CJK版 | 0.4.2 | 2026/09/05 |
+| crosspet版 | v1.8.4 | 2026/07/25 |
+
+CJK版だけは freeink-sdk 自体も自前でforkしていて、SSD1677パネル向けの修正を独自に入れている。
+他は本家のfreeink-sdkをそのまま参照している。
+
+# 最近の更新内容について(2026/10/20)
+
+- 本家 1.6.5（2026/09/27 リリース）を起点に作り直しを開始（2026/09/28〜、ブランチ `vertical-1.6.5`）。新しい系統の最初の pre-release として OST版 2026093001-diag（タグ 20260929、診断版、X3 と X4 Pro の2本）を公開
+  - Xteink X4 Pro 向けの版も作るようにした（2026/09/29〜）。X4 Pro は PSRAM があり読書中の空きが 130KB 以上、18pt の縦書きは 1 ページ 8 列（X3 は 9 列）
+    - X4 Pro には Back ボタンが無いため、時計画面をホームキーで終了できるようにした（タップ・長押しとも。ダブルタップの前面ライト切り替えは時計画面のまま使える）
+  - 挿絵が白いページになる件を本家に PR #3802 として提出（章の組み立て中に挿絵の大きさを読む処理へ画面用の記憶を貸す）。本家 1.6.5 で表紙・章の扉が枠もなく白くなることを実機で再現し、修正版で表示されることを確認。本文中の細い挿絵の件は本家 PR #3675 に実測をコメント
+  - その PR のレビューで見つかった件を当版にも反映: 待ち時間の組み立てで画面用の記憶を貸したらページを描き直し、描き直すまではツールバーを今の画面に直接重ねない（重ね表示中は待ち時間の組み立てを止める）
+  - 本家・他フォークから小さな修正を取り込み（2026093004-diag、X3・X4 Pro で実機確認済み）
+    - 本家から: ボタン操作ごとの記憶の確保をやめる（#3698）、脚注の一覧で電源ボタンでも飛べる（#3766）、タッチ機で見出しの戻るボタンがキーボード画面でも効く、読み込み用ファイルの確保失敗で落ちない（#3419）、保存済みの文字列の長さを上限で打ち切る（#3452）
+    - 抹茶版・Yomuka版から: 空きが少ないときにツールバーを開いても落ちない、本の終わりの位置で目次・進み具合を引いても落ちない
+    - 自動ページ送りの間は自動スリープさせない
+  - 当版の変更を本家 1.6.5 からの段階ごとに区切って fork 内の PR にし、CodeRabbit のレビューを受け始めた（土台の枝 `vertical-1.6.5review`、1本目は診断記録とビルド番号）。指摘2件（診断版の番号の見分け、待ち時間の組み立て失敗の記録）を修正
+    - 残り全部（段階2〜9 と X4 Pro 対応）を1本にまとめてレビューを受け、指摘9件を修正（2026093006-diag、X3・X4 Pro で実機確認済み）。縦書きの本で区切り線（hr）と表の行の線がページ上端を横切る横線になっていた件（区切り線は空いた列1列に、表の行の線は出さない。章の版 56）、Font Copy in Flash が Off のとき書体・大きさの変更で書体ファイルを2回読んでいた件、保存済みの文字列が途中で切れていても読めた扱いだった件、本体の書き換えに失敗したとき書体の複製を読み続けるおそれ、など
+    - その修正分もレビューを受け、書き換えの消去を書体の複製を読んでいる途中の処理が終わるまで待つようにした（2026093007-diag、実機確認済み）
+    - 以後は既定のブランチを `vertical-1.6.5review` とし、日々の修正を積む `vertical-1.6.5` から1日1回程度 PR で CodeRabbit のレビューを受けて反映する（段階ごとのレビュー用ブランチは削除）
+  - 抹茶版 #336 にならい、目録のある本で CSS を解析し直すとき（CSS の保存が無い・途中まで・古い版）も画面用の記憶を貸す。32KB の展開の作業場所を空き領域から取らなくなり、X3 で開く途中の最低の空きの落ち込み（36KB）が消え、表紙を確かめる時点の最大の塊が 34.8KB→77.8KB（2026100101-diag、実機確認済み）
+  - 同じく抹茶版 #336 にならい、ツールバーを開くときのページの写し（X3 で約52KB）は、写したあと 16KB 残らなければ取らない（閉じるときは描き直して戻る）。写しの確保は始める前に空きを確かめ、途中で失敗して空き領域に穴を残さないようにした（2026100101-diag、実機確認済み）
+  - 横書きで、縦書き用のくの字点（〳〵・〴〵）の上下の半分が行の境目で分かれ、〵 だけが次の行の頭に出ることがあった件を修正（本家 PR #3609 への CodeRabbit の指摘を当版にも反映、章の版 57）。縦書きの列は別の列頭禁則でもとから守られていた。横書き退行検証テストに 1-3 を、縦書きの検証集にテスト26 を追加（2026100201-diag、実機確認済み）
+  - 本家 develop から6件を取り込み（2026100403-diag、X3・X4 Pro で実機確認済み）
+    - SD カードの書体で、字詰め（カーニング）と合字が途中で抜ける不具合5件の修正（#3838）。保存済みの章の配置は字詰めの抜けた幅で組まれている場合があるので、章の版を 58 に上げた
+    - 閉じた本が記憶を手放さない件（#3830）。本を閉じると約30KB 戻るようになった
+    - 章が数千ある本で目次などの索引づくりが途中で止まる件（#3733）、省電力の速度で動いている間に記録の行が欠ける件（#3737）
+    - X3 の充電の判定を、電池の監視部品を SDK 経由で読む形にした（#3809、起動直後の I²C のエラーをなくす）
+    - 本家に取り込まれた PR #3802 で足された2件: ツールバーを開いている間は待ち時間を詰めない（省電力の速度に下がる）、中身のない章の画面でも写しの目印を下ろす
+  - ツールバーのページの写し（X3 で約52KB）が解放されずに残る件を修正。2026100101 で入れた「残りが足りなければ写しを取らない」判定が、前の写しを解放しないまま断っていた。ツールバーを開いたままページが描き直されると起き、本を閉じても戻らず、設定画面を開くところで落ちていた（2026100403-diag、実機確認済み）
+  - 横書きの字詰めの確認用に kerning-toolbar-test.epub を作成（Python で生成。NotoSansJP で字詰めの効く組と効かない組の見比べ、中身のない章、長い章）
+  - CI の cppcheck が `GfxRenderer.h` の文字幅の覚え書きを消す2つのループを指摘していた件を、標準の関数（`std::replace_if`・`std::fill`）に置き換えて解消。動きは変わらない
+  - パソコン上の単体試験（`test/`、CI の unit-tests）が組み立てられなくなっていた件を修正。縦書き、書体の flash 複製、グリフ画像の 4KB 分割などに試験の代用部品と前提が追いついていなかった。414 件中 413 件が通り、1 件（本家 #3521 の、一続きのグリフ画像の確保に失敗したら送り幅の表を捨てて再試行する試験）は 4KB 分割の当版には当てはまらないのでスキップにした。ファームウェアは変えていない
+  - README の参考にした版に KatiePoint版を追加し、各フォークの取り込み状況と最新リリースの表を 2026/10/13 時点に更新。UAX #14 の表記を補った
+  - 本家のエージェント向けの手引き（AGENTS.md と .agents）を本家 develop の最新（3607ea7b・#3951）にそろえた。当版では書き換えず本家の版をそのまま取り込む
+  - 画面の表示言語に日本語を追加し、内蔵の書体で表示できない言語は SD カードの書体で表示する仕組みを作成（2026101406-diag、X3・X4 Pro で実機確認済み）
+    - 日本語訳は抹茶版の訳を元に、当版だけの項目を足して手直しした。英語が「...」の所は「...」、「!」「:」は半角にそろえた
+    - 各言語で使う文字の一覧を組み立て時に作り、内蔵の書体で足りない言語では、SD カードの書体から 8・10・12pt が揃いその文字を全部持つものを名前の順に探して画面表示に使う。読書用の書体が内蔵のものなら、言語を選んだときに読書用もその書体にそろえる
+    - 使える書体が SD カードに無い言語を選ぶと警告を出し、書体のダウンロード画面へ進める。キャンセルするか、書体を入れずに戻ると元の言語（それも表示できなければ英語）に戻す
+    - 本家のダウンロード一覧には日本語の書体が無いので、この仕組みを本家へ PR として出し、通ったあとに日本語の書体を公式の一覧に置いてもらう方向
+  - 縦書きで康熙部首（U+2F00〜2FD5）と CJK 部首補助（U+2E80〜）が横倒しになっていたのを正立にした（2026102001-diag、X3 で実機確認済み）
+    - UAX #50 ではこの範囲はすべて正立だが、正立させる範囲の判定に入っておらず、欧文と同じ横倒しの扱いになっていた。章の配置の版を 59 に上げたので、縦書きの本は開いたときに組み直される
+    - 確認用に font-coverage-test.epub へ康熙部首 214 字の横書き・縦書きのページを足し、NotoSansJP で全字が出て正立することを確かめた。BIZ UD の2書体はこの字形を持たない
+    - 章の保存からページや段落の位置を引く処理が、保存の版を確かめずに読んでいたのを直した。版を上げた直後に古い版の保存が残っていると、その組み方の位置を返していた（2026102002-diag、X3 で実機確認済み）
+  - 本家 #3831 を取り込み、SD 書体の作業用の保存が読書中にヒープを細切れにしないようにした（2026101307-diag、X3 で実機確認済み）
+    - 送り幅の表を倍々の容量で同じ場所に伸ばし、組版用の作業領域を取る前に伸ばしておく。字詰めの分類表は持ち続けず、ページごとに要る分だけ読む（Font Copy in Flash が On なら flash から読む）
+    - X3・NotoSansJP 18pt・縦書きで「異世界から帰ったら江戸なのである」1話から 50 ページほど送って比べると、章の組み立て直後の空きの底が 11.9KB → 19.7KB、そのときの一続きで取れる最大の空きが 3KB → 14KB、読書中の空きが約 7KB 増えた。組み立てと字形の準備の時間は変わらない
+  - X3 で Web の File Manager の一覧がたびたび読み込めなかった件を修正（2026101302-diag、X3 で実機確認済み）
+    - File Transfer の間、ファイルと書体のアップロード用の作業領域（4KB ×2）をずっと確保していた。アップロードの最中だけ確保する形にして（本家 #3114 と同じ考え方。書体ファイルの先頭の確認に失敗したときもその場で返す）、空きが 26KB → 34KB に増えた。一覧を返す最中の空きの底が 0.6KB まで落ちて通信が切れていたのが、4KB 台で止まり、再読み込み5回で5回とも表示された
+  - SD のファイルを消す・短くするときの書き込み順を修正（2026101203-diag、X3 で実機確認済み）
+    - 消す・短くする・開くと同時に空にする操作で、SdFat は塊を解放してからディレクトリ項目を書き換えていた。その間に電源が落ちると、項目が空きの塊を指したまま残り、次に書いたファイルと同じ塊を共有して壊れ得た。項目を先に書いてから解放する SdFat の修正（0004・0005）を当版で作成。電源が落ちても、残るのは「どこからも指されない塊」（fsck で回収できる）だけになる
+    - 電源断の試験を追加（`test/sdfat_write_order/`）。書き込み1回ごとに電源断を再現して、壊れた状態が残らないことを確かめる。修正前は削除などで危険な時点が4か所あった
+  - SD への書き込みと Web 画面の安全性の修正（2026101101-diag、X3・X4 Pro で実機確認済み）
+    - 10/07 に取り込んだ #3685（FAT 表の置き場を分ける）で、ファイルが伸びたときにディレクトリ項目が FAT 表より先に書かれるようになっていた。その間に電源が落ちるとファイルシステムが壊れ得るので、FAT 表を先に書く SdFat の修正を witchhunt版から取り込んだ（X3 は眠ると電源を切る）
+    - File Transfer の間、`/.crosspoint/wifi.json`（保存した Wi-Fi の暗証）や OPDS・KOReader の認証情報のファイルを、同じ網のパソコンから取り出せた。本家 #3824 のパスの判定を移し、取り出し・アップロード・名前の変更・移動・削除で拒むようにした
+    - 未解決: X3 で File Transfer 中に一覧の取得がたびたび失敗する。記憶の底が 1.2KB まで落ちている（今回の修正とは別の課題）
+  - 本家 develop から10件を取り込み（2026100702-diag、X3・X4 Pro で実機確認済み）
+    - 本の中のリンクで飛んだあと、眠りや本の閉じ直しをまたいでも見ていたページで開く（#3764）。飛ぶ前の位置は別に残り、戻る操作で帰れる
+    - SD の FAT 表を本体とは別の置き場に持ち、書体の読み込みを速くする（#3685、静的に 512 バイト増）。ページ位置の表を 32 件ずつまとめて読む（#3899）
+    - WebDAV でファイルを取り出すと 1 バイトしか返らなかった件（#3410）、アップロード中に Back で File Transfer を抜けられない件（#3732）
+    - 使わない Arduino のライブラリを組み立てから外す（#3857）、版番号を使うソースだけに渡す（#3860）
+    - ボタン案内の文字を上下中央に置く（#3865）、鍵盤画面の先端位置（#3863）、アラビア文字の向き（#3834）
+    - 省電力へ切り替える処理の排他（#3847）は、当版が先に同じ形で直していたので取り込み不要だった
+  - パソコン上で当版を動かす模擬環境を追加（2026/10/05）。本家の組織が公開する crosspoint-simulator（firmware をそのまま組み立てて SDL2 の窓に画面を出す物）を fork した [osakanataro/crosspoint-simulator](https://github.com/osakanataro/crosspoint-simulator) の枝 `ost` に、当版が足した HAL（時計の日時、電池の電圧、書体の複製先の領域、ウォッチドッグの設定）の代替を置き、`platformio.ini` に `simulator_x3` / `simulator` / `simulator_x4_pro` の環境を足した。縦書きの本を SD 書体で開き、ルビ・傍点を含めてページを描けることを確認。画面の無い環境でも動くよう、加速描画が無ければ軟件描画に落とす手当てを fork 側に入れた。パネルの更新時間・残像・実機のヒープ量は再現しない
+    - 画面の回帰検査 `scripts/sim_regress.py` と指示書 `test/sim-regress/scenarios.yaml` を追加。試験用の本8冊（縦書き検証集、縦横の書式確認、縦書きの罫線表、横書き回帰検証、字詰めとツールバー、SVG 表紙）を `test/sim-regress/books/` に置き、決まった操作で取った画面（X3 で30枚）を `test/sim-regress/baseline/` の基準と見比べて、違う画素の数と差分画像（赤）を `index.html` に出す。基準の更新は `--update-baseline`。使い方は `test/sim-regress/README.md`
+    - 模擬環境では保存の置き場の名前（`epub_<n>`）を実機と同じ 32bit の hash にした（JP版の `FsHelpers::pathHash` の形。実機は `std::hash` のままで変わらない）。実機の SD をそのまま模擬環境で読め、章の保存を突き合わせられる
+    - JP版の `scripts/sim_run.ts` に倣った `scripts/sim_run.py` を追加。模擬 SD の組み立て（本・`.cpfont`・settings.json・開く本の指定）、ボタン操作の予約、指定時刻の画面取得（PNG）、記録の要約（画面遷移・ERR 行・画面外描画）を1回の実行で行う。例: `python3 scripts/sim_run.py --env simulator_x3 --fonts-dir ../fonts --sd-font NotoSansJP --book x.epub --open /Books/x.epub --shot 9000:page --script '10000:UP' --shot 12000:next`
+  - 起動画面・眠り画面のロゴを本としおりの形に替え、ロゴの下の名前を「CrossPoint OST」にした（2026093008-diag、X3・X4 Pro で実機確認済み）
+  - 段階0（素の 1.6.5 のビルド）、段階1（診断）、段階2（時計と監視）、段階3（字形の計測と素の実測）まで完了。詳細は下の「1.6.5ベースへの作り直し」節
+  - 段階9（実測②と補い）を実施中。漢字の多いページの 1 字ずつの読み直し（最大 16.5 秒）を字形の置き場の 4KB 分割で解消し、本文ページ内の JPEG 挿絵が出ない件を組み立て中の先回り展開で直した。組み立て中の空きの底を 2KB→17KB に引き上げ（章で使う CSS の規則だけ読む・設定一覧を常駐させない）、組み立て中にメニューを開くと落ちる件も直した
+  - 段階8bまで完了。Library（書棚）の並び・見出し・検索を、本の読み（file-as）に基づく五十音順にした（本家に出している PR #3651 を先に取り込み）
+  - 段階8aまで完了。書体を内蔵 flash に複製して読めるようにした（Text Settings → Style「Font Copy in Flash」、18pt は 16pt を 9/8 倍）。商業書籍で挿絵と表紙が白いページになる件も直した
+  - 段階8まで完了。表紙が SVG の包みになっている本でも、本棚と眠り画面に表紙が出るようにした
+  - 段階7まで完了。縦書きの本の挿絵と外字を表示できるようにした（挿絵は列を割り当てて置き、1字大の外字は本文の列に入れる）
+  - 段階6まで完了。本家の Character spacing（字間）が縦書きでも効くようにした
+  - 段階5（縦書きの中核）まで完了。縦書き検証テスト集の26試験を実機で確認。縦書きでも脚注の選択（Footnotes）が使えるようにした
+  - 段階4（横書きの組版）まで完了。禁則を JLREQ の各類に広げ（本家 PR #3609 の形）、長い段落の途中に字下げや空きが入る件、章内の飛び先が1ページ手前を指す件を直した
+  - 段階9から前倒しで、字の幅だけを読む経路を持ち込んだ。離れた章への移動（185ページの章）で組み立て 20.7 秒 → 12.6 秒、体感 21 秒 → 14 秒（`2026092815-diag`）
+  - この時点のブランチには日本語フォントの扱い・縦書き・挿絵などはまだ入っていない（1.6.0 ベースの `feat/vertical-1.6.0based` の内容は [CHANGELOG-OST.md](CHANGELOG-OST.md) にある）
+- 本家 1.6.5 より前（1.6.0 ベースの版、2026/09/06〜09/27）の更新は [CHANGELOG-OST.md](CHANGELOG-OST.md) に移した
+
+
+## 2.0.0ベースへの作り直し（2026/11/02〜） by claude code
+
+本家 2.0.0（タグ `2.0.0`＝`42d58daa`）から `vertical-2.0.0` を作り、1.6.5 ベースの版の縦書き一式と日本語訳を載せ直した。
+本家と当版が同じ箇所を直していたところは本家の作りを使い、当版の分は外した。
+
+- 載せたもの: 縦書き（組版、ルビ・圏点、文字の向き、挿絵と外字、右開きのページ送り、字間）、横書きの禁則（JLREQ）、
+  異体字選択子の読み飛ばし、時計と監視、診断、書体の本体への複製（18pt を 16pt の 9/8 倍で描く）、本棚の読み順、
+  SVG で包んだ表紙、日本語訳（2.0.0 で増えた51項目は未訳で英語表示）
+- 外したもの（本家の作りを使う）: 字形の一時置き場を 4KB に分ける方式、CSS の子孫の指定の扱い、待ち時間に章を組む処理、
+  目次から跳んだ先が1ページ前にずれる件の直し
+- 縦書きのページでは、本家の新機能の枠線とドロップキャップは作らない
+- 段落の字下げは本家の「段落字下げ」設定に従う。縦書きでは0以外なら1字、0なら無し
+- 保存形式の版: 章の配置 75、CSS の保存 20、本の情報 13。古い保存は開いたときに作り直される
+- 実機確認で直したもの: 括弧や全角スペースで始まる段落の字下げ、書体を本体に複製したときに太字が消える件、
+  Web 転送の設定画面が開けない件（日本語の字形の領域を画面の書き換え前に手放す）、
+  縦書きの正立・縦中横の小文字、縦書きの改ページ、「読書に集中」の訳を「単語の頭を太く」に変更
+- 実機確認（X3・X4 Pro）: 縦書きテスト書・横書き退行検証・挿絵・SVG 表紙・罫線と表・フォント収録の各テスト書、
+  時計、スリープからの復帰、Web 転送
+- 既知の差: 横書きでは本の指定する正の字下げを使わない（本家の作り）、横書きの表は日本語だと列幅が狭くなることがある（本家の作り）、
+  横書きの外字は行の中に入らない、長く使ったあとにホームの表紙を作れないことがある
+
+## 1.6.5ベースへの作り直し（2026/09/28〜） by claude code
+
+本家 1.6.5（タグ `1.6.5`＝`93e98bb7`、2026/09/27）から `vertical-1.6.5` を作り、当版の機能を段階ごとに載せ直す。
+前回（1.6.0）は机上で取捨を決めたが、今回は本家が断片化・入力の取りこぼしに正面から取り組んだ後なので、
+**本家の対処をまず素のまま採り、実測で足りない箇所だけ当版の実装を戻す**。freeink-sdk は 1.6.5 が指す
+`111fdcc7` を使う（当版が使っていた `fde240f` とパネル待ちの修正 ed39106 を含むので、SDK で持ち込むものは無い）。
+
+| 段階 | 中身 | 状態 |
+|---|---|---|
+| 0 | 素の 1.6.5 のビルド | 完了（RAM 57,912B／flash 5,621,527B） |
+| 1 | 診断（INPUT_DIAG、ビルド番号） | 完了（`2026092803-diag`、実機確認済み） |
+| 2 | 時計と監視（#3562 の地域・夏時間の設定に載せ替え） | 完了（`2026092806-diag`、実機確認済み） |
+| 3 | 日本語フォント（生成フォントと描画の追加分。メモリ処理は入れない）＋素の実測① | 完了（`2026092807-diag`、実測済み） |
+| 4 | 横書きの組版（禁則、長い段落） | 完了（`2026092818-diag`、実機確認済み） |
+| 5 | 縦書きの中核 | 完了（`2026092901-diag`、実機確認済み） |
+| 6 | 縦書きの字間（本家 #3528 の字間を縦書きの字送りにも効かせる、新規） | 完了（`2026092903-diag`、実機確認済み） |
+| 7 | 挿絵（本家 #2332 の上に載せる） | 完了（`2026092908-diag`、実機確認済み） |
+| 8 | 表紙（SVG の包み、縮小表紙） | 完了（`2026092910-diag`、実機確認済み） |
+| 8a | flash から書体を読む仕組み、16pt を 9/8 倍して 18pt に使う仕組み | 完了（`2026092913-diag`、実機確認済み） |
+| 8b | 書棚の読み順（本家 PR #3651） | 完了（`2026092914-diag`、実機確認済み） |
+| 9 | 実測②と不足分の補い（断片化対策・描画中の入力・本棚での解放など） | 実施中（`2026092918-diag` まで実機確認済み） |
+| 10 | 配布（非診断版、README の整理） | |
+
+### 段階1: 診断（2026-09-28、`2026092803-diag`、実機確認済み）
+- `src/util/InputDiag.*` と `scripts/ost_version.py` は旧ツリーの最終形のまま持ち込み、呼び出しは本家 1.6.5 にある処理にだけ入れ直した
+  - 主ループの読み取り間隔と書き出し（書き出しは、描画中に主ループが途中で戻る本家 #3652 の分岐より手前に置いた）、画面の描画時間、Home に入った時点のヒープの一覧、読書画面の開く各段階・閉じたときのヒープ・章の組み立ての計時・ページ描画の検査点、章の保存のページごとの書き出し時間、クラッシュ報告の先頭のビルド番号
+  - 字形の読み込み回数と字形置き場の解放記録は段階3、縦書き・挿絵・先読みの計測点は各段階で入れる。一覧画面の表示範囲の記録は、本家が一覧の作りを変えたため入れる場所が無く見送り
+- 非診断版もビルドが通る（RAM は素の 1.6.5 と同じ、flash +236B）
+- 実機での最初の観察（素の 1.6.5 に診断だけ、日本語 SD 書体・商業書籍の横書き、文字のアンチエイリアス ON）
+  - ページ送り 1.1〜1.3 秒、章の組み立て最長 3.5 秒（5回に分けて）、本を開く各段階の空き 95→70KB（最大連続 41KB のまま）、閉じると 96KB に戻る
+  - 空きの底は 11.4KB（最大連続 4.6KB）で、アンチエイリアスの帯描画の 8KB 作業領域を取った直後。その時点の持ち主の上位は、画面用の記憶 53,248B（SDK が起動時にヒープに取る。旧ツリーでも同じ）、設定項目の一覧 9,216B（本家は起動中ずっと保持。旧ツリーでは `8cc5f333` で使うときだけ作る形にした）、読書中の CSS 6,912B＋4,352B、SD 書体の一覧 5,376B と書体ファイル名の文字列 35 個 3,272B、章の組み立て中の XML 読み取り用 4,352B
+  - Home の初回描画 7.1 秒は表紙の縮小画像の作成（823KB の JPEG の展開 3 秒＋変換 2.5 秒）。初回だけ
+
+### 段階2: 時計と監視（2026-09-28、`2026092806-diag`、実機確認済み）
+- 時計モードの画面・数字の画像・12時間表示は旧ツリーのまま。Home のメニューの末尾（Settings の次）に「Start clock mode」
+- 時刻は本家 #3562 の地域・夏時間の設定に従う。本家の時刻の読み出しは 10 秒ごとにしか RTC を読まず秒が古くなるため、時計の画面向けに RTC を毎回読んで地域の規則で変換する `HalClock::getLocalDateTime()` を足した。旧版の UTC の時差を自前で足す計算は廃止
+  - 1.6.0 の「UTC+9」の設定は本家の移行処理で一覧の「UTC+9」として引き継がれ、表示は変わらなかった。「Tokyo / Seoul」に切り替えても同じ
+- 時計の描画と時計表示中のメイン処理を 30 秒の監視に登録（すべてのビルド）。CPU の速度切り替えの直列化、電池電圧の記録、「自動スリープさせない」と「速度を保つ」の区別（時計表示中は 10MHz）も旧ツリーのまま
+- 実機確認: わざと固まらせる検証ボタン（CLOCK_HANG_TRIGGERS）で、メイン処理（Confirm）・描画（側面ボタン）とも 30 秒以内に再起動し、`crash_report.txt` にそれぞれ `loopTask`／`ActivityManager` の名前が残った。時計表示中は `cpu_mhz_min=10`、ボタンの読み取り間隔 76ms 以内、空き 78〜80KB で一定
+
+### 段階3: 字形の計測と素の実測①（2026-09-28、`2026092807-diag`）
+- 旧ツリーのフォント層の変更を仕分けた。SD に置く日本語書体はそのまま 1.6.5 で使え、生成フォントの定義はフォント用ブランチにあるので firmware で移すものは無い。メモリ処理（4KB 分割の置き場、予備枠 8→48、解放の経路など）は段階9、縦書き用は段階5、flash から読む仕組みは段階8a、挿絵・階調は段階7
+- 入れたもの: 字形を1つずつ読んだ回数・置き場の作り直し（回数と時間）・置き場の解放記録・描画前の走査の結果・幅の表の作業量・本文の書体を診断に出す計測（書体のメモリの扱いは変えない）。異体字選択子（VS1〜VS16、IVS）の読み飛ばし（章の版 48→49）
+- 素の実測①（商業書籍の横書き、NotoSansJP 18pt、アンチエイリアス ON）
+  - **離れた章への移動が 39.2 秒**（組み立て 34.6 秒）。本家は字の幅を 768 字分まで表に覚え、日本語の章はそれを超えるため、以降の幅の測定のたびに字形の画像まで SD から1字ずつ読む（1回の描画で 2,817 字）。旧ツリーの `15bdbaab` が塞いでいた穴なので、段階9から前倒しして持ち込む
+  - 同じ本を開き直した直後に空き 2.7KB（最大連続 1.2KB）。持ち主は本の CSS 36KB、設定項目の一覧 9KB、画面用の記憶 53KB など
+  - 読んだ後の Home で空き 62.5KB に対し最大連続 17.4KB（起動直後 102KB／98KB）。旧ツリーの `7239d0bb`／`f3293ca7` が直した形と同じ
+  - ボタンの取りこぼしは無し（押下 230 回すべて受け付け）
+  - 2点目・3点目は縦書きと挿絵を載せた後の実測②（段階9）で判断する
+
+### 段階3の続き: 幅だけを読む経路の前倒し（2026-09-28、`2026092815-diag`、実機確認済み）
+- 測り方: 商業書籍の横書き、キャッシュを消して電源を入れ直し、目次の8番目から1つ前のページへ戻る（前の章 177KB・約 180 ページを最初から組み立てる）
+- **段階3の 39.2 秒の大半は診断版の記録の重さだった**（訂正）。メモリの持ち主の記録（1 塊ごとの印と呼び出し元の遡り）を外すと、同じ操作の組み立てが 31.4 秒 → 20.9 秒。持ち主の記録は `INPUT_DIAG_ALLOC_TAGS` を付けたときだけ有効にした。非診断版でも体感 21 秒で、残りは本物の遅さ
+- 入れたもの（旧ツリーの `15bdbaab` を元に作り直し）
+  - 幅の表（768 字）が満杯になった後は、字形の画像を読まずに幅だけを返す `readAdvanceOnly`（常駐の置き場 → 予備の環 → SD の 12 バイトの字の記録）。章の組み立ての間（`MeasureOnlyScope`）だけ使う
+  - 組み立ての間は書体ファイルを開いたままにする（1 回の読みが 3.9ms → 1.15ms）
+  - SD から読んだ幅を 512 字分の表（約 3KB）に覚える。組み立ての1回分（8 ページ）ごとにファイルと一緒に捨てるので、読書中・Home には残らない
+  - 診断に `build_adv_only=`（呼ばれた回数・SD を読んだ回数・時間）を追加
+- 結果（同じ章）: 組み立て 20.7 秒 → **12.6 秒**、体感 → **14 秒**。幅だけの読みは 2,734 回すべて SD・10.7 秒 → 2,580 回のうち SD は 1,269 回・2.3 秒。残りは配置の計算そのもの（約 6.6 秒）、ページの書き出し 2.3 秒、表の範囲の幅の読み 1.4 秒
+- 試して戻したもの: 組み立て中だけ幅の表を 2,048 字に広げる案は、時間が変わらず（21.3 秒）空きが減ったので取り消した
+- 本を開く途中の空き（`open_heap` の sect）が 93KB の回と 40〜55KB の回があるのは、今回の変更ではなく、起動直後に開いた章の組み立てが1回で終わるかどうかの差。終わらない間は XML の読み取り器を次の回まで持ち続ける（本家の作り）。その状態でのページ描画で空きの底 3.9KB（最大連続 2.2KB）があり、段階9で扱う
+
+### 段階4: 横書きの組版（2026-09-28、`2026092818-diag`、実機確認済み・章の版 51）
+- 禁則: 本家に提出中の PR #3609（`CjkLineBreak.h`＋試験 9 件）をそのまま持ち込んだ。行頭に ー・々〜％」。、と小書き仮名、行末に始め括弧が来ない。……―― は同じ字が続く間は切らない。字の集合は旧ツリーと同じ。1.6.5 で本家がハングルの行分けを別の関数に分けていたので、ハングルも同じ規則を通す
+- 長い段落: 字境の表を1回の走査で作る（段落のバイト数の8倍を一塊で求めない。旧ツリー `b18977ad`）
+- 長い段落は語数の上限（CSS のある本は 320 語）で分けて組む。その続きの回を段落の1行目と見なして字下げしていた（旧ツリー `82eed024` と同じ直し）。全角の空白で始まる段落には端末の字下げを重ねない
+- **新規**: 段落の上の余白（CSS の margin-top）を最後の回でまとめて足していたため、分けて組んだ長い段落では途中に 0.5em の空きが入り、段落の頭には入っていなかった。最初に行を出す回の前に1回だけ足す。旧ツリーも同じ作りだった
+- 章内の飛び先は、目印の段落の1行目が実際に載ったページを指す（1.6.5 も旧ツリーの修正前と同じく、次ページへ送られると1ページ手前を指していた。旧ツリー `82eed024`）
+- 実機（`horizontal-regression-test.epub` 第1・9・13章）: 禁則の違反なし、異体字選択子の後に四角が出ない、第13章の 2,559 バイトの段落で落ちない、途中に字下げ・空きなし、「目印へ飛ぶ」が正しいページに着く。空きの最低は 37.6KB
+- 1行に入りきらない禁則の塊（例: 18pt の「名・ー・・・々・〜・％・……――」）を途中で割ると、英単語と同じく行末に「-」が付く（本家の作り）。割ったことが見て分かるので、このままとする（2026/09/28 判断）
+
+### 段階5: 縦書きの中核（2026-09-29、`2026092901-diag`、実機確認済み・章の版 53）
+- 旧ツリーの縦書きを 1.6.5 の作りに合わせて載せ直した。文字の分類（UAX #50・約物・小書き仮名・禁則）、CSS の圏点・文字の向き・縦中横・二段の子孫指定子、横倒しの描画、列の描画（ルビ・傍線・二分アキ）、列組み、字ごとの分解、列のページ配置、入れ物の余白、右開きのページ送り
+- 1.6.5 に合わせて変えた点: 語の持ち方（WordStore）に合わせて列組みを書き直し、縦書きの字にも本文の位置を持たせた（読みかけの位置が字の位置で保存される。旧ツリーは段落の終わりの位置だった）。字形の置き方（Frame）に横倒しを1種類足した
+- 本家の「空き 48KB 未満で CSS を無視する」関門は外した。読書中の空きは 44〜62KB を行き来するので、縦書き・ルビ・圏点の指定が段落によって効いたり効かなかったりする
+- 長い段落の区切りを語を足す途中でも行う（段階9から前倒し）。縦書きは1字が1語なので、区切らないと 4KB 読むたびに 1,300 語ほどたまる
+- **新規**: 縦書きの列にもリンクの範囲を持たせ、Footnotes で番号を選んで飛べるようにした（旧ツリーでは一覧は出ても選べなかった）。1 ページの脚注は本家の上限どおり 16 件まで
+- まだ入れていないもの: 縦書きの本の挿絵と1字大の外字（段階7）、縦書きの字間（段階6）
+- 実機（`vertical-test-suite.epub` の 26 試験、Extra Paragraph Spacing OFF）: すべて期待どおり。漢字の多いページの階調描画は 1 ページ 4〜6 秒（字形の予備の置き場 8 枠の読み直し。段階9）。ルビ中の 2 桁の数字は斜めにずれて並ぶ（重なりではない、記録のみ）。列の末尾の中点は旧ツリー同様の既知の未対応
+
+### 段階6: 縦書きの字間（2026-09-29、`2026092903-diag`、実機確認済み）
+- 本家 #3528 の Character spacing（-2〜+2px）を、縦書きでは字と字の縦の間隔に効かせる。1マスごとに足し、二分に詰めた約物・縦中横のマスも同じ。横倒しの欧文の並びは1マスとして1回だけ足す（横倒しの描画は字間を持たないため、1字ごとに足すと字との位置がずれる）
+- 旧ツリーの縦書き専用の字間（設定が無く常に0だった）は取り除いた。字間は本家の時点で章の保存の照合項目なので、設定を変えれば章は組み直される
+- 実機（テスト17）: +2px→-2px で1列目が3字多く入り、章が3ページ→2ページ。-2px でも字は重ならず、ルビも本文の横の正しい位置
+
+### 段階7: 挿絵（2026-09-29、`2026092908-diag`、実機確認済み）
+- 縦書きの本では画像を列の流れに置く。列の幅と画面の半分の高さに収まる画像は1字として本文の列に入れる（外字）。それ以外は右から左へ列を割り当てて上下中央に置き、入らなければ次のページへ送る。中身が画像1枚だけのページは左右も中央に置く
+- CSS の max-width / max-height を画像の大きさに効かせる（電書協テンプレートの `max-width:100%; max-height:100%` や四割指定が効く）
+- 章の組み立て中に、画面用の記憶を借りて画像を本から取り出し、PNG は少しずつ読む展開器で画素の保存まで作っておく。ページを描くときは保存を読むだけなので、字形で記憶が埋まったページでも外字が枠だけにならない（修正前は取り出しに要る 32KB の連続領域が 2KB しか残っていなかった）
+- 実機（`image-test.epub` 第2〜13章）: 外字（1em・em単位の各大きさ・ルビ付き・Kobo形式）、低ビット深度 PNG、svg で包んだ挿絵、横組み指定の挿絵ページ、挿絵12枚の章まですべて表示。挿絵12枚の章を初めて開くのは 8.5 秒（組み立て 4.9 秒、うち挿絵1枚あたり約 0.3 秒の保存作り）
+- 残り: 挿絵のあるページは本家の既定で残像消しの書き換えになり 1 回 2.8 秒かかる。高さだけ1字分の横長の外字は独立した列になる（文の途中で列が切れる）
+
+### 段階8: 表紙（2026-09-29、`2026092910-diag`、実機確認済み）
+- 本の情報が表紙として SVG ファイルを指す本（旧ツリーの蔵書調査で 2,256 冊中 56 冊）は、SVG の中の JPEG/PNG をたどって表紙に使う。1.6.5 のままでは本棚にも眠り画面にも表紙が出なかった
+- 表紙の取り出しに失敗したときは空のファイルを画像として扱わずに止め、本棚は一時的な失敗を「表紙なし」と記録しない（再起動しても二度と試さなくなっていた）
+- 旧ツリーで入れた「本棚の縮小表紙を画面用の記憶を借りて作る」等のメモリ対策は入れていない。1.6.5 の上では読書後の本棚でも最大連続が 61〜73KB 残り、縮小表紙がそのまま作れている
+- 実機（`cover-svg-test.epub`）: 本棚に表紙が出る。記録で `opf cover=item/image/cover.jpg` → `thumb jpg decode ok` を確認
+
+### 段階9: 実測②と不足分の補い（2026-09-29〜、実施中）
+- 字形の置き場を 4KB の塊に分けて確保するようにした（旧ツリーの 4KB 分割を移植）。章を移った直後の 1 ページが 16.5 秒かかっていた件（1 字ずつの読み直し 1,175 字）が 11 字に減った
+- 塊が足りないときは置き場をまるごと諦めず、置けた字数に縮めて作り直す（本家 1.6.5 #3126 と同じ考え方）。のんびり農家のページ送りが 1.0〜7.9 秒 → 0.84〜1.31 秒
+- 本からの取り出しの塊を空きに合わせて 512B まで半分ずつ縮める（旧ツリー c042f63c）。組み立て中の外字の取り出し失敗が解消
+- JPEG の挿絵も、PNG と同じく章の組み立て中に表示用の形（.pxc）まで展開しておく。本文ページ内の細長い挿絵が描画時の空き不足で出なかった件を解消（11 枚すべて展開成功を確認）
+- 実測: リアデイル 1 巻 17 章の組み立て 11.6 秒（旧ツリー 21.1 秒）、vertical-test-suite テスト14本文（異なる漢字 1,336 字）のページ送り 1.1〜1.9 秒（段階5 では 4〜6 秒）、Font Copy in Flash は On の方が速く、ヒープの差はほぼ無い
+- 組み立て中にメニューを開くと落ちる件を修正。組み立てが空き不足で止まったまま XML 読み取りと CSS の表を持ち続け、メニューの確保に失敗していた。メニューを開く前に組み立てを一時停止（組み立て済みのページは保存し、本文に戻ると続きから再開）
+- 章の組み立てでは、その章で当たりうる CSS の規則だけを読み込む（旧ツリーの CssSelectorUsage、元は JP版 #106）。出版社のひな形 CSS の全規則を読むと書式の表が 32KB の 1 塊になっていた。書式の表 32KB→2KB
+- 設定項目の一覧を常駐させず、設定の読み書き・設定画面を開くときだけ作る（旧ツリー 8cc5f333）。約 11KB が空きに戻る
+- 実測（のんびり農家、Delete Book Cache 後に挿絵の多い章を組み立て）: 組み立て中の空きの底 2.0KB→17KB、空き全体の底 2.0KB→13.4KB、読書中の空き 47KB→54〜63KB、起動後の本棚 97KB→108KB
+- 残り: 挿絵ページの残像消し 2.8 秒、漢字の多いページで字形の置き場の作り直しが 1 ページ 5〜10 回
+
+### 段階8b: Library の読み順（2026-09-29、`2026092914-diag`、実機確認済み）
+- 本家に出している PR #3651（未マージ）の 4 コミットを取り込んだ。Library の並び・見出し・検索の元に、EPUB の本の情報にある読み（file-as）を使う。表示する題名・著者名は変えない
+- 読みのカタカナはひらがなに、全角英数は半角にそろえ、見出しは五十音の行（が→か、ぁ→あ）でまとめる。読みの無い本は題名そのものから同じ規則で並べる
+- 本の情報の保存（BOOK_CACHE_VERSION）を 13 に上げた（本家 PR 側の番号 11 は当版の縦書き・SVG 表紙で使用済みのため）
+- 実機: 「異世界のんびり農家」01〜05 が「あ」に巻順、「リアデイルの大地にて」1〜8 が「ら」に巻順
+- 既知: 著者が 2 人の本で名前の並びが入れ替わって見えるのは本家の名前整形の元からの不具合
+
+### 段階8a: flash から書体を読む、16pt を 9/8 倍して 18pt に（2026-09-29、`2026092913-diag`、実機確認済み）
+- Text Settings → Style「Font Copy in Flash」を On にすると、選んでいる書体を内蔵 flash の使っていない側（約 6.4MB）に複製し、字形を SD カードではなく flash から読む。firmware を書き換えると複製は消えるので、次の起動で自動で作り直してから本棚に入る（電池 20% 未満で USB 未接続なら Off に戻す）
+- NotoSansJP の 18pt は大きすぎて入らないので、16pt を複製して字形の箱と画素を正確に 9/8 倍し、18pt として使う
+- 旧ツリーの最終形を 1.6.5 に合わせた。1.6.5 は字形の画素を一塊の領域に置くので、拡大後の大きさで確保する
+- 実機: 複製 6,549,504 バイトが約 2 分、`src=flash scale=18/16`。ページ送りの体感は問題なし
+- 併せて直した不具合: 商業書籍で表紙・扉・挿絵がすべて白いページになっていた。章の組み立て中は最大連続が 19KB まで下がり、画像の大きさを読むための展開（32KB の窓が要る）が失敗して、画像がページから外れていた。大きさを読む展開にも画面用の記憶を貸すようにして、9 枚すべて表示を確認
+- 残り（段階9）: JPEG の挿絵は初めて開くページで展開するため 1 ページ 8〜10 秒かかる。書き出しの瞬間に空きが 2KB まで下がることがある
+
+1.6.0 ベースへの作り直し（2026/09/06〜）の記録は [CHANGELOG-OST.md](CHANGELOG-OST.md) にある。

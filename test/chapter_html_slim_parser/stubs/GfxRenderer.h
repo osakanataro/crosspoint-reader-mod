@@ -94,6 +94,8 @@ class GfxRenderer {
     const auto found = fontAscenders.find(fontId);
     return found == fontAscenders.end() ? 12 : found->second;
   }
+  int getFontDescenderSize(int) const { return -4; }  // negative, as FreeType reports it
+  int getCjkCellWidth(int) const { return 8; }
   int getSpaceWidth(int, EpdFontFamily::Style) const { return 4; }
   bool sdFont = false;
   mutable size_t coldMeasurements = 0;
@@ -142,6 +144,8 @@ class GfxRenderer {
     if (includeSpace) ensureSdCardFontReady(fontId, " ", mask);
     if (includeHyphen) ensureSdCardFontReady(fontId, "-", mask);
   }
+  void drawTextSideways(int, int, int, const char*, int, bool = true, EpdFontFamily::Style = EpdFontFamily::REGULAR,
+                        bool = false) const {}
 
  private:
   FontVariantProvider fontVariantProvider_;

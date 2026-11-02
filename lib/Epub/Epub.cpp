@@ -26,8 +26,19 @@
 #include "Epub/parsers/TocNcxParser.h"
 
 Epub::Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
-  cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
+  cachePath = cacheDir + "/epub_" + std::to_string(FsHelpers::pathHash(this->filepath));
 }
+#if INPUT_DIAG
+#include "../../../src/util/InputDiag.h"
+#define COVER_DIAG(fmt, ...)                                          \
+  do {                                                                \
+    char coverDiagBuf[72];                                            \
+    snprintf(coverDiagBuf, sizeof(coverDiagBuf), fmt, ##__VA_ARGS__); \
+    InputDiag::noteImageEvent(coverDiagBuf);                          \
+  } while (0)
+#else
+#define COVER_DIAG(fmt, ...)
+#endif
 
 bool Epub::findContentOpfFile(std::string* contentOpfFile, ZipFile* sharedZip) const {
   const auto containerPath = "META-INF/container.xml";
@@ -103,6 +114,8 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   // mark) text renders correctly — the device fonts have no mark positioning.
   bookMetadata.title = utf8ComposeNfc(opfParser.title);
   bookMetadata.author = utf8ComposeNfc(opfParser.author);
+  bookMetadata.titleFileAs = utf8ComposeNfc(opfParser.titleFileAs);
+  bookMetadata.authorFileAs = utf8ComposeNfc(opfParser.authorFileAs);
   bookMetadata.language = opfParser.language;
 
   if (metadataOnly) {
@@ -116,48 +129,30 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, const 
   // try extracting the image reference from the guide's cover page XHTML
   if (bookMetadata.coverItemHref.empty() && !opfParser.guideCoverPageHref.empty()) {
     LOG_DBG("EBP", "No cover from metadata, trying guide cover page: %s", opfParser.guideCoverPageHref.c_str());
-    size_t coverPageSize;
-    uint8_t* coverPageData = readItemContentsToBytes(opfParser.guideCoverPageHref, &coverPageSize, true);
-    if (coverPageData) {
-      const std::string coverPageHtml(reinterpret_cast<char*>(coverPageData), coverPageSize);
-      free(coverPageData);
-
-      // Determine base path of the cover page for resolving relative image references
-      std::string coverPageBase;
-      const auto lastSlash = opfParser.guideCoverPageHref.rfind('/');
-      if (lastSlash != std::string::npos) {
-        coverPageBase = opfParser.guideCoverPageHref.substr(0, lastSlash + 1);
-      }
-
-      // Search for image references: xlink:href="..." (SVG) and src="..." (img)
-      std::string imageRef;
-      for (const char* pattern : {"xlink:href=\"", "src=\""}) {
-        auto pos = coverPageHtml.find(pattern);
-        while (pos != std::string::npos) {
-          pos += strlen(pattern);
-          const auto endPos = coverPageHtml.find('"', pos);
-          if (endPos != std::string::npos) {
-            const auto ref = std::string_view{coverPageHtml}.substr(pos, endPos - pos);
-            // Cover BMP generation supports JPG/PNG/GIF. Skip unsupported wrappers so a later
-            // supported raster image can still be selected.
-            if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref) || FsHelpers::hasGifExtension(ref)) {
-              imageRef = ref;
-              break;
-            }
-          }
-          pos = coverPageHtml.find(pattern, pos);
-        }
-        if (!imageRef.empty()) break;
-      }
-
-      if (!imageRef.empty()) {
-        bookMetadata.coverItemHref = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(coverPageBase + imageRef));
-        LOG_DBG("EBP", "Found cover image from guide: %s", bookMetadata.coverItemHref.c_str());
-      }
+    const auto fromGuide = findCoverImageInDocument(opfParser.guideCoverPageHref);
+    if (!fromGuide.empty()) {
+      bookMetadata.coverItemHref = fromGuide;
+      LOG_DBG("EBP", "Found cover image from guide: %s", bookMetadata.coverItemHref.c_str());
     }
   }
 
+  // The named cover is an SVG wrapper rather than a picture. Cover BMP generation only
+  // understands JPEG and PNG, so follow the one <image> inside it.
+  if (FsHelpers::checkFileExtension(bookMetadata.coverItemHref, ".svg")) {
+    const auto inWrapper = findCoverImageInDocument(bookMetadata.coverItemHref);
+    if (inWrapper.empty()) {
+      LOG_DBG("EBP", "Cover SVG holds no JPEG/PNG reference: %s", bookMetadata.coverItemHref.c_str());
+      bookMetadata.coverItemHref.clear();
+    } else {
+      LOG_DBG("EBP", "Cover SVG wraps %s", inWrapper.c_str());
+      bookMetadata.coverItemHref = inWrapper;
+    }
+  }
+
+  COVER_DIAG("opf cover=%.50s", bookMetadata.coverItemHref.empty() ? "(none)" : bookMetadata.coverItemHref.c_str());
+
   bookMetadata.textReferenceHref = opfParser.textReferenceHref;
+  bookMetadata.pageProgressionRtl = opfParser.pageProgressionRtl;
 
   if (!opfParser.tocNcxPath.empty()) {
     tocNcxItem = opfParser.tocNcxPath;
@@ -442,6 +437,10 @@ CssParser::ParseResult Epub::parseCssFiles(const CssParser::CacheStatus existing
   return parseResult;
 }
 
+bool Epub::cssCacheNeedsRebuild() const {
+  return CssParser(cachePath).inspectCache() != CssParser::CacheStatus::Complete;
+}
+
 // load in the meta data for the epub file
 // Opens the optional encrypted-entry accessor. A null result without an error
 // means normal ZIP reads should be used. A hard error refuses the open with a
@@ -651,19 +650,17 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   return true;
 }
 
-bool Epub::loadMetadata(std::string& title, std::string& author) {
-  title.clear();
-  author.clear();
+bool Epub::loadMetadata(BookMetadataCache::BookMetadata& out) {
+  out = BookMetadataCache::BookMetadata{};
 
   if (Txt::isTxtOrMd(filepath)) {
-    title = utf8ComposeNfc(FsHelpers::getFileNameWithoutExtension(filepath));
+    out.title = utf8ComposeNfc(FsHelpers::getFileNameWithoutExtension(filepath));
     return true;
   }
 
   auto metadataCache = makeUniqueNoThrow<BookMetadataCache>(cachePath);
   if (metadataCache && metadataCache->load()) {
-    title = metadataCache->coreMetadata.title;
-    author = metadataCache->coreMetadata.author;
+    out = metadataCache->coreMetadata;
     return true;
   }
   if (!metadataCache) {
@@ -677,14 +674,9 @@ bool Epub::loadMetadata(std::string& title, std::string& author) {
     return false;
   }
 
-  BookMetadataCache::BookMetadata metadata;
-  const bool loaded = parseContentOpf(metadata, /*writeSpineEntries=*/false, /*metadataOnly=*/true, &zip);
+  const bool loaded = parseContentOpf(out, /*writeSpineEntries=*/false, /*metadataOnly=*/true, &zip);
   zip.close();
-  if (!loaded) return false;
-
-  title = std::move(metadata.title);
-  author = std::move(metadata.author);
-  return true;
+  return loaded;
 }
 
 bool Epub::loadSyncMetadata(SyncMetadata& metadata) {
@@ -940,6 +932,50 @@ bool Epub::generateCoverBmp(bool cropped, bool originalThresholds) const {
   return false;
 }
 
+bool Epub::hasCoverImage() const {
+  return bookMetadataCache && bookMetadataCache->isLoaded() && !bookMetadataCache->coreMetadata.coverItemHref.empty();
+}
+
+std::string Epub::findCoverImageInDocument(const std::string& docHref) const {
+  if (docHref.empty()) return {};
+
+  size_t docSize;
+  uint8_t* docData = readItemContentsToBytes(docHref, &docSize, true);
+  if (!docData) return {};
+  const std::string doc(reinterpret_cast<char*>(docData), docSize);
+  free(docData);
+
+  // Relative references resolve against the document's own directory.
+  std::string base;
+  const auto lastSlash = docHref.rfind('/');
+  if (lastSlash != std::string::npos) {
+    base = docHref.substr(0, lastSlash + 1);
+  }
+
+  // xlink:href="..." (SVG <image>) and src="..." (<img>). Only JPEG and PNG are taken, so a GIF
+  // ornament earlier in the document does not shadow the picture that follows it.
+  std::string imageRef;
+  for (const char* pattern : {"xlink:href=\"", "src=\""}) {
+    auto pos = doc.find(pattern);
+    while (pos != std::string::npos) {
+      pos += strlen(pattern);
+      const auto endPos = doc.find('"', pos);
+      if (endPos != std::string::npos) {
+        const auto ref = std::string_view{doc}.substr(pos, endPos - pos);
+        if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref)) {
+          imageRef = ref;
+          break;
+        }
+      }
+      pos = doc.find(pattern, pos);
+    }
+    if (!imageRef.empty()) break;
+  }
+  if (imageRef.empty()) return {};
+
+  return FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(base + imageRef));
+}
+
 std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
 std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
 
@@ -985,6 +1021,7 @@ bool Epub::generateThumbBmpFromSource(int height) {
 }
 
 bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHref) const {
+  COVER_DIAG("thumb h=%d href=%.44s", height, coverImageHref.empty() ? "(none)" : coverImageHref.c_str());
   if (coverImageHref.empty()) {
     LOG_DBG("EBP", "No known cover image for thumbnail");
     return false;
@@ -1024,6 +1061,7 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
       Storage.remove(getThumbBmpPath(height).c_str());
     }
     LOG_DBG("EBP", "Generated thumb BMP from JPG cover image, success: %s", success ? "yes" : "no");
+    COVER_DIAG("thumb jpg decode %s", success ? "ok" : "FAIL");
     return success;
   } else if (FsHelpers::hasPngExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from PNG cover image");
@@ -1053,6 +1091,7 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
       Storage.remove(getThumbBmpPath(height).c_str());
     }
     LOG_DBG("EBP", "Generated thumb BMP from PNG cover image, success: %s", success ? "yes" : "no");
+    COVER_DIAG("thumb png decode %s", success ? "ok" : "FAIL");
     return success;
   } else if (FsHelpers::hasGifExtension(coverImageHref)) {
     return generateGifBmp(*this, coverImageHref, getThumbBmpPath(height), [height](HalFile& gif, Print& bmp) {
@@ -1244,7 +1283,11 @@ int Epub::getSpineIndexForTocIndex(const int tocIndex) const {
   return spineIndex;
 }
 
-int Epub::getTocIndexForSpineIndex(const int spineIndex) const { return getSpineItem(spineIndex).tocIndex; }
+int Epub::getTocIndexForSpineIndex(const int spineIndex) const {
+  // The reader uses spineCount as the end-of-book position, not a chapter.
+  if (spineIndex < 0 || spineIndex >= getSpineItemsCount()) return -1;
+  return getSpineItem(spineIndex).tocIndex;
+}
 
 int Epub::getSpineIndexForSize(const size_t bytes) const {
   if (!bookMetadataCache || !bookMetadataCache->isLoaded() || static_cast<uint64_t>(bytes) > UINT32_MAX) return -1;
@@ -1292,6 +1335,9 @@ float Epub::calculateProgress(const int currentSpineIndex, const float currentSp
   if (bookSize == 0) {
     return 0.0f;
   }
+  // Handle the reader's end-of-book position before looking up chapter sizes.
+  if (currentSpineIndex >= getSpineItemsCount()) return 1.0f;
+  if (currentSpineIndex < 0) return 0.0f;
   const size_t prevChapterSize = (currentSpineIndex >= 1) ? getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
   const size_t curChapterSize = getCumulativeSpineItemSize(currentSpineIndex) - prevChapterSize;
   const float sectionProgSize = currentSpineRead * static_cast<float>(curChapterSize);
@@ -1324,4 +1370,11 @@ int Epub::resolveHrefToSpineIndex(const std::string& href) const {
     if (spineFilename == targetFilename) return i;
   }
   return -1;
+}
+
+bool Epub::isPageProgressionRtl() const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
+    return false;
+  }
+  return bookMetadataCache->coreMetadata.pageProgressionRtl;
 }

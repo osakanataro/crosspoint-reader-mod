@@ -9,6 +9,8 @@
 #include "EpdFont.h"
 #include "EpdFontData.h"
 
+class HalFile;
+
 // On-disk binary format version for .cpfont files. Defined as a preprocessor
 // macro (rather than a constexpr) so it can be stringified into the SD-fonts
 // release URL — see FONT_MANIFEST_URL in FontDownloadActivity.h. No integer
@@ -28,6 +30,18 @@ class SdCardFont {
   static constexpr int PREWARM_ARENA_TOO_LARGE = -2;
   static constexpr uint8_t MAX_STYLES = 4;
 
+  // Recent frees of a style's mini arena, for INPUT_DIAG (who dropped the page's glyphs, and when).
+  struct MiniFreeEvent {
+    uintptr_t caller = 0;
+    uint32_t ms = 0;
+    uint32_t freeHeap = 0;
+    uint16_t glyphs = 0;
+    uint8_t style = 0;
+    bool metadataOnly = false;
+  };
+  static constexpr uint8_t MINI_FREE_EVENTS = 4;
+  static const MiniFreeEvent* miniFreeEvents(uint32_t& total);
+
   SdCardFont() = default;
   ~SdCardFont();
   // Owns raw buffers freed in dtor — no shallow-copy semantics. Make any
@@ -40,7 +54,19 @@ class SdCardFont {
   // Load .cpfont file: reads header + intervals into RAM, records file layout offsets.
   // Supports v4 (multi-style) format.
   // Returns true on success.
-  bool load(const char* path);
+  // isReaderFont: the family's body-text size (its first load), reported by INPUT_DIAG.
+  // scaleNum/scaleDen: every glyph record (width, height, bearings, advance) and bitmap is
+  // scaled by this ratio as it enters the resident caches, and the style's line metrics at
+  // load, so the renderer sees a font of the scaled size. 1/1 = the file as it is. Only 2-bit
+  // fonts are scaled; a 1-bit font ignores the ratio. Kerning values are not scaled (the CJK
+  // fonts this is for carry none).
+  // preferFlash: read through the copy in the inactive OTA slot (SdCardFontCache) when it holds
+  // this very file; otherwise, and for any range the copy does not hold, the SD card is read.
+  bool load(const char* path, bool isReaderFont = false, uint8_t scaleNum = 1, uint8_t scaleDen = 1,
+            bool preferFlash = false);
+  // True while reads are served from the flash copy (a read failure turns it off for good).
+  bool usingFlash() const { return useFlash_; }
+  size_t flashPayloadBytes() const { return flashPayloadBytes_; }
 
   // Pre-read glyphs needed for the given UTF-8 text from SD card.
   // styleMask: bitmask of styles to prewarm (bit 0=regular, 1=bold, 2=italic, 3=bolditalic).
@@ -83,6 +109,12 @@ class SdCardFont {
   // Look up advanceX for a codepoint from the advance table.
   // Returns the 12.4 fixed-point advance, or 0 if not found.
   uint16_t getAdvance(uint32_t codepoint, uint8_t style) const;
+  // Advance of one codepoint the table does not hold, without loading its bitmap: the resident
+  // arena, then the overflow ring, then the 12-byte glyph record straight from the card. 0 when
+  // the font has no such glyph (or the read failed), so callers can fall back to a full load.
+  uint16_t readAdvanceOnly(uint32_t codepoint, uint8_t styleIdx) const;
+  // Close the file readAdvanceOnly keeps open for the duration of a measuring pass.
+  void closeMeasureFile() const;
 
   // Returns true if advance table is populated for at least one style.
   bool hasAdvanceTable() const;
@@ -145,6 +177,30 @@ class SdCardFont {
   void logStats(const char* label = "SDCF");
   void resetStats();
   const Stats& getStats() const { return stats_; }
+
+  // Counters for INPUT_DIAG. Glyphs read one at a time through the overflow ring because no
+  // prewarm covered them; mini-arena rebuilds (the reads go straight into the arena, so no other
+  // figure records them) and their time; prewarms that bailed before any style was touched; and
+  // the advance-table work a section build spends its font time on.
+  uint32_t overflowLoads() const { return overflowLoads_; }
+  uint32_t miniRebuilds() const { return miniRebuilds_; }
+  uint32_t miniRebuildMs() const { return miniRebuildMs_; }
+  uint32_t prewarmEntryFails() const { return prewarmEntryFails_; }
+  uint32_t advanceFetchCalls() const { return advanceFetchCalls_; }
+  uint32_t advanceFetchMs() const { return advanceFetchMs_; }
+  uint32_t advanceFullSkips() const { return advanceFullSkips_; }
+  // readAdvanceOnly: calls, the ones that had to read the card, and the time those reads took.
+  uint32_t advanceOnlyCalls() const { return advanceOnlyCalls_; }
+  uint32_t advanceOnlySdReads() const { return advanceOnlySdReads_; }
+  uint32_t advanceOnlyMs() const { return advanceOnlyMs_; }
+  uint32_t advanceTableMax() const {
+    uint32_t largest = 0;
+    for (uint8_t i = 0; i < MAX_STYLES; i++) {
+      if (advanceTableSize_[i] > largest) largest = advanceTableSize_[i];
+    }
+    return largest;
+  }
+  static constexpr uint32_t advanceTableLimit() { return ADVANCE_CACHE_LIMIT; }
 
   // Content hash of the file header + style TOC entries (computed during load).
   // Used to generate deterministic font IDs for section cache invalidation.
@@ -282,6 +338,34 @@ class SdCardFont {
   uint8_t styleCount_ = 0;
 
   char filePath_[128] = {};
+  // Flash copy state (see load()). Mutable: the const read paths flip it off on a read failure.
+  mutable bool useFlash_ = false;
+  size_t flashPayloadBytes_ = 0;
+  bool loadSelectedSource(bool isReaderFont, uint8_t scaleNum, uint8_t scaleDen);
+
+  // Glyph scale applied on the way into the resident caches (see load()).
+  uint8_t scaleNum_ = 1;
+  uint8_t scaleDen_ = 1;
+  bool isScaled() const { return scaleNum_ != scaleDen_; }
+  // Nearest for bearings, ascender/descender and advances.
+  int16_t scaledBearing(int16_t v) const;
+  uint16_t scaleAdvance(uint16_t advanceFP) const;
+  // The scaled glyph box: the source box's edges multiplied by the exact ratio and rounded
+  // outward, so the ink keeps its scaled position inside it (never clipped, never shifted).
+  struct ScaledBox {
+    int16_t left;
+    int16_t top;
+    uint16_t width;
+    uint16_t height;
+  };
+  ScaledBox scaledBox(const EpdGlyph& g) const;
+  // width/height/left/top/advanceX only; dataLength/dataOffset are the caller's.
+  void scaleGlyphMetrics(EpdGlyph& g) const;
+  static uint32_t bitmapBytes2Bit(uint32_t w, uint32_t h) { return (w * h + 3) / 4; }
+  // Bilinear resample of a packed 2-bit (4 levels) glyph bitmap `src` (box `g`, unscaled) into
+  // `dst` (box `box` = scaledBox(g)) at exactly scaleNum_/scaleDen_; dst must hold
+  // bitmapBytes2Bit(box.width, box.height) bytes and is fully written.
+  void resampleBitmap2Bit(const uint8_t* src, const EpdGlyph& g, uint8_t* dst, const ScaledBox& box) const;
 
   // Overflow context: glyphMissHandler needs to know which style it's serving
   struct OverflowContext {
@@ -327,6 +411,26 @@ class SdCardFont {
   bool growAdvanceTable(uint8_t styleIdx, uint32_t needed);
 
   Stats stats_;
+  uint32_t overflowLoads_ = 0;
+  uint32_t miniRebuilds_ = 0;
+  uint32_t miniRebuildMs_ = 0;
+  uint32_t prewarmEntryFails_ = 0;
+  uint32_t advanceFetchCalls_ = 0;
+  uint32_t advanceFetchMs_ = 0;
+  uint32_t advanceFullSkips_ = 0;
+  mutable uint32_t advanceOnlyCalls_ = 0;
+  mutable uint32_t advanceOnlySdReads_ = 0;
+  mutable uint32_t advanceOnlyMs_ = 0;
+  // Kept open across readAdvanceOnly calls while a build measures (closed by closeMeasureFile):
+  // opening the file by its long name was nearly all of each 3.9 ms read.
+  mutable std::unique_ptr<HalFile> measureFile_;
+  // Widths readAdvanceOnly already read from the card during this measuring pass, direct-mapped
+  // by codepoint (key = codepoint | style << 22 | valid bit). A chapter repeats its characters, so
+  // most calls past the full advance table are for a character read moments before. 3 KB, freed
+  // with the file.
+  static constexpr uint32_t MEASURE_MEMO_SLOTS = 512;
+  mutable std::unique_ptr<uint32_t[]> measureMemoKeys_;
+  mutable std::unique_ptr<uint16_t[]> measureMemoAdvances_;
   uint32_t contentHash_ = 0;
   uint32_t fileSize_ = 0;  // bounds glyph bitmap offsets (glyphEntryValid)
   uint8_t corruptGlyphsLogged_ = 0;

@@ -36,7 +36,27 @@ class SdCardFontSystem {
   /// Ensure the correct SD font family is loaded for the current settings.
   /// Call before entering the reader or after settings change.
   /// Also re-discovers if the registry has been marked dirty (e.g. by web upload).
-  void ensureLoaded(GfxRenderer& renderer);
+  /// forceReload: reload even when the same family and size are resident -- the
+  /// flash copy was just written or switched off, so the read source changed.
+  void ensureLoaded(GfxRenderer& renderer, bool forceReload = false);
+
+  /// The file the flash copy must hold for the selected family and size (see
+  /// SdCardFontManager::cacheCandidate), or nullptr when a built-in family is
+  /// selected or nothing of this size fits the slot. pathOut receives the file's path
+  /// (SdCardFontFamilyInfo::PATH_BUFFER_SIZE bytes).
+  const SdCardFontFileInfo* cacheCandidate(char* pathOut, size_t pathSize, uint8_t* scaleNum = nullptr,
+                                           uint8_t* scaleDen = nullptr) const;
+  /// True when the flash copy is switched on in settings but the slot does not
+  /// hold the candidate file (never built, another size, or wiped by a firmware
+  /// update): the reader falls back to the card until it is rebuilt.
+  bool cacheRebuildNeeded() const;
+  /// True when the battery is too low to start a copy into flash (a copy takes about a
+  /// minute of continuous SD reads and flash writes and must not be cut by a dead battery).
+  /// USB power lifts the limit. When true, callers switch the setting off and read from the card.
+  static bool copyBlockedByBattery();
+  static constexpr uint16_t COPY_MIN_BATTERY_PERCENT = 20;
+  /// True when the resident reader font reads from the flash copy.
+  bool readerFontFromFlash() const { return manager_.readerFontFromFlash(); }
 
   /// Resolve an SD card font ID from family name + reader point size.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
@@ -52,6 +72,24 @@ class SdCardFontSystem {
   /// Thread-safe: can be called from the web server task.
   void markRegistryDirty() { registryDirty_.store(true, std::memory_order_release); }
 
+  /// Show the UI in the saved language (SETTINGS.language) when the loaded
+  /// fonts can draw its letters. When neither the built-in UI fonts nor the
+  /// reader family can, load an SD family that can for the UI sizes. If none
+  /// on the card can, show English and keep the saved choice, so the screens
+  /// stay readable after the font is removed. Main task, under a RenderLock
+  /// when a render may be running. Called by begin() and ensureLoaded().
+  void applyUiLanguage(GfxRenderer& renderer);
+
+  /// True when the UI shows English because no font can draw the saved language.
+  bool uiLanguageUnavailable() const { return uiLanguageUnavailable_; }
+
+  /// When the reader uses a built-in font that cannot draw the saved language
+  /// and an SD family was loaded for the UI instead, make that family the
+  /// reader font too, so books in the language show text rather than boxes.
+  /// Returns true when the reader font changed. Same task and lock rules as
+  /// applyUiLanguage(); the caller saves the settings.
+  bool adoptUiFamilyForReader(GfxRenderer& renderer);
+
   /// If the registry is dirty, re-scan the SD card now and clear the flag.
   /// Used by the web UI so uploaded/deleted fonts appear in the list
   /// without waiting for the reader activity to run ensureLoaded().
@@ -62,6 +100,14 @@ class SdCardFontSystem {
   }
 
  private:
+  // ensureLoaded() without the UI language check.
+  void loadReaderFamily(GfxRenderer& renderer, bool forceReload);
+
+  // Load the first SD family that carries every letter in `letters` at all
+  // UI sizes, and register it as the UI fallback. Skips the reader family.
+  bool loadUiFamily(GfxRenderer& renderer, const char* letters);
+  void unloadUiFamily(GfxRenderer& renderer);
+
   // Load the active SD family at the built-in UI point sizes and register each
   // as a size-matched script fallback for the corresponding UI font, so book
   // titles/list rows in scripts the built-ins lack (CJK, Greek, Cyrillic, ...)
@@ -114,6 +160,16 @@ class SdCardFontSystem {
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
+  // UI sizes of an SD family loaded only to draw the UI language, when the
+  // reader family can't. Empty uiFamily_ = none loaded.
+  SdCardFontManager uiManager_{/*holdsReaderFont=*/false};
+  std::string uiFamily_;
+  int uiFontIds_[3] = {};  // parallel to kUiFontSizes
+  // Registry generation and language of the last search that found no UI
+  // family, so the card is not re-read on every call until either changes.
+  uint32_t uiSearchFailedGeneration_ = 0;
+  int uiSearchFailedLanguage_ = -1;
+  bool uiLanguageUnavailable_ = false;
   std::atomic<bool> registryDirty_{false};
 
 #if CROSSPOINT_VECTOR_FONTS

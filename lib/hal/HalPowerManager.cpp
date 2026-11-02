@@ -1,5 +1,6 @@
 #include "HalPowerManager.h"
 
+#include <BatteryMonitor.h>
 #include <BoardConfig.h>
 #include <Logging.h>
 #include <PowerManager.h>
@@ -60,23 +61,23 @@ void HalPowerManager::setPowerSaving(bool enabled) {
 
   if (mode == None && enabled && !isLowPower) {
     LOG_DBG("PWR", "Going to low-power mode");
-    if (!setCpuFrequencyMhz(LOW_POWER_FREQ)) {
+    if (setCpuFrequencyMhz(LOW_POWER_FREQ)) {
+      isLowPower = true;
+    } else {
       LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", LOW_POWER_FREQ);
       xSemaphoreGive(modeMutex);
       return;
     }
-    isLowPower = true;
-
   } else if ((!enabled || mode != None) && isLowPower) {
     LOG_DBG("PWR", "Restoring normal CPU frequency");
-    if (!setCpuFrequencyMhz(normalFreq)) {
+    if (setCpuFrequencyMhz(normalFreq)) {
+      isLowPower = false;
+    } else {
       LOG_DBG("PWR", "Failed to set CPU frequency = %d MHz", normalFreq);
       xSemaphoreGive(modeMutex);
       return;
     }
-    isLowPower = false;
   }
-
   // Otherwise, no change needed
   xSemaphoreGive(modeMutex);
 }
@@ -249,4 +250,9 @@ HalPowerManager::Lock::~Lock() {
     powerManager.currentLockMode = None;
   }
   xSemaphoreGive(powerManager.modeMutex);
+}
+
+uint16_t HalPowerManager::getBatteryMillivolts() const {
+  static const BatteryMonitor battery;
+  return battery.readMillivolts();
 }

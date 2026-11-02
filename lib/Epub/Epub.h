@@ -61,7 +61,12 @@ class Epub {
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false);
-  bool loadMetadata(std::string& title, std::string& author);
+  // Whether load() will parse the source stylesheets again (the CSS cache is missing, partial or
+  // from an older version), which extracts each one through a 32KB inflate window.
+  bool cssCacheNeedsRebuild() const;
+  // Package metadata only (title, author, their file-as sort forms, language):
+  // the existing cache when there is one, else the OPF parsed up to </metadata>.
+  bool loadMetadata(BookMetadataCache::BookMetadata& out);
   bool loadSyncMetadata(SyncMetadata& metadata);
   bool clearCache() const;
   void setupCacheDir() const;
@@ -72,6 +77,15 @@ class Epub {
   const std::string& getTitle() const;
   const std::string& getAuthor() const;
   const std::string& getLanguage() const;
+  // True if the spine declares page-progression-direction="rtl" (RTL / vertical book).
+  // Used to auto-detect tategaki (vertical writing).
+  bool isPageProgressionRtl() const;
+  // First JPEG/PNG reference inside a cover document (the guide's cover XHTML, or an SVG wrapper
+  // named as the cover image), resolved against that document's directory; empty when none.
+  std::string findCoverImageInDocument(const std::string& docHref) const;
+  // True when the book names a cover image: tells "no cover" apart from "could not build it now",
+  // which generateThumbBmp() reports the same way.
+  bool hasCoverImage() const;
   std::string getCoverBmpPath(bool cropped = false, bool originalThresholds = false) const;
   bool generateCoverBmp(bool cropped = false, bool originalThresholds = false) const;
   std::string getThumbBmpPath() const;
