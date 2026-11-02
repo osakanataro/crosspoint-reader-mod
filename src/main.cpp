@@ -42,11 +42,13 @@
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/settings/FontFlashCacheActivity.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
+#include "util/InputDiag.h"
 #include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SlideSwitch.h"
@@ -633,6 +635,13 @@ void setup() {
   LOG_INF("MAIN", "Device: %s", BoardConfig::ACTIVE.name);
 #endif
 
+  // The SDK's 40 MHz default stays. The X3 routes its card through the GPIO matrix (GPIO 8/10/7
+  // are not the C3's SPI2 IOMUX pins), which ESP-IDF rates at 26.6 MHz for reads, so asking for
+  // 20 MHz looked like it might remove retries. Measured 2026-09-11 on the same 634 KB cover:
+  // 40 MHz 3,886 ms, 20 MHz 4,342 ms. Halving the clock cost only 10%, so the transfer is about
+  // a tenth of the time and the rest is per-operation overhead -- the clock is not the lever.
+  InputDiag::noteSdClock(BoardConfig::ACTIVE.sd.spiHz != 0 ? BoardConfig::ACTIVE.sd.spiHz : 40000000);
+
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter
   if (!Storage.begin()) {
@@ -797,6 +806,21 @@ void setup() {
   } else if (rebootedFromPanic) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
+  } else if (sdFontSystem.cacheRebuildNeeded()) {
+    // The font copy in flash is switched on but the slot does not hold the selected font
+    // (first use, or a firmware update overwrote it): rebuild it now, with a progress page,
+    // then land on Home. Until then the reader would read the font from the card.
+    if (SdCardFontSystem::copyBlockedByBattery()) {
+      // A copy cut short by a dead battery leaves an invalid header, which is harmless, but the
+      // next boot would only try again. Switch the setting off; the user turns it back on later.
+      LOG_INF("SDFCACHE", "Battery at %u%%: font copy switched off", powerManager.getBatteryPercentage());
+      InputDiag::noteFontCopy("boot skipped: battery low, setting off");
+      SETTINGS.sdFontFlashCache = 0;
+      SETTINGS.saveToFile();
+      activityManager.goHome(HomeMenuItem::NONE, needsWakeRefresh);
+    } else {
+      activityManager.replaceActivity(std::make_unique<FontFlashCacheActivity>(renderer, mappedInputManager));
+    }
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);
@@ -853,6 +877,11 @@ void loop() {
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   mappedInputManager.update();
+  // Immediately after the input poll: the gap between consecutive samples is what decides whether a
+  // press can be seen at all. No-op unless built with INPUT_DIAG.
+  const bool diagInputEdge = gpio.wasAnyPressed() || gpio.wasAnyReleased();
+  const bool diagInputPending = gpio.isDebouncePending();
+  InputDiag::sample(loopStartTime, diagInputEdge, diagInputPending);
 
   // Bluetooth page turner, before the USB drive's early return: a card handed to USB stops the radio
   // before anything else.
@@ -928,12 +957,26 @@ void loop() {
     }
   }
 
-  // Check for any user activity (button press or release) or active background work
-  static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity() ||
-      remoteActed || activityManager.preventAutoSleep()) {
-    lastActivityTime = millis();         // Reset inactivity timer
-    powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
+  // Check for any user activity (button press or release) or active background work.
+  // Two clocks, because "do not sleep the device" and "the user is still doing
+  // things" are different claims. An activity that holds off auto-sleep can be
+  // idle for hours -- the clock is -- and it should still downclock between
+  // repaints like any other idle screen.
+  static unsigned long lastActivityTime = millis();  // gates the auto-sleep timeout
+  static unsigned long lastInputTime = millis();     // gates downclocking
+  const bool userActivity = gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() ||
+                            halTiltSensor.hadActivity() || remoteActed;
+  if (userActivity) {
+    lastInputTime = millis();
+  }
+  if (userActivity || activityManager.preventAutoSleep()) {
+    lastActivityTime = millis();  // Reset inactivity timer
+  }
+  // Separate again: an activity can need to stay awake without needing the clock
+  // speed. needsFullSpeed() defaults to preventAutoSleep(), so everything that
+  // held the CPU up before still does.
+  if (userActivity || activityManager.needsFullSpeed()) {
+    powerManager.setPowerSaving(false);  // Restore normal CPU frequency
   }
 
   // Let wake continue as soon as its hold has been verified. The release can
@@ -1088,6 +1131,11 @@ void loop() {
     }
   }
 
+  // After the loop duration above, so the SD write it may perform is not counted in it; before the
+  // render-lock check below, which returns early while a render is running (#3652). No-op unless
+  // built with INPUT_DIAG.
+  InputDiag::flush(diagInputEdge || diagInputPending);
+
   bool skipLoopDelay = false;
   {
     RenderLock lock(RenderLock::Mode::Try);
@@ -1106,7 +1154,12 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS && !pageturner::holdsCpu.load()) {
+    // Keyed on input, not the auto-sleep timer: an activity that holds off
+    // auto-sleep (the clock) still downclocks once the user stops pressing.
+    // needsFullSpeed() keeps the activities that ask for it (USB drive, firmware update) at full
+    // speed between loop passes too, as the auto-sleep timer used to.
+    if (millis() - lastInputTime >= HalPowerManager::IDLE_POWER_SAVING_MS && !pageturner::holdsCpu.load() &&
+        !activityManager.needsFullSpeed()) {
       // If we've been inactive for a while, increase the delay to save power
       powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
       // Sleep in short slices and wake the poll as soon as a button contact closes.

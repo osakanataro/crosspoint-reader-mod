@@ -25,9 +25,10 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/InputDiag.h"
 
 int HomeActivity::getMenuItemCount() const {
-  int count = 4;  // File Browser, Library, File transfer, Settings
+  int count = 5;  // File Browser, Library, File transfer, Settings, Clock mode
   if (!recentBooks.empty()) {
     count += recentBooks.size();
   }
@@ -192,7 +193,17 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           }
           GUI.fillPopupProgress(renderer, popupRect, 10 + progress * (90 / recentBooks.size()));
           bool success = epub.generateThumbBmp(thumbHeight);
-          if (!success) {
+#if INPUT_DIAG
+          {
+            char line[72];
+            snprintf(line, sizeof(line), "home thumb %s has=%d max=%u", success ? "ok" : "FAIL",
+                     epub.hasCoverImage() ? 1 : 0, static_cast<unsigned>(ESP.getMaxAllocHeap()));
+            InputDiag::noteImageEvent(line);
+          }
+#endif
+          // Clearing the stored path is permanent: the book is never tried again. Only do it when
+          // the book has no cover; a build that failed for want of memory is retried next visit.
+          if (!success && !epub.hasCoverImage()) {
             RECENT_BOOKS.updateBook(book.path, book.title, book.author, "");
             book.coverBmpPath = "";
           }
@@ -228,6 +239,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
 void HomeActivity::onEnter() {
   Activity::onEnter();
+  // What is still allocated once the previous screen is gone (diag builds only).
+  InputDiag::dumpHeapMap("home-enter");
 
   hasOpdsServers = OPDS_STORE.hasServers();
   // Plugin System is the global opt-in. Once enabled, expose the Plugins entry
@@ -326,6 +339,9 @@ void HomeActivity::loop() {
         break;
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
+        break;
+      case HomeMenuItem::CLOCK_MODE:
+        onClockModeStart();
         break;
       default:
         break;
@@ -525,8 +541,8 @@ void HomeActivity::render(RenderLock&&) {
 
   // Build menu items dynamically
   std::vector<const char*> menuItems = {tr(STR_BROWSE_FILES), tr(STR_LIBRARY), tr(STR_FILE_TRANSFER),
-                                        tr(STR_SETTINGS_TITLE)};
-  std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Settings};
+                                        tr(STR_SETTINGS_TITLE), tr(STR_START_CLOCK_MODE)};
+  std::vector<UIIcon> menuIcons = {Folder, Library, Transfer, Settings, Recent};
 
   if (hasLibrarySlot()) {
     menuItems.insert(menuItems.begin() + 2, hasPlugins ? tr(STR_PLUGINS) : tr(STR_OPDS_BROWSER));
@@ -578,3 +594,4 @@ void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }
 
 void HomeActivity::onPluginsOpen() { activityManager.goToPlugins(hasOpdsServers); }
+void HomeActivity::onClockModeStart() { activityManager.goToClock(); }

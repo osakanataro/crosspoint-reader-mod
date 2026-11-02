@@ -59,6 +59,7 @@
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
 #include "util/ButtonNavigator.h"
+#include "util/InputDiag.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -68,6 +69,17 @@ namespace {
 // fresh page needs the HALF ghost-cleanup and closing re-renders the page.
 bool xteinkClassPanel() {
   return gpio.isXteinkDevice() || BoardConfig::isX4Pro() || BoardConfig::isX4Classic() || BoardConfig::isEegoA4();
+}
+
+// Tategaki (vertical writing) auto-detection: no explicit writing-mode setting exists yet,
+// so a book lays out vertically only when its spine declares page-progression-direction="rtl"
+// AND its language is CJK (Japanese/Chinese) -- the shape of a typical vertical EPUB.
+bool bookIsVertical(const Epub* epub) {
+  if (epub == nullptr || !epub->isPageProgressionRtl()) {
+    return false;
+  }
+  const std::string& lang = epub->getLanguage();
+  return lang.rfind("ja", 0) == 0 || lang.rfind("jp", 0) == 0 || lang.rfind("zh", 0) == 0;
 }
 
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
@@ -225,6 +237,7 @@ EpubReaderActivity::~EpubReaderActivity() {
 
   if (footnoteDepth > 0 && epub) saveLinkStack();
 
+  const uint32_t freeBefore = ESP.getFreeHeap();
   section.reset();
   CLIPPINGS.unload();
   if (pendingReadFolderMove && epub) {
@@ -236,9 +249,13 @@ EpubReaderActivity::~EpubReaderActivity() {
   } else {
     epub.reset();
   }
+
+  InputDiag::noteCloseHeap(freeBefore / 1024, ESP.getFreeHeap() / 1024, ESP.getMaxAllocHeap() / 1024);
 }
 
 bool EpubReaderActivity::loadBook() {
+  InputDiag::noteOpenBegin();
+  InputDiag::noteOpenStage(0, "enter");
   auto loadedEpub = makeUniqueNoThrow<Epub>(bookPath, "/.crosspoint");
   if (!loadedEpub) {
     LOG_ERR("ERS", "Failed to allocate EPUB object");
@@ -246,7 +263,10 @@ bool EpubReaderActivity::loadBook() {
   }
 
   const bool uncached = !Storage.exists((loadedEpub->getCachePath() + "/book.bin").c_str());
-  if (uncached) {
+  // A CSS rebuild on an indexed book extracts each stylesheet through the same 32KB inflate window
+  // as a first index; lend it the framebuffer too, so it never needs that block from the heap.
+  const bool cssUncached = !uncached && SETTINGS.embeddedStyle != 0 && loadedEpub->cssCacheNeedsRebuild();
+  if (uncached || cssUncached) {
     disableFastInitialRefresh();
     GUI.drawPopup(renderer, tr(STR_INDEXING));
   }
@@ -254,7 +274,7 @@ bool EpubReaderActivity::loadBook() {
   bool loaded;
   {
     std::optional<GfxRenderer::FrameBufferLoan> loan;
-    if (uncached) loan.emplace(renderer);
+    if (uncached || cssUncached) loan.emplace(renderer);
     loaded = loadedEpub->load(true, SETTINGS.embeddedStyle == 0);
   }
   if (!loaded) {
@@ -265,6 +285,7 @@ bool EpubReaderActivity::loadBook() {
     return false;
   }
   epub = std::move(loadedEpub);
+  InputDiag::noteOpenStage(1, "epub");
 
   ImageBlock::clearRenderFailures();
   ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* src, const char* dest) {
@@ -333,11 +354,19 @@ void EpubReaderActivity::openReaderMenu() {
     // go-to-percent... cancelled back to the menu), so the framebuffer holds
     // that screen, not the page: re-render the page and let renderBook() put
     // the toolbar on top. The in-reader fast path is openOverlay().
+    // Build the toolbar before committing to it: std::make_unique aborts on a failed
+    // allocation, and leaving overlay set with no toolbar would draw nothing.
+    if (!toolbarUi) {
+      toolbarUi = makeUniqueNoThrow<ReaderToolbarUi>(renderer);
+      if (!toolbarUi) {
+        LOG_ERR("ERS", "OOM: reader toolbar, staying on the page");
+        return;
+      }
+    }
     overlay = Overlay::Toolbar;
     focusedTool = 0;
     panelHoldJumped = false;
     panelCursorShown = !mappedInput.hasTouch();
-    if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);
     toolbarUi->begin();
     discardOverlayPage();
     requestUpdate();
@@ -347,6 +376,19 @@ void EpubReaderActivity::openReaderMenu() {
   // pagination buffers; chapterPosition() covers that with the cached position.
   const ChapterPosition position = chapterPosition();
   const int bookProgressPercent = bookPercentFor(position);
+
+  // A build paused by the heap gate still holds its parser and CSS tables (tens of KB); the menu
+  // and the list screens behind it cannot be built on what is left. Persist the laid-out pages and
+  // drop the build; it resumes from the partial when the reader draws again.
+  // Under the render lock, as backgroundBuildTick does: a foreground build runs in render() on the
+  // render task, and suspending frees the parser it would be using. Busy means a render is
+  // building; it releases what it holds when it returns, so the menu only goes without the drop.
+  {
+    RenderLock lock(RenderLock::Mode::Try);
+    if (lock.ownsLock() && section && section->isBuilding() && !buildTickHeapGate()) {
+      section->suspendBuild();
+    }
+  }
 
   startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
                              renderer, mappedInput, epub->getTitle(), position.displayPage(), position.totalPages,
@@ -427,7 +469,7 @@ void EpubReaderActivity::backgroundBuildTick() {
   // A build step can lend the framebuffer (image probes), which hands it back white while the
   // panel still shows the page; redraw so nothing is later painted over the blank buffer.
   const uint32_t loansBefore = renderer.frameBufferLoanCount();
-  const bool built = section->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK, &buttonContactClosed);
+  const bool built = buildChunkTimed(BACKGROUND_BUILD_PAGES_PER_TICK, &buttonContactClosed);
   if (renderer.frameBufferLoanCount() != loansBefore) {
     pageBufferStale = true;
     requestUpdate();
@@ -701,7 +743,8 @@ void EpubReaderActivity::loop() {
     if (lock.ownsLock() && section && !section->isBuilding() && section->isPartial() && buildViewportWidth > 0 &&
         !partialRebuildStartFailed && !bleturner::holdsHeap() &&
         section->currentPage + PARTIAL_REBUILD_START_MARGIN >= static_cast<int>(section->pageCount)) {
-      const ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+      ReaderRenderSpec buildSpec = SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight);
+      buildSpec.isVertical = bookIsVertical(epub.get());
       if (!section->startBuild(buildSpec)) {
         partialRebuildStartFailed = true;
         LOG_ERR("ERS", "Failed to start deferred partial extension build");
@@ -730,8 +773,13 @@ void EpubReaderActivity::loop() {
     pendingReadFolderMove = false;
   }
 
-  const auto touch =
-      ReaderUtils::detectTouchPageTurn(renderer, mappedInput, ReaderUtils::isRtlBookLanguage(epub->getLanguage()));
+  // Page-progression-direction, not bookIsVertical(): the controls follow the page order the
+  // spine declares, which is right-to-left for a horizontal RTL book as much as for a vertical
+  // Japanese one. Touch also keeps upstream's RTL-language rule; the buttons follow the spine
+  // only, so a horizontal Arabic book without the declaration keeps upstream's button mapping.
+  const bool rtlPages = epub != nullptr && epub->isPageProgressionRtl();
+  const auto touch = ReaderUtils::detectTouchPageTurn(renderer, mappedInput,
+                                                      rtlPages || ReaderUtils::isRtlBookLanguage(epub->getLanguage()));
 
   if (showBookmarkMessage && (millis() - bookmarkMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
     showBookmarkMessage = false;
@@ -976,7 +1024,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
+  auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput, rtlPages);
   prevTriggered = prevTriggered || touch.prev;
   nextTriggered = nextTriggered || touch.next;
   if (!prevTriggered && !nextTriggered) {
@@ -1252,6 +1300,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           section.reset();
           epub->clearCache();
           epub->setupCacheDir();
+          // The link back-stack went with the old cache; the destructor must not write it
+          // back into the fresh one.
+          footnoteDepth = 0;
           if (!saveProgress(backupSpine, backupPage, backupPageCount)) {
             LOG_ERR("ERS", "Failed to save progress before cache clear");
           }
@@ -1601,12 +1652,25 @@ bool EpubReaderActivity::skipLoopDelay() {
   return overlay == Overlay::None && !buildHeapPaused && backgroundBuildWanted();
 }
 
+bool EpubReaderActivity::buildChunkTimed(const uint16_t pages, bool (*yieldNow)()) {
+  const uint16_t pageCountBefore = section->pageCount;
+  const unsigned long startMs = millis();
+  const bool ok = section->buildSomeMore(pages, yieldNow);
+  const unsigned long chunkMs = millis() - startMs;
+  InputDiag::noteBuildChunk(currentSpineIndex, pageCountBefore, section->pageCount, chunkMs);
+  buildAccumMsThisRender += chunkMs;
+  buildChunkCountThisRender++;
+  return ok;
+}
+
 void EpubReaderActivity::renderBook() {
   currentPageLinks.clear();
   if (!epub) return;
   // A radio start in flight takes ~50 KB while the stack comes up: the page waits for it rather than
   // take the heap beside it (X3: abort() in a page restore at free 22,676 B). About 20 ms, once a visit.
   bleturner::settleStart();
+  buildAccumMsThisRender = 0;
+  buildChunkCountThisRender = 0;
   // Runs under the render task's RenderLock; catches every requestUpdate()
   // exit from the overlay while its deferred chrome refresh is still pending.
   settleOverlayRefresh();
@@ -1618,6 +1682,9 @@ void EpubReaderActivity::renderBook() {
   };
 
   const auto showBuildError = [this](const char* message = nullptr) {
+    // Snapshot the log ring before anything else: on a device with no serial console this is the
+    // only record of which check inside the section build actually failed. No-op without INPUT_DIAG.
+    InputDiag::captureLogs("section-build-failed", /*failure=*/true);
     renderer.clearScreen();
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -1655,7 +1722,10 @@ void EpubReaderActivity::renderBook() {
   buildViewportWidth = viewportWidth;
   buildViewportHeight = viewportHeight;
 
-  const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+  renderSpec.isVertical = bookIsVertical(epub.get());
+  // getReaderFontId() inside readerRenderSpec resolves (and lazily loads) the SD reader font.
+  InputDiag::noteOpenStage(2, "font");
 
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
@@ -1768,7 +1838,7 @@ void EpubReaderActivity::renderBook() {
             if (buildPopupPending && millis() - buildStartMs >= BUILD_POPUP_DEADLINE_MS) {
               showBuildPopup(renderer, pagesUntilFullRefresh);
             }
-            if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+            if (!buildChunkTimed(BUILD_PAGES_PER_CHUNK)) {
               LOG_ERR("ERS", "Failed during incremental section build");
               section.reset();
               buildPopupPending = false;
@@ -1838,7 +1908,7 @@ void EpubReaderActivity::renderBook() {
       return;
     }
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
-      if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+      if (!buildChunkTimed(BUILD_PAGES_PER_CHUNK)) {
         LOG_ERR("ERS", "Failed during incremental section build");
         section.reset();
         showBuildError();
@@ -1848,7 +1918,7 @@ void EpubReaderActivity::renderBook() {
   }
   if (section->isBuilding()) {
     while (!section->isBuildComplete() && section->currentPage >= static_cast<int>(section->pageCount)) {
-      if (!section->buildSomeMore(BUILD_PAGES_PER_CHUNK)) {
+      if (!buildChunkTimed(BUILD_PAGES_PER_CHUNK)) {
         LOG_ERR("ERS", "Failed during incremental section build");
         section.reset();
         showBuildError();
@@ -1856,6 +1926,20 @@ void EpubReaderActivity::renderBook() {
       }
     }
   }
+
+  if (buildChunkCountThisRender > 0) {
+    InputDiag::noteBuildTotal(currentSpineIndex, buildAccumMsThisRender, buildChunkCountThisRender);
+    // Cumulative across the session, not per render: what the report needs is where a build's time
+    // went, not a per-chunk series.
+    uint32_t advCalls = 0, advMs = 0, advTableMax = 0, advTableLimit = 0, advFullSkips = 0;
+    renderer.sdAdvanceStats(advCalls, advMs, advTableMax, advTableLimit, advFullSkips);
+    InputDiag::noteBuildFontWork(advCalls, advMs, advTableMax, advTableLimit, advFullSkips);
+    uint32_t onlyCalls = 0, onlySd = 0, onlyMs = 0;
+    renderer.sdAdvanceOnlyStats(onlyCalls, onlySd, onlyMs);
+    InputDiag::noteBuildAdvanceOnly(onlyCalls, onlySd, onlyMs);
+  }
+  // Section loaded (or built far enough for the requested page).
+  InputDiag::noteOpenStage(3, "sect");
 
   if (!section->isBuilding() && section->pageCount > 0 &&
       section->currentPage >= static_cast<int>(section->pageCount)) {
@@ -1912,6 +1996,7 @@ void EpubReaderActivity::renderBook() {
       return;
     }
     pageLoadRetryCount = 0;
+    InputDiag::notePoint("pg:load");
 
     currentPageVisibleOffset = p->visibleTextOffset;
     currentPageFootnotes = std::move(p->footnotes);
@@ -1924,10 +2009,12 @@ void EpubReaderActivity::renderBook() {
     // needs that slot, then snapshot the newly rendered page below.
     discardOverlayPage();
 
+    InputDiag::noteOpenStage(4, "built");
     const auto start = millis();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
     lastRenderCompleteMs = millis();
+    InputDiag::noteOpenStage(5, "page1");
     markPageRendered();
   }
 
@@ -2067,7 +2154,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // its own SD pass after the scope ends.
   renderStatusBar();
   scope.endScanAndPrewarm();
+  // No-op unless built with INPUT_DIAG: what the scan collected and whether any prewarm bailed at
+  // entry, so a fast prewarm that left the draw cold can be attributed without the log ring.
+  InputDiag::noteScanOutcome(fcm->lastScanBytes(), fcm->lastScanFonts(), renderer.glyphPrewarmEntryFails(),
+                             fcm->scanFontOverflows());
   const auto tPrewarm = millis();
+  InputDiag::notePoint("pg:prewarm");
 
   // Black & White images: the page turns as plain B/W, images dither in the
   // B/W pass and text keeps its usual anti-aliasing.
@@ -2117,9 +2209,21 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
 
   drawClippingHighlights(*page, fontId, orientedMarginTop, orientedMarginLeft);
+#ifdef INPUT_DIAG
+  // Discard what the scan pass accumulated: it runs the same loops with drawing suppressed, so
+  // leaving it in would report it alongside the pass that actually puts pixels down.
+  (void)TextBlock::takeVerticalRenderStats();
+#endif
   page->render(renderer, fontId, orientedMarginLeft, orientedMarginTop);
+#ifdef INPUT_DIAG
+  {
+    const auto vs = TextBlock::takeVerticalRenderStats();
+    InputDiag::noteVerticalRender(vs.bodyMs, vs.bodyCells, vs.rubyMeasureMs, vs.rubyDrawMs, vs.rubyGroups);
+  }
+#endif
   renderStatusBar();
   const auto tBwRender = millis();
+  InputDiag::notePoint("pg:bw");
 
   if (absoluteImageGrayscale) {
     const auto baseMode = cleanImageBasePending ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
@@ -2157,6 +2261,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
   const auto tDisplay = millis();
+  InputDiag::notePageRender(tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender);
+  InputDiag::notePoint("pg:disp");
 
   if (tiledGrayscale) {
     constexpr int STRIP_ROWS = 80;
@@ -2187,6 +2293,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     if (lsbPlaneBuf) {
       renderPlaneToBuffer(true, lsbPlaneBuf.get());
       if (msbPlaneBuf) renderPlaneToBuffer(false, msbPlaneBuf.get());
+      InputDiag::notePoint("pg:planes");
       const auto tGrayRender = millis();
 
       renderer.waitRefreshComplete();
@@ -2215,6 +2322,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
               tGrayWrite - tWait, tGrayDisplay - tGrayWrite, tEnd - tGrayDisplay, tEnd - t0, msbPlaneBuf ? 2 : 1);
     } else {
       auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+      InputDiag::notePoint("pg:scratch");
       renderer.waitRefreshComplete();
       if (!scratch) {
         LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * STRIP_ROWS);
@@ -2238,6 +2346,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.writeGrayscalePlaneStrip(true, scratch.get(), y, rows);
         }
         const auto tGrayLsb = millis();
+        InputDiag::notePoint("pg:lsb");
 
         renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
         for (int y = 0; y < gh; y += STRIP_ROWS) {
@@ -2249,6 +2358,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
           renderer.writeGrayscalePlaneStrip(false, scratch.get(), y, rows);
         }
         const auto tGrayMsb = millis();
+        InputDiag::notePoint("pg:msb");
 
         renderer.setRenderMode(GfxRenderer::BW);
         renderer.displayGrayBuffer();
@@ -2279,12 +2389,14 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderGrayscalePass();
       renderer.copyGrayscaleLsbBuffers();
       const auto tGrayLsb = millis();
+      InputDiag::notePoint("pg:lsb");
 
       renderer.clearScreen(absoluteImageGrayscale ? 0xFF : 0x00);
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
       renderGrayscalePass();
       renderer.copyGrayscaleMsbBuffers();
       const auto tGrayMsb = millis();
+      InputDiag::notePoint("pg:msb");
 
       renderer.displayGrayBuffer();
       const auto tGrayDisplay = millis();
@@ -2602,9 +2714,16 @@ void EpubReaderActivity::settleOverlayRefresh() {
 
 void EpubReaderActivity::openOverlay(Overlay target) {
   mappedInput.resetHomeButtonInput();
+  // Same as openReaderMenu(): allocate first, and leave the overlay closed if the heap cannot spare it.
+  if (!toolbarUi) {
+    toolbarUi = makeUniqueNoThrow<ReaderToolbarUi>(renderer);
+    if (!toolbarUi) {
+      LOG_ERR("ERS", "OOM: reader toolbar, staying on the page");
+      return;
+    }
+  }
   const Overlay previous = overlay;
   overlay = target;
-  if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);
   if (previous == Overlay::None) toolbarUi->begin();
   // Buttons show a cursor from the start; touch boards only once a button moves it.
   panelCursorShown = !mappedInput.hasTouch();

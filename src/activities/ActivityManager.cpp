@@ -8,6 +8,8 @@
 #include <HalPowerManager.h>
 #include <Memory.h>
 #include <VectorFontSupport.h>
+#include <esp_task_wdt.h>
+#include <sdkconfig.h>
 
 #include <algorithm>
 
@@ -31,8 +33,10 @@
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsListActivity.h"
 #include "util/BmpViewerActivity.h"
+#include "util/ClockActivity.h"
 #include "util/FrontlightPanelActivity.h"
 #include "util/FullScreenMessageActivity.h"
+#include "util/InputDiag.h"
 
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
 
@@ -68,6 +72,37 @@ void ActivityManager::begin() {
                           renderTaskCore  // Keep long renders/cover decodes off CPU 0's idle watchdog when available
   );
   assert(renderTaskHandle != nullptr && "Failed to create render task");
+
+  // A render that never returns leaves the device with no way back. The render task is
+  // subscribed to no watchdog and, on the C3, the idle task is not checked either (its
+  // sdkconfig leaves CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0 unset), while powering off is decided in
+  // loop() -- the task the stuck render is starving. Nothing on the outside of the case
+  // can interrupt it: the reset button is under the glued-down screen. The only remedy is
+  // to flatten the battery, which takes a day or more.
+  //
+  // Watching a task turns that into a reboot, and the panic path leaves the stuck task's
+  // name in crash_report.txt (HalSystem: esp_task_wdt_isr_user_handler). Who is watched
+  // depends on the build: under DEBUG_RENDER_WATCHDOG every render is (renderTaskLoop);
+  // otherwise only the renders of screens that ask for it (Activity::watchesRender -- the
+  // clock, whose two hangs cost a day each) plus whatever those screens subscribe themselves.
+  // The timeout is set here for both cases and is deliberately loose: a first render can
+  // legitimately take seconds (SD font cache generation, cover decode), and this only has to
+  // tell "slow" apart from "never". The IDF default is 5 s, which a clock clean refresh
+  // (3.2 s) would sit uncomfortably close to. No task is subscribed by this call alone, so
+  // a build where nothing asks to be watched behaves exactly as before.
+  esp_task_wdt_config_t wdtConfig = {};
+  wdtConfig.timeout_ms = 30000;
+  // Keep the board's own idle-task checks (the S3's prebuilt sdkconfig watches CPU0; the C3's
+  // watches none), now under the looser timeout.
+  wdtConfig.idle_core_mask = 0;
+#if CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0
+  wdtConfig.idle_core_mask |= 1u << 0;
+#endif
+#if CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1
+  wdtConfig.idle_core_mask |= 1u << 1;
+#endif
+  wdtConfig.trigger_panic = true;
+  esp_task_wdt_reconfigure(&wdtConfig);
 }
 
 void ActivityManager::renderTaskTrampoline(void* param) {
@@ -78,17 +113,65 @@ void ActivityManager::renderTaskTrampoline(void* param) {
 void ActivityManager::renderTaskLoop() {
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+#ifdef DEBUG_RENDER_WATCHDOG
+    // Subscribed around the render alone. This task spends the rest of its life blocked on
+    // the notify above, where a watchdog would fire on a device that is merely idle. The
+    // window it covers therefore includes waiting for the render lock, which is where a
+    // render already stuck would hold it.
+    esp_task_wdt_add(nullptr);
+#endif
     // Acquire the lock before reading currentActivity to avoid a TOCTOU race
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
     if (currentActivity) {
+      // Per-screen watch for builds without DEBUG_RENDER_WATCHDOG (there the subscription above
+      // already covers this). Decided while the lock is held, so currentActivity is stable; the
+      // answer is kept on the stack because render() may release the lock and the main task may
+      // then destroy the activity. Subscribed before the power lock on purpose: the clock's
+      // deadlock (2026-09-02) was inside HalPowerManager::Lock, not inside render().
+      bool watchedForScreen = false;
+#ifndef DEBUG_RENDER_WATCHDOG
+      watchedForScreen = currentActivity->watchesRender();
+      if (watchedForScreen) esp_task_wdt_add(nullptr);
+#endif
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+#ifdef INPUT_DIAG
+      // Snapshot the name onto the stack before rendering. render() receives the lock by value and
+      // may release it partway, after which the main task can pop and destroy this activity -- so
+      // reading the name after render() returns is not safe. Guarded rather than routed through the
+      // no-op InputDiag stub because the snapshot itself would otherwise cost every build a copy.
+      char renderedName[16];
+      snprintf(renderedName, sizeof(renderedName), "%s", currentActivity->name.c_str());
+      const unsigned long renderStart = millis();
+      const uint32_t onDemandStart = renderer.glyphOnDemandLoads();
+      const uint32_t rebuildStart = renderer.glyphMiniRebuilds();
+      const uint32_t rebuildMsStart = renderer.glyphMiniRebuildMs();
+      InputDiag::noteRenderStart();
+#endif
       // Night mode is a global output polarity applied to every activity.
       // The sleep screen forces normal polarity itself (SleepActivity).
       display.setInverted(SETTINGS.screenInverted != 0);
       const uint32_t renderingVisit = screenVisit;
       currentActivity->render(std::move(lock));
       paintedVisit.store(renderingVisit, std::memory_order_release);
+#ifdef INPUT_DIAG
+      const unsigned long renderDurationMs = millis() - renderStart;
+      InputDiag::noteRender(renderedName, renderDurationMs, renderer.glyphOnDemandLoads() - onDemandStart,
+                            renderer.glyphMiniRebuilds() - rebuildStart,
+                            renderer.glyphMiniRebuildMs() - rebuildMsStart);
+      // A render this slow isn't drawing -- it's stuck somewhere upstream (SD I/O, glyph
+      // cache, allocation). The 16-line log ring is system-wide and short, so whatever ran
+      // during the stall is likely still in it right now; a routine render would evict it
+      // within a few more renders. captureLogs() keeps only the first capture, so repeat
+      // stalls this session don't overwrite the one that still has the culprit.
+      constexpr unsigned long SLOW_RENDER_CAPTURE_MS = 5000;
+      if (renderDurationMs >= SLOW_RENDER_CAPTURE_MS) {
+        char reason[48];
+        snprintf(reason, sizeof(reason), "slow-render %s %lums", renderedName, renderDurationMs);
+        InputDiag::captureLogs(reason);
+      }
+#endif
+      if (watchedForScreen) esp_task_wdt_delete(nullptr);
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
@@ -99,6 +182,9 @@ void ActivityManager::renderTaskLoop() {
     if (waiter) {
       xTaskNotify(waiter, 1, eIncrement);
     }
+#ifdef DEBUG_RENDER_WATCHDOG
+    esp_task_wdt_delete(nullptr);
+#endif
   }
 }
 
@@ -358,6 +444,9 @@ void ActivityManager::goToFullScreenMessage(std::string message, EpdFontFamily::
   replaceActivity(std::make_unique<FullScreenMessageActivity>(renderer, mappedInput, std::move(message), style));
 }
 
+// Pushed, not replaced: Back leaves the clock and lands back on Home.
+void ActivityManager::goToClock() { pushActivity(std::make_unique<ClockActivity>(renderer, mappedInput)); }
+
 void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefresh) {
   if (initialMenuItem == HomeMenuItem::NONE && currentActivity) {
     const auto& activityName = currentActivity->name;
@@ -399,6 +488,8 @@ void ActivityManager::popActivity() {
 }
 
 bool ActivityManager::preventAutoSleep() const { return currentActivity && currentActivity->preventAutoSleep(); }
+
+bool ActivityManager::needsFullSpeed() const { return currentActivity && currentActivity->needsFullSpeed(); }
 
 bool ActivityManager::requiresExclusiveStorageLoop() const {
   return currentActivity && currentActivity->requiresExclusiveStorageLoop();

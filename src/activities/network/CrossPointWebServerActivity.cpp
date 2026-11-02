@@ -17,6 +17,7 @@
 #include "activities/network/CalibreConnectActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/InputDiag.h"
 #include "util/PluginEvents.h"
 #include "util/QrUtils.h"
 #include "util/TaskWatchdog.h"
@@ -314,6 +315,7 @@ void CrossPointWebServerActivity::startWebServer() {
     return leaveRequested;
   });
   webServer->begin();
+  InputDiag::dumpHeapMap("web-start");
 
   if (webServer->isRunning()) {
     state = WebServerActivityState::SERVER_RUNNING;
@@ -460,6 +462,13 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
       const auto height = renderer.getLineHeight(UI_10_FONT_ID);
       const auto top = (pageHeight - height) / 2;
       renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_STARTING_HOTSPOT));
+    }
+    // The CJK UI text on this screen fills the SD-font caches, and the web server's requests are
+    // served from what is left (a settings request ran the heap under 1 KB, 2026-11-03). The frame
+    // is drawn, so give them back before the panel refresh, which can take a second; this screen
+    // repaints only on a Wi-Fi bar change or recovery.
+    if (state == WebServerActivityState::SERVER_RUNNING) {
+      if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
     }
     renderer.displayBuffer();
   }

@@ -7,6 +7,7 @@
 #include "HttpDownloader.h"
 #include <Logging.h>
 #include <Memory.h>
+#include <SdCardFontCache.h>
 #include <ReleaseJsonParser.h>
 #include <esp_ota_ops.h>
 // clang-format on
@@ -151,6 +152,9 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
     LOG_ERR("OTA", "No OTA partition available");
     return INTERNAL_UPDATE_ERROR;
   }
+
+  // The update slot holds the flash font copy: stop reading it before esp_ota_begin erases it.
+  SdCardFontCache::invalidateUntilReboot();
 
   esp_ota_handle_t otaHandle = 0;
   esp_err_t esp_err = esp_ota_begin(updatePartition, OTA_SIZE_UNKNOWN, &otaHandle);

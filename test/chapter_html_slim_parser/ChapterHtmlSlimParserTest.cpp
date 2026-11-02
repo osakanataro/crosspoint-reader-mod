@@ -65,6 +65,7 @@ class ChapterHtmlSlimParserTest : public ::testing::TestWithParam<const char*> {
                                static_cast<uint16_t>(renderer.getScreenHeight()),
                                false,
                                false,
+                               false,
                                {},
                                true,
                                "",

@@ -2,6 +2,8 @@
 
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Logging.h>
+#include <SdCardFontCache.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -16,8 +18,10 @@
 #include "ReaderLineSpacing.h"
 #include "SdCardFontSystem.h"
 #include "TextSettingsPreview.h"
+#include "components/FontFlashCacheView.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/InputDiag.h"
 
 namespace fui = freeink::ui;
 
@@ -29,7 +33,9 @@ constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
     StrId::STR_LINE_SPACING,          StrId::STR_WORD_SPACING, StrId::STR_CHARACTER_SPACING, StrId::STR_EXTRA_SPACING,
     StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_ALIGNMENT,    StrId::STR_SCREEN_MARGIN};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION_NO_PREVIEW,
-                                        StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_TEXT_AA_NO_PREVIEW};
+                                        StrId::STR_EMBEDDED_STYLE_NO_PREVIEW, StrId::STR_TEXT_AA_NO_PREVIEW,
+                                        StrId::STR_FONT_FLASH_CACHE};
+constexpr StrId OK_OPTION[] = {StrId::STR_OK_BUTTON};
 
 int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFontFamilyName, uint8_t fontFamily) {
   if (sdFontFamilyName[0] != '\0' && registry) {
@@ -152,7 +158,7 @@ void TextSettingsActivity::rebuildSizeList() {
   for (const uint8_t pt : points) {
     // "pt" is deliberately not translated: it is the typographic unit symbol,
     // written the same way in every language CrossPoint ships.
-    char label[12];
+    char label[16];
     snprintf(label, sizeof(label), "%u pt", pt);
     if (pt == selectedPt) currentSizeIndex_ = static_cast<int>(sizes_.size());
     sizes_.push_back({label, pt});
@@ -301,6 +307,12 @@ void TextSettingsActivity::drawFooter() {
 }
 
 void TextSettingsActivity::render(RenderLock&& lock) {
+  if (flashCopyActive_.load()) {
+    fontflashcache::draw(renderer, flashCopyFamily_.c_str(), flashCopyPointSize_, flashCopyDone_.load(),
+                         flashCopyTotal_.load(), false);
+    renderer.displayBuffer();
+    return;
+  }
   if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
   UiListActivity::render(std::move(lock));
 }
@@ -350,6 +362,7 @@ void TextSettingsActivity::activateRow(int row) {
         // SD write happens outside its RenderLock.
         if (currentFamilyIndex_ == row) {
           SETTINGS.saveToFile();
+          applyFlashCacheSetting();
         }
         requestUpdate();
       }
@@ -358,6 +371,7 @@ void TextSettingsActivity::activateRow(int row) {
       if (row != currentSizeIndex_) {
         applySize(row);
         SETTINGS.saveToFile();
+        applyFlashCacheSetting();
         requestUpdate();
       }
       break;
@@ -380,6 +394,91 @@ void TextSettingsActivity::applySize(int listIndex) {
   currentSizeIndex_ = listIndex;
   SETTINGS.fontPointSize = sizes_[listIndex].pointSize;
   sdFontSystem.ensureLoaded(renderer);
+}
+
+void TextSettingsActivity::applyFlashCacheSetting() {
+  if (SETTINGS.sdFontFamilyName[0] == '\0') return;  // built-in family: nothing to copy, nothing to reload
+  const bool wantFlash = SETTINGS.sdFontFlashCache != 0;
+  // Copy off and the font already read from the card: the family/size change has just loaded
+  // it that way, and a forced reload would read its tables from the SD a second time.
+  if (!wantFlash && !sdFontSystem.readerFontFromFlash()) return;
+  if (wantFlash && !runFlashCopy()) {
+    // runFlashCopy switched the setting off; the reload below returns the font to the card.
+  }
+  // Same RenderLock rationale as applySize(): the reload frees the SdCardFont the render task reads.
+  RenderLock lock;
+  sdFontSystem.ensureLoaded(renderer, true);
+}
+
+bool TextSettingsActivity::runFlashCopy() {
+  if (SdCardFontSystem::copyBlockedByBattery()) {
+    InputDiag::noteFontCopy("copy skipped: battery low, setting off");
+    SETTINGS.sdFontFlashCache = 0;
+    SETTINGS.saveToFile();
+    optionPopup_.show(StrId::STR_FONT_FLASH_CACHE_LOW_BATTERY, OK_OPTION, 1, 0, [](int) {});
+    return false;
+  }
+  char path[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
+  const auto* file = sdFontSystem.cacheCandidate(path, sizeof(path));
+  if (!file) {
+    InputDiag::noteFontCopy("copy no candidate");
+    SETTINGS.sdFontFlashCache = 0;
+    SETTINGS.saveToFile();
+    optionPopup_.show(StrId::STR_FONT_FLASH_CACHE_TOO_LARGE, OK_OPTION, 1, 0, [](int) {});
+    return false;
+  }
+  if (SdCardFontCache::isValidFor(path)) {
+    InputDiag::noteFontCopy("copy already valid");
+    return true;
+  }
+
+  {
+    RenderLock lock;
+    flashCopyFamily_ = SETTINGS.sdFontFamilyName;
+    flashCopyPointSize_ = file->pointSize;
+    flashCopyDone_.store(0);
+    flashCopyTotal_.store(1);
+    flashCopyLastPercent_ = 0;
+    flashCopyActive_.store(true);
+  }
+  requestUpdateAndWait();
+
+  const unsigned long copyStartMs = millis();
+  const auto result = SdCardFontCache::preload(
+      path,
+      [](size_t completed, size_t total, void* context) {
+        auto* self = static_cast<TextSettingsActivity*>(context);
+        self->flashCopyDone_.store(completed);
+        self->flashCopyTotal_.store(total);
+        const unsigned percent = total > 0 ? static_cast<unsigned>(completed * 100 / total) : 0;
+        if (percent == 100 || percent >= self->flashCopyLastPercent_ + 5) {
+          self->flashCopyLastPercent_ = percent;
+          self->requestUpdate(true);
+        }
+      },
+      this);
+  LOG_INF("SDFCACHE", "Copy of %s: %s", path, SdCardFontCache::resultName(result));
+  {
+    char line[96];
+    snprintf(line, sizeof(line), "copy result=%s bytes=%u ms=%lu", SdCardFontCache::resultName(result),
+             static_cast<unsigned>(flashCopyTotal_.load() / 2), millis() - copyStartMs);
+    InputDiag::noteFontCopy(line);
+  }
+  {
+    RenderLock lock;
+    flashCopyActive_.store(false);
+  }
+  InputDiag::flushNow();
+
+  const bool ok = result == SdCardFontCache::Result::Ok || result == SdCardFontCache::Result::AlreadyCached;
+  if (!ok) {
+    SETTINGS.sdFontFlashCache = 0;
+    SETTINGS.saveToFile();
+    optionPopup_.show(result == SdCardFontCache::Result::TooLarge ? StrId::STR_FONT_FLASH_CACHE_TOO_LARGE
+                                                                  : StrId::STR_FONT_FLASH_CACHE_FAILED,
+                      OK_OPTION, 1, 0, [](int) {});
+  }
+  return ok;
 }
 
 void TextSettingsActivity::confirmLayoutRow(int row) {
@@ -497,6 +596,12 @@ void TextSettingsActivity::confirmStyleRow(int row) {
     case StyleRow::AntiAliasing:
       SETTINGS.textAntiAliasing = !SETTINGS.textAntiAliasing;
       break;
+    case StyleRow::FlashCache:
+      SETTINGS.sdFontFlashCache = SETTINGS.sdFontFlashCache ? 0 : 1;
+      SETTINGS.saveToFile();
+      applyFlashCacheSetting();
+      requestUpdate();
+      return;
 
     default:
       return;
@@ -515,6 +620,8 @@ bool TextSettingsActivity::styleRowChecked(int row) const {
       return SETTINGS.embeddedStyle;
     case StyleRow::AntiAliasing:
       return SETTINGS.textAntiAliasing;
+    case StyleRow::FlashCache:
+      return SETTINGS.sdFontFlashCache != 0;
 
     default:
       return false;
