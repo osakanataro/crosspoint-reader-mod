@@ -59,6 +59,7 @@
 #include "util/BookCacheUtils.h"
 #include "util/DictionaryRegistry.h"
 #include "util/FirmwareIdentity.h"
+#include "util/InputDiag.h"
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
 #include "util/TaskWatchdog.h"
@@ -1412,9 +1413,22 @@ void CrossPointWebServer::handleGetSettings() const {
   // Pass the SD font registry so the fontFamily setting's enumStringValues
   // includes SD-resident families — otherwise the web API only exposes the
   // three built-in fonts.
+#if INPUT_DIAG
+  const uint32_t diagEnterFree = ESP.getFreeHeap();
+  const uint32_t diagEnterMax = ESP.getMaxAllocHeap();
+#endif
   std::vector<DictionaryEntry> dictionaries;
   DictionaryRegistry::discover(dictionaries);
   const auto& settings = getSettingsList(&sdFontSystem.registry(), &dictionaries);
+#if INPUT_DIAG
+  {
+    char line[72];
+    snprintf(line, sizeof(line), "web settings enter %u/%u list %u/%u n=%u", static_cast<unsigned>(diagEnterFree),
+             static_cast<unsigned>(diagEnterMax), static_cast<unsigned>(ESP.getFreeHeap()),
+             static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(settings.size()));
+    InputDiag::noteImageEvent(line);
+  }
+#endif
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
@@ -1515,12 +1529,21 @@ void CrossPointWebServer::handleGetSettings() const {
       seenFirst = true;
     }
     server->sendContent(json, len);
+    InputDiag::snapshotHeapOwnersIfLower("web:settings", s.key);
     yield();                          // Yield to allow WiFi and other tasks to process during a slow send
     resetTaskWatchdogIfSubscribed();  // Reset watchdog: each sendContent() is a blocking network write
   }
 
   server->sendContent("]");
   server->sendContent("");
+#if INPUT_DIAG
+  {
+    char line[72];
+    snprintf(line, sizeof(line), "web settings end %u/%u lowest %u", static_cast<unsigned>(ESP.getFreeHeap()),
+             static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(ESP.getMinFreeHeap()));
+    InputDiag::noteImageEvent(line);
+  }
+#endif
   LOG_DBG("WEB", "Served settings API");
 }
 

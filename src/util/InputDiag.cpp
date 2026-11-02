@@ -865,9 +865,16 @@ void snapshotBuildLowIfLower(const char* point) {
 }
 }  // namespace
 
+void InputDiag::snapshotHeapOwnersIfLower(const char* in, const char* after) {
+  const uint32_t freeNow = ESP.getFreeHeap();
+  HeapLowSlot& slot = heapLowSlots[0];
+  if (slot.lowestFreeNow != 0 && freeNow + HEAP_MIN_STEP > slot.lowestFreeNow) return;
+  snapshotHeapLowInto(slot, in, after, ESP.getMinFreeHeap(), freeNow);
+}
+
 void InputDiag::dumpHeapMap(const char* label) {
   static bool bootWritten = false;
-  constexpr uint16_t CAPACITY = 360;  // 400 x 36 B = 14.4 KB, freed before the file is closed
+  constexpr uint16_t CAPACITY = 360;  // 360 x 40 B = 14.4 KB, freed before the file is closed
   const uint32_t freeBefore = ESP.getFreeHeap();
   const uint32_t maxBefore = ESP.getMaxAllocHeap();
   auto* recs = static_cast<HeapBlockRec*>(malloc(sizeof(HeapBlockRec) * CAPACITY));
@@ -877,8 +884,10 @@ void InputDiag::dumpHeapMap(const char* label) {
   ctx.capacity = CAPACITY;
   heap_caps_walk(MALLOC_CAP_8BIT, heapWalkRecord, &ctx);
 
-  const char* path = bootWritten ? "/heap-map.txt" : "/heap-map-boot.txt";
-  bootWritten = true;
+  // The web dump gets a file of its own: returning to Home dumps again and would overwrite it.
+  const bool web = label != nullptr && strncmp(label, "web", 3) == 0;
+  const char* path = web ? "/heap-map-web.txt" : bootWritten ? "/heap-map.txt" : "/heap-map-boot.txt";
+  if (!web) bootWritten = true;
   HalFile file;
   if (Storage.openFileForWrite("DIAG", path, file)) {
     char line[256];

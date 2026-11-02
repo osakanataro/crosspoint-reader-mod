@@ -87,7 +87,8 @@ namespace {
 //   writing (header isVertical, vertical TextBlocks with ypos and cell width), images honour
 //   max-width/max-height, Kangxi radicals stand upright, kana repeat marks stay whole.
 // v74: OST additions above on top of upstream v73.
-constexpr uint8_t SECTION_FILE_VERSION = 74;
+// v75: Vertical first-column indent and U+3000 take a kana/kanji cell, not a bracket's advance.
+constexpr uint8_t SECTION_FILE_VERSION = 75;
 // Written into the version field while a build is in progress; patched to
 // SECTION_FILE_VERSION only when the build is finalized. An abandoned /
 // crash-interrupted .bin therefore carries version 0, which loadSectionFile rejects

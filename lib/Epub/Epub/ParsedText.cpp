@@ -841,11 +841,19 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
     return i < wordVerticalBehaviors.size() ? wordVerticalBehaviors[i] : VerticalTextUtils::VerticalBehavior::Upright;
   };
 
-  // Reference CJK cell advance from the first Upright word (cannot hardcode "一": it may be
-  // absent from the advance table). Used as the TateChuYoko cell height and spacing base.
+  // Reference CJK cell advance from the first upright kana or kanji (cannot hardcode "一": it may
+  // be absent from the advance table). Used as the first-column indent, the TateChuYoko cell
+  // height and the spacing base. Brackets, vertical presentation forms and U+3000 are passed
+  // over: on the device the SD face answered these with an advance far short of the em, so a
+  // paragraph opening on 【 or a full-width space lost its indent while one opening on a kana
+  // kept it (test book, 2026-11-02).
+  const auto isCellReference = [](const uint32_t cp) {
+    return (cp >= 0x3041 && cp <= 0x3096) || (cp >= 0x30A1 && cp <= 0x30FA) || (cp >= 0x3400 && cp <= 0x9FFF) ||
+           (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0x20000 && cp <= 0x3FFFF);
+  };
   int cjkCharAdvance = 0;
   for (size_t i = 0; i < words.size() && cjkCharAdvance == 0; i++) {
-    if (behaviorAt(i) == VerticalTextUtils::VerticalBehavior::Upright) {
+    if (behaviorAt(i) == VerticalTextUtils::VerticalBehavior::Upright && isCellReference(firstCodepoint(wordAt(i)))) {
       cjkCharAdvance = renderer.getTextAdvanceX(fontId, wordStore.cstr(words[i]), wordStyles[i]);
     }
   }
@@ -896,6 +904,10 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
       // put it. Kept off the spacing below: a squeezed mark takes the Upright spacing that
       // its neighbours do, so a column's cell count is unchanged by where the marks fall.
       baseHeight = static_cast<uint16_t>(cjkCharAdvance / 2);
+    } else if (vb == VerticalTextUtils::VerticalBehavior::Upright && firstCodepoint(wordAt(i)) == 0x3000) {
+      // A full-width space is one cell by definition; the face's own advance for it came back
+      // short on the device, and the space that indents a paperback paragraph disappeared.
+      baseHeight = static_cast<uint16_t>(cjkCharAdvance);
     } else {  // Upright and Sideways both advance by the glyph's own width
       baseHeight = static_cast<uint16_t>(renderer.getTextAdvanceX(fontId, text, wordStyles[i]));
     }

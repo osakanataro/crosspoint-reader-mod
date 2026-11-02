@@ -99,6 +99,11 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 75 (OST fork)
+
+Same layout as version 74. Rebuilds sections because the vertical first-column
+indent and the height of U+3000 now come from a kana or kanji cell.
+
 ### Version 74 (OST fork)
 
 Adds vertical writing on top of version 73. The header gains an `isVertical`

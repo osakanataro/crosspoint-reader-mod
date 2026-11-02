@@ -223,9 +223,13 @@ class InputDiag {
   // Writes every heap block (used ones of 256 B and more with their first 24 bytes, free
   // ones of 1 KB and more) to /heap-map-boot.txt the first time in a boot and to
   // /heap-map.txt after that, so the Home heap after reading can be set beside the Home
-  // heap before any book. The first word of a C++ object is its vtable, which the ELF's
-  // symbol table names; string data reads as text.
+  // heap before any book. A label starting with "web" goes to /heap-map-web.txt instead. The
+  // first word of a C++ object is its vtable, which the ELF's symbol table names; string data
+  // reads as text.
   static void dumpHeapMap(const char* label);
+  // Heap owners into /heap-low.txt whenever the heap is lower than at the last call (by 512 B),
+  // regardless of the 16 KB threshold. For transient lows inside one call, such as a web request.
+  static void snapshotHeapOwnersIfLower(const char* in, const char* after);
 
   // Snapshot the RTC log ring. A failure capture displaces a pending informational one: the
   // periodic flush is seconds away, and a slow render taken just before a build failed used to
@@ -280,6 +284,7 @@ class InputDiag {
   static void noteImageEvent(const char*) {}
   static void notePoint(const char*) {}
   static void dumpHeapMap(const char*) {}
+  static void snapshotHeapOwnersIfLower(const char*, const char*) {}
   static void captureLogs(const char*, bool = false) {}
   static void flushNow() {}
   static void flush(bool) {}

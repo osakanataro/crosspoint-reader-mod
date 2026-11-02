@@ -1034,15 +1034,20 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
   if (FsHelpers::hasJpgExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from JPG cover image");
     const auto coverJpgTempPath = getCachePath() + "/.cover.jpg";
-    if (!extractItemToFile(coverImageHref, coverJpgTempPath)) return false;
+    if (!extractItemToFile(coverImageHref, coverJpgTempPath)) {
+      COVER_DIAG("thumb extract FAIL jpg");
+      return false;
+    }
 
     HalFile coverJpg;
     if (!Storage.openFileForRead("EBP", coverJpgTempPath, coverJpg)) {
+      COVER_DIAG("thumb reopen FAIL jpg");
       return false;
     }
 
     HalFile thumbBmp;
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      COVER_DIAG("thumb bmp open FAIL jpg");
       return false;
     }
     // Use smaller target size for Continue Reading card (half of screen: 240x400)
@@ -1066,15 +1071,20 @@ bool Epub::generateThumbBmpForCover(int height, const std::string& coverImageHre
   } else if (FsHelpers::hasPngExtension(coverImageHref)) {
     LOG_DBG("EBP", "Generating thumb BMP from PNG cover image");
     const auto coverPngTempPath = getCachePath() + "/.cover.png";
-    if (!extractItemToFile(coverImageHref, coverPngTempPath)) return false;
+    if (!extractItemToFile(coverImageHref, coverPngTempPath)) {
+      COVER_DIAG("thumb extract FAIL png");
+      return false;
+    }
 
     HalFile coverPng;
     if (!Storage.openFileForRead("EBP", coverPngTempPath, coverPng)) {
+      COVER_DIAG("thumb reopen FAIL png");
       return false;
     }
 
     HalFile thumbBmp;
     if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
+      COVER_DIAG("thumb bmp open FAIL png");
       return false;
     }
     int THUMB_TARGET_WIDTH = height * 0.6;
@@ -1186,6 +1196,7 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
 bool Epub::extractItemToFile(const std::string& itemHref, const std::string& destPath) const {
   HalFile out;
   if (!Storage.openFileForWrite("EBP", destPath, out)) {
+    COVER_DIAG("extract open FAIL %.40s", destPath.c_str());
     return false;
   }
   // Large images dominate lazy extraction. Match the section streamer size to
@@ -1194,6 +1205,7 @@ bool Epub::extractItemToFile(const std::string& itemHref, const std::string& des
   out.flush();
   out.close();
   if (!ok) {
+    COVER_DIAG("extract read FAIL %.40s", itemHref.c_str());
     Storage.remove(destPath.c_str());
   }
   return ok;
