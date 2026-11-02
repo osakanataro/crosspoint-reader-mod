@@ -15,8 +15,10 @@ class FontCacheManager;
 class SdCardFont;
 class TtfEpdFont;
 
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -66,6 +68,22 @@ class GfxRenderer {
   // allocation inside the SdCardFont objects. Same pragmatic compromise as
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
+  // Memo for getCjkCellWidth(). Dropped whenever the font behind an id goes away.
+  // A fixed table, not a map: the map's node was allocated the first time a book asked, which put
+  // it in the middle of a reading session's heap for good (heap-map, 2026-09-26).
+  struct CjkCellMemo {
+    int fontId;
+    int width;
+  };
+  static constexpr int CJK_CELL_MEMO_SIZE = 8;
+  mutable CjkCellMemo cjkCellWidths_[CJK_CELL_MEMO_SIZE] = {};
+  mutable int cjkCellWidthsNext_ = 0;
+  void forgetCjkCellWidth(int fontId) const {
+    std::replace_if(
+        std::begin(cjkCellWidths_), std::end(cjkCellWidths_),
+        [fontId](const CjkCellMemo& m) { return m.width != 0 && m.fontId == fontId; }, CjkCellMemo{});
+  }
+  void forgetCjkCellWidths() const { std::fill(std::begin(cjkCellWidths_), std::end(cjkCellWidths_), CjkCellMemo{}); }
   mutable std::map<int, uint16_t> sdCardFontScales_;  // fontId -> 8.8 fixed point scale (256=1.0x)
   // TTF (vector) fonts: rebuilt per page by ensureSdCardFontReady(). Mutable for
   // the same reason as sdCardFonts_ (const layout path triggers a rebuild).
@@ -94,6 +112,11 @@ class GfxRenderer {
   mutable int _stripY0 = 0;
   mutable int _stripRows = 0;
   mutable bool _stripActive = false;
+  // True while a section build is measuring text it will not draw. getTextAdvanceX then answers
+  // an uncached codepoint from the glyph record on the card instead of loading its bitmap; at
+  // render time the bitmap is wanted next anyway, so the load stays the cheaper path there.
+  // Set through MeasureOnlyScope.
+  mutable bool measureOnly_ = false;
   mutable int clipLeft_ = 0;
   mutable int clipTop_ = 0;
   mutable int clipRight_ = 32767;
@@ -154,6 +177,7 @@ class GfxRenderer {
     fontMap.erase(fontId);
     sdCardFonts_.erase(fontId);
     sdCardFontScales_.erase(fontId);
+    forgetCjkCellWidth(fontId);
   }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
@@ -179,6 +203,7 @@ class GfxRenderer {
   void clearSdCardFonts() {
     sdCardFonts_.clear();
     sdCardFontScales_.clear();
+    forgetCjkCellWidths();
   }
   void registerSdCardFontScale(int fontId, uint16_t scale) { sdCardFontScales_[fontId] = scale; }
   void clearSdCardFontScales() { sdCardFontScales_.clear(); }
@@ -188,6 +213,19 @@ class GfxRenderer {
   }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
+
+  // INPUT_DIAG totals across the registered SD-card fonts (see the SdCardFont counters).
+  // On-demand loads and arena rebuilds are the pair that tells "the prewarm is not landing" from
+  // "a caller warms one string at a time"; a warm that covers the text leaves both at zero.
+  uint32_t glyphOnDemandLoads() const;
+  uint32_t glyphMiniRebuilds() const;
+  uint32_t glyphMiniRebuildMs() const;
+  uint32_t glyphPrewarmEntryFails() const;
+  void sdAdvanceStats(uint32_t& calls, uint32_t& ms, uint32_t& tableMax, uint32_t& tableLimit,
+                      uint32_t& fullSkips) const;
+  void sdAdvanceOnlyStats(uint32_t& calls, uint32_t& sdReads, uint32_t& ms) const;
+  // Close the font files readAdvanceOnly held open for the measuring pass that just ended.
+  void closeSdMeasureFiles() const;
   // TTF (vector) fonts rendered via TtfEpdFont/FreeInkFont. Registered like an
   // ordinary EpdFontFamily (insertFont), plus tracked here so ensureSdCardFontReady()
   // rebuilds their per-page glyph set on demand — the eager analogue of the SD
@@ -209,6 +247,17 @@ class GfxRenderer {
     if (fontMap.count(fontId) != 0) return true;
     return fontVariantProvider_.load && fontVariantProvider_.load(fontVariantProvider_.ctx, fontId) &&
            fontMap.count(fontId) != 0;
+  }
+  // Fallback id registered for primaryFontId, or 0 when none.
+  int getFallbackFont(const int primaryFontId) const {
+    const auto it = fallbackFontMap_.find(primaryFontId);
+    return it != fallbackFontMap_.end() ? it->second : 0;
+  }
+  // Drop the fallbacks that route to fallbackFontId, before its font is freed.
+  void removeFallbacksTo(const int fallbackFontId) {
+    for (auto it = fallbackFontMap_.begin(); it != fallbackFontMap_.end();) {
+      it = (it->second == fallbackFontId) ? fallbackFontMap_.erase(it) : std::next(it);
+    }
   }
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
@@ -368,7 +417,21 @@ class GfxRenderer {
                       BidiUtils::BidiBaseDir baseDir = BidiUtils::BidiBaseDir::AUTO,
                       TextMeasureMode mode = TextMeasureMode::Layout) const;
   int getFontAscenderSize(int fontId) const;
+  /// Negative, matching the font data. ascender - descender is the line box height.
+  int getFontDescenderSize(int fontId) const;
   int getLineHeight(int fontId) const;
+  // The full-width (em) cell advance of fontId, measured from the font itself.
+  //
+  // Vertical writing sizes its column pitch in ems, not in the font's own line height: JLREQ
+  // 2.3 defines the line pitch as a ratio of the character size, while getLineHeight() returns
+  // whatever the .cpfont baked in from the source font's hhea metrics -- 25 px for
+  // BIZUDGothic_12 but 36 px for NotoSansJP_12, both at the same 12 pt (measured 2026-09-10).
+  // Taking the line height as the column width made the same book lay out 11 columns in one
+  // font and 7 in the other with every setting identical.
+  //
+  // Memoized per font: resolving it costs one advance lookup, and on an SD font whose advance
+  // table has not seen the probe character yet, a single glyph read.
+  int getCjkCellWidth(int fontId) const;
   // Explicit line spacing scales font size; the one-argument form returns font metrics.
   int getLineHeight(int fontId, float compression) const;
   std::string truncatedText(int fontId, const char* text, int maxWidth,
@@ -382,6 +445,18 @@ class GfxRenderer {
   // Helper for drawing rotated text (90 degrees clockwise, for side buttons)
   void drawTextRotated90CW(int fontId, int x, int y, const char* text, bool black = true,
                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  // Latin runs inside vertical Japanese text: glyphs turn clockwise and the run
+  // advances downward from (x, y), which is the top-left of the column cell.
+  // `cellWidth` is the full-width character cell; the rotated line box is centred on it.
+  //
+  // `centreInk` centres the glyph's own ink on the cell instead of the font's line box.
+  // For a run of letters the line box is the right thing -- it is what keeps successive
+  // runs on one axis whatever letters they hold. For a single turned punctuation mark it
+  // is not: the box includes the descender depth the mark does not use, so 「 and 」 come
+  // out a few pixels off the axis of the kanji above and below them. Single marks only:
+  // centring each glyph of a run separately would make the run wander.
+  void drawTextSideways(int fontId, int x, int y, const char* text, int cellWidth, bool black = true,
+                        EpdFontFamily::Style style = EpdFontFamily::REGULAR, bool centreInk = false) const;
   int getTextHeight(int fontId) const;
 
   // Grayscale functions
@@ -418,7 +493,9 @@ class GfxRenderer {
   // Paper Mono: the base activation is deferred so base + gray planes go out
   // as one waveform. Route the base through displayGrayscaleBase() when true.
   bool combinesGrayscaleBase() const;
-  bool storeBwBuffer();  // Returns true if buffer was stored successfully
+  // Returns true if the buffer was stored. `headroom` is free heap that must remain after the copy:
+  // an optional snapshot (the reader toolbar) asks for more so it never starves the next render.
+  bool storeBwBuffer(size_t headroom = 0);
   // Restore and free the stored buffer. resyncPanelBaseline rewrites the
   // controller's differential baseline to the restored frame — correct after
   // a grayscale render (the glass matches the stored BW plane), WRONG when
@@ -447,6 +524,21 @@ class GfxRenderer {
   // Bumped by every loan. A loan returns the buffer white, so a caller that ran code which may lend
   // (e.g. a background chapter-build step) compares this to know the page it drew is gone.
   uint32_t frameBufferLoanCount() const { return frameBufferLoans; }
+
+  class MeasureOnlyScope {
+   public:
+    explicit MeasureOnlyScope(const GfxRenderer& r) : r_(r), prev_(r.measureOnly_) { r_.measureOnly_ = true; }
+    ~MeasureOnlyScope() {
+      r_.measureOnly_ = prev_;
+      if (!prev_) r_.closeSdMeasureFiles();
+    }
+    MeasureOnlyScope(const MeasureOnlyScope&) = delete;
+    MeasureOnlyScope& operator=(const MeasureOnlyScope&) = delete;
+
+   private:
+    const GfxRenderer& r_;
+    bool prev_;
+  };
 
   // RAII form of the loan above, for blocking build regions with early-return
   // error paths: restores on scope exit (or explicitly via end()). Display the

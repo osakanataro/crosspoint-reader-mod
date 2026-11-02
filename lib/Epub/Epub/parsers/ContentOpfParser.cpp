@@ -109,7 +109,74 @@ std::optional<float> parseFiniteFloat(const std::string& value) {
   if (end == value.c_str() || *end != '\0' || !std::isfinite(parsed)) return std::nullopt;
   return parsed;
 }
+// An EPUB 2 opf:file-as attribute is a reading like any other: same clamp.
+void assignFileAsAttribute(std::string& out, const char* value) {
+  out.clear();
+  bool spacePending = false;
+  appendMetadataText(out, value, static_cast<int>(strnlen(value, MAX_METADATA_TEXT + 1)), spacePending);
+}
+
+// Ids tie a file-as reading to the element it refines and are matched exactly,
+// so an overlong one is dropped (its reading is lost) rather than truncated,
+// which could make two ids collide. Real ids are short ("creator01", a UUID).
+constexpr size_t MAX_METADATA_ID = 64;
+
+const char* boundedId(const char* value) {
+  if (value == nullptr) return nullptr;
+  if (strnlen(value, MAX_METADATA_ID + 1) > MAX_METADATA_ID) {
+    LOG_DBG("COF", "Metadata id exceeds %u bytes; ignoring it", static_cast<unsigned>(MAX_METADATA_ID));
+    return nullptr;
+  }
+  return value;
+}
 }  // namespace
+
+// Attribute lookup by local name: expat is run without namespace processing,
+// so an EPUB 2 `opf:file-as` arrives with its prefix attached.
+const char* ContentOpfParser::attributeValue(const XML_Char** atts, const char* localName) {
+  for (int i = 0; atts[i]; i += 2) {
+    if (xmlLocalNameEquals(atts[i], localName)) return atts[i + 1];
+  }
+  return nullptr;
+}
+
+void ContentOpfParser::resolveFileAs(const std::string& id, const std::string& text) {
+  if (id.empty() || text.empty()) return;
+  if (id == titleId) {
+    if (titleFileAs.empty()) titleFileAs = text;
+    return;
+  }
+  for (auto& creator : creators) {
+    if (creator.id == id) {
+      if (creator.fileAs.empty()) creator.fileAs = text;
+      return;
+    }
+  }
+  // Not seen yet: the refining meta may precede the element it refines.
+  if (pendingFileAs.size() < MAX_CREATORS + 1) pendingFileAs.push_back({id, std::string(), text});
+}
+
+void ContentOpfParser::finishMetadata() {
+  // Resolve from a moved-out copy: resolveFileAs() re-queues an id that is
+  // still unknown, which would otherwise grow the vector being iterated. An id
+  // that never appeared refines nothing, so the re-queued leftovers are dropped.
+  const std::vector<Creator> pending = std::move(pendingFileAs);
+  pendingFileAs.clear();
+  for (const auto& entry : pending) resolveFileAs(entry.id, entry.fileAs);
+  pendingFileAs.clear();
+
+  // One reading per creator, in `author` order. Without one for the first
+  // creator the whole thing is useless as a sort form; a later creator without
+  // one contributes its display name so the list still mirrors `author`.
+  authorFileAs.clear();
+  if (creators.empty() || creators.front().fileAs.empty()) return;
+  for (const auto& creator : creators) {
+    const std::string& part = creator.fileAs.empty() ? creator.name : creator.fileAs;
+    if (part.empty()) continue;
+    if (!authorFileAs.empty()) authorFileAs.append(", ");
+    authorFileAs.append(part);
+  }
+}
 
 bool ContentOpfParser::setup() {
   parser = XML_ParserCreate(nullptr);
@@ -185,6 +252,9 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
   }
   if (self->metadataOnly && (xmlLocalNameEquals(name, "manifest") || xmlLocalNameEquals(name, "spine") ||
                              xmlLocalNameEquals(name, "guide"))) {
+    // Reached without </metadata> only when the package has no metadata
+    // element; finishMetadata() is then a no-op.
+    self->finishMetadata();
     self->metadataComplete = true;
     return;
   }
@@ -204,6 +274,8 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     if (self->title.empty()) {
       self->state = IN_BOOK_TITLE;
       self->metadataSpacePending = false;
+      if (const char* id = boundedId(attributeValue(atts, "id"))) self->titleId = id;
+      if (const char* fileAs = attributeValue(atts, "file-as")) assignFileAsAttribute(self->titleFileAs, fileAs);
     }
     return;
   }
@@ -212,6 +284,14 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     self->state = IN_BOOK_AUTHOR;
     self->metadataSpacePending = false;
     self->authorSeparatorPending = !self->author.empty();
+    self->creatorStart = self->author.size();
+    self->creatorTracked = self->creators.size() < MAX_CREATORS;
+    if (self->creatorTracked) {
+      Creator creator;
+      if (const char* id = boundedId(attributeValue(atts, "id"))) creator.id = id;
+      if (const char* fileAs = attributeValue(atts, "file-as")) assignFileAsAttribute(creator.fileAs, fileAs);
+      self->creators.push_back(std::move(creator));
+    }
     return;
   }
 
@@ -242,6 +322,13 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
   if (self->state == IN_PACKAGE && xmlLocalNameEquals(name, "spine")) {
     self->state = IN_SPINE;
+    // page-progression-direction="rtl" marks a right-to-left / vertical book (tategaki auto-detect).
+    for (int i = 0; atts[i]; i += 2) {
+      if (strcmp(atts[i], "page-progression-direction") == 0) {
+        self->pageProgressionRtl = (strcmp(atts[i + 1], "rtl") == 0);
+        break;
+      }
+    }
     if (self->cache && !Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
@@ -302,6 +389,13 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
     const std::string property = lowerAscii(self->metaProperty);
     if (property == "belongs-to-collection" || property == "collection-type" || property == "group-position") {
       self->state = IN_META_TEXT;
+      self->metadataSpacePending = false;
+    }
+    // EPUB 3 sort form: <meta refines="#title" property="file-as">reading</meta>
+    if (property == "file-as" && !self->metaRefines.empty() && boundedId(self->metaRefines.c_str()) != nullptr) {
+      self->state = IN_FILE_AS;
+      self->fileAsTarget = self->metaRefines;
+      self->fileAsText.clear();
       self->metadataSpacePending = false;
     }
     return;
@@ -403,14 +497,19 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
                                          return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
                                        });
 
-            // Check for match (may need to check a few due to hash collisions)
+            // Check for match (may need to check a few due to hash collisions).
+            // Each candidate re-seeks to its own it->fileOffset, so a
+            // readString() failure (corrupt length -- see Serialization.h)
+            // only desyncs this one candidate's read, not the rest of the
+            // chain -- treat it as a non-match and keep checking, same as
+            // the pre-existing "itemId != idref" case.
             while (it != self->itemIndex.end() && it->idHash == targetHash) {
               self->tempItemStore.seek(it->fileOffset);
               std::string itemId;
-              serialization::readString(self->tempItemStore, itemId);
-              if (itemId == idref) {
-                serialization::readString(self->tempItemStore, href);
-                found = true;
+              if (serialization::readString(self->tempItemStore, itemId) && itemId == idref) {
+                if (serialization::readString(self->tempItemStore, href)) {
+                  found = true;
+                }
                 break;
               }
               ++it;
@@ -421,8 +520,11 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
             self->tempItemStore.seek(0);
             std::string itemId;
             while (self->tempItemStore.available()) {
-              serialization::readString(self->tempItemStore, itemId);
-              serialization::readString(self->tempItemStore, href);
+              if (!serialization::readString(self->tempItemStore, itemId) ||
+                  !serialization::readString(self->tempItemStore, href)) {
+                LOG_ERR("OPF", "Corrupt tempItemStore entry, aborting manifest scan");
+                break;
+              }
               if (itemId == idref) {
                 found = true;
                 break;
@@ -497,6 +599,11 @@ void XMLCALL ContentOpfParser::characterData(void* userData, const XML_Char* s, 
     appendMetadataText(self->metaText, s, len, self->metadataSpacePending);
     return;
   }
+
+  if (self->state == IN_FILE_AS) {
+    appendMetadataText(self->fileAsText, s, len, self->metadataSpacePending);
+    return;
+  }
 }
 
 void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) {
@@ -532,6 +639,15 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
 
   if (self->state == IN_BOOK_AUTHOR && xmlLocalNameEquals(name, "creator")) {
     self->state = IN_METADATA;
+    if (self->creatorTracked) {
+      // This creator's own text: what was appended since the element opened,
+      // less the ", " separator that the first character after a previous
+      // creator inserts.
+      size_t start = self->creatorStart;
+      if (start > 0 && self->author.size() > start && !self->authorSeparatorPending) start += 2;
+      Creator& creator = self->creators.back();
+      if (creator.name.empty() && self->author.size() > start) creator.name = self->author.substr(start);
+    }
     return;
   }
 
@@ -596,6 +712,14 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
     return;
   }
 
+  if (self->state == IN_FILE_AS && xmlLocalNameEquals(name, "meta")) {
+    self->state = IN_METADATA;
+    self->resolveFileAs(self->fileAsTarget, self->fileAsText);
+    self->fileAsTarget.clear();
+    self->fileAsText.clear();
+    return;
+  }
+
   if (self->state == IN_METADATA && xmlLocalNameEquals(name, "metadata")) {
     if (!self->calibreSeries.empty()) {
       self->series = self->calibreSeries;
@@ -609,6 +733,7 @@ void XMLCALL ContentOpfParser::endElement(void* userData, const XML_Char* name) 
       }
     }
     self->state = IN_PACKAGE;
+    self->finishMetadata();
     self->metadataComplete = true;
     return;
   }

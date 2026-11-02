@@ -1,5 +1,6 @@
 #include "JpegToFramebufferConverter.h"
 
+#include <BuildScratch.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -11,6 +12,7 @@
 #include <cstdlib>
 #include <memory>
 #include <new>
+#include <optional>
 
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
@@ -49,6 +51,7 @@ struct JpegContext {
 
   PixelCache cache;
   bool caching{false};
+  bool drawToFb{true};  // false in cacheOnly mode: pixels go to the cache stream alone
 
   uint32_t lastYieldMs{0};  // throttle state for yieldDuringDecode()
 };
@@ -215,7 +218,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (ctx->drawToFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
     }
@@ -274,7 +277,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (ctx->drawToFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
 
@@ -297,7 +300,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (ctx->drawToFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
 
@@ -323,7 +326,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
           dithered = gray / 85;
           if (dithered > 3) dithered = 3;
         }
-        pw.writePixel(outX, dithered);
+        if (ctx->drawToFb) pw.writePixel(outX, dithered);
         if (caching) cw.writePixel(outX, dithered);
       }
     }
@@ -356,7 +359,7 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
         dithered = gray / 85;
         if (dithered > 3) dithered = 3;
       }
-      pw.writePixel(outX, dithered);
+      if (ctx->drawToFb) pw.writePixel(outX, dithered);
       if (caching) cw.writePixel(outX, dithered);
     }
   }
@@ -405,17 +408,40 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   cacheWritten = false;
   LOG_DBG("JPG", "Decoding JPEG: %s", imagePath.c_str());
 
+  // The decoder object (~18 KB on the C3) must be one block, and a reader session fragments the
+  // heap below that. A cache-only decode draws nothing, so when the largest block or the total is
+  // short it borrows the framebuffer bytes for the object instead. Declared before the decoder so
+  // the loan outlives it.
+  std::optional<GfxRenderer::FrameBufferLoan> decoderLoan;
+  uint8_t* decoderScratch = nullptr;
+  if (config.cacheOnly &&
+      (ESP.getMaxAllocHeap() < sizeof(JPEGDEC) + 1024 || ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_JPEG)) {
+    decoderLoan.emplace(renderer);
+    decoderScratch = buildscratch::claim(sizeof(JPEGDEC));
+  }
+
   size_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
+  const size_t minFreeHeap =
+      decoderScratch ? MIN_FREE_HEAP_FOR_JPEG - JPEG_DECODER_APPROX_SIZE : MIN_FREE_HEAP_FOR_JPEG;
+  if (freeHeap < minFreeHeap) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, minFreeHeap);
+    if (decoderScratch) buildscratch::release(decoderScratch);
     return false;
   }
 
-  std::unique_ptr<JPEGDEC> jpeg(new (std::nothrow) JPEGDEC());
+  JPEGDEC* jpeg = decoderScratch ? new (decoderScratch) JPEGDEC() : new (std::nothrow) JPEGDEC();
   if (!jpeg) {
     LOG_ERR("JPG", "Failed to allocate JPEG decoder");
     return false;
   }
+  const ScopedCleanup freeDecoder{[jpeg, decoderScratch]() {
+    if (decoderScratch) {
+      jpeg->~JPEGDEC();
+      buildscratch::release(decoderScratch);
+    } else {
+      delete jpeg;
+    }
+  }};
 
   JpegContext ctx;
   ctx.renderer = &renderer;
@@ -424,7 +450,7 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   ctx.screenHeight = renderer.getScreenHeight();
 
   int rc = jpeg->open(imagePath.c_str(), jpegOpen, jpegClose, jpegRead, jpegSeek, jpegDrawCallback);
-  const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
+  const ScopedCleanup cleanup{[jpeg]() { jpeg->close(); }};
   if (rc != 1) {
     LOG_ERR("JPG", "Failed to open JPEG (err=%d): %s", jpeg->getLastError(), imagePath.c_str());
     return false;
@@ -508,12 +534,19 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   // tallest single decode block: a JPEGDEC MCU cell is at most 16 scaled-source
   // rows tall, which our fine scale maps to this many output rows.
   ctx.caching = !config.cachePath.empty();
+  ctx.drawToFb = !config.cacheOnly;
   if (ctx.caching) {
     const int maxBlockDstRows = (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
     if (!ctx.cache.begin(config.cachePath, destWidth, destHeight, config.x, config.y, maxBlockDstRows)) {
       LOG_ERR("JPG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
     }
+  }
+
+  if (config.cacheOnly && !ctx.caching) {
+    // The cache is the sole output in this mode; decoding without it would only spend seconds.
+    LOG_ERR("JPG", "Cache-only decode with no cache stream, aborting");
+    return false;
   }
 
   unsigned long decodeStart = millis();

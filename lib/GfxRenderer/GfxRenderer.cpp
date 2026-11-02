@@ -53,6 +53,79 @@ uint16_t getSdCardSpaceAdvance(SdCardFont& font, const EpdFontFamily::Style styl
 }
 }  // namespace
 
+uint32_t GfxRenderer::glyphOnDemandLoads() const {
+  uint32_t loads = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) loads += font->overflowLoads();
+  }
+  return loads;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuilds() const {
+  uint32_t rebuilds = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) rebuilds += font->miniRebuilds();
+  }
+  return rebuilds;
+}
+
+uint32_t GfxRenderer::glyphMiniRebuildMs() const {
+  uint32_t ms = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) ms += font->miniRebuildMs();
+  }
+  return ms;
+}
+
+uint32_t GfxRenderer::glyphPrewarmEntryFails() const {
+  uint32_t fails = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) fails += font->prewarmEntryFails();
+  }
+  return fails;
+}
+
+void GfxRenderer::sdAdvanceStats(uint32_t& calls, uint32_t& ms, uint32_t& tableMax, uint32_t& tableLimit,
+                                 uint32_t& fullSkips) const {
+  calls = 0;
+  ms = 0;
+  tableMax = 0;
+  fullSkips = 0;
+  tableLimit = SdCardFont::advanceTableLimit();
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font == nullptr) continue;
+    calls += font->advanceFetchCalls();
+    ms += font->advanceFetchMs();
+    fullSkips += font->advanceFullSkips();
+    if (font->advanceTableMax() > tableMax) tableMax = font->advanceTableMax();
+  }
+}
+
+void GfxRenderer::closeSdMeasureFiles() const {
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font != nullptr) font->closeMeasureFile();
+  }
+}
+
+void GfxRenderer::sdAdvanceOnlyStats(uint32_t& calls, uint32_t& sdReads, uint32_t& ms) const {
+  calls = 0;
+  sdReads = 0;
+  ms = 0;
+  for (const auto& [fontId, font] : sdCardFonts_) {
+    (void)fontId;
+    if (font == nullptr) continue;
+    calls += font->advanceOnlyCalls();
+    sdReads += font->advanceOnlySdReads();
+    ms += font->advanceOnlyMs();
+  }
+}
+
 namespace {
 const char* resolveVisualText(const char* text, std::string& visualBuffer, BidiUtils::BidiBaseDir baseDir);
 
@@ -454,7 +527,13 @@ static AlignedMemRect screenRectToAlignedMemRect(GfxRenderer::Orientation orient
   return out;
 }
 
-enum class TextRotation { None, Rotated90CW };
+// None          - horizontal text; screen deltas are (u, v) -> (u, v).
+// Rotated90CW   - whole-line rotation for landscape furniture: glyphs turn so
+//                 their tops face left and the run advances upward.
+// Sideways90CW  - Latin runs inside vertical Japanese text: glyphs turn so their
+//                 tops face right and the run advances downward, i.e. the reader
+//                 tilts their head right. Screen deltas are (u, v) -> (-v, u).
+enum class TextRotation { None, Rotated90CW, Sideways90CW };
 
 // Shared glyph rendering logic for normal and rotated text.
 // Coordinate mapping and cursor advance direction are selected at compile time via the template parameter.
@@ -466,6 +545,11 @@ enum class TextRotation { None, Rotated90CW };
 //
 // drawText() scales the advance width by the same factor so layout reserves exactly
 // the right horizontal space for the scaled glyph.
+//
+// Rotation is selected the same way as in renderCharImpl, and on the same mapping. It
+// applies to the destination pixels, which are already in scaled coordinates, so the
+// glyph's own bearings are the only thing that has to be scaled before being turned.
+template <TextRotation rotation = TextRotation::None>
 static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                              const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                              const bool pixelState, const EpdFontFamily::Style style, const int scaleNum,
@@ -491,8 +575,15 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   const int dstH = (srcH * scaleNum + scaleDen - 1) / scaleDen;
   // Scale the glyph bearing by the same factor so the scaled glyph sits at the correct
   // pixel offset from the (already-shifted) cursor position.
-  const int baseX = cursorX + glyph->left * scaleNum / scaleDen;
-  const int baseY = cursorY - glyph->top * scaleNum / scaleDen;
+  int baseX, baseY;
+  if constexpr (rotation == TextRotation::Sideways90CW) {
+    // cursorX is the rotated baseline, cursorY the run's cursor down the column.
+    baseX = cursorX + glyph->top * scaleNum / scaleDen;   // screenX = baseX - dstY
+    baseY = cursorY + glyph->left * scaleNum / scaleDen;  // screenY = baseY + dstX
+  } else {
+    baseX = cursorX + glyph->left * scaleNum / scaleDen;
+    baseY = cursorY - glyph->top * scaleNum / scaleDen;
+  }
   const bool halving = scaleNum * 2 == scaleDen;
   const bool is2Bit = fontData->is2Bit;
 
@@ -521,7 +612,12 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
       }
       const bool ink = halving ? (is2Bit ? (maxRaw >= 2 || coverage >= 2) : maxRaw != 0)
                                : samples > 0 && coverage * 2 >= samples * 3;
-      if (ink) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+      if (!ink) continue;
+      if constexpr (rotation == TextRotation::Sideways90CW) {
+        renderer.drawPixel(baseX - dstY, baseY + dstX, pixelState);
+      } else {
+        renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+      }
     }
   }
 }
@@ -554,6 +650,12 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     if (!renderer.glyphIntersectsStrip(ob, ib - (width - 1), ob + height - 1, ib)) {
       return;
     }
+  } else if constexpr (rotation == TextRotation::Sideways90CW) {
+    const int ob = cursorX + top;
+    const int ib = cursorY + left;
+    if (!renderer.glyphIntersectsStrip(ob - (height - 1), ib, ob, ib + width - 1)) {
+      return;
+    }
   } else {
     const int gx0 = cursorX + left;
     const int gy0 = cursorY - top;
@@ -579,6 +681,9 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   glyphBitmap::Frame frame;
   if constexpr (rotation == TextRotation::Rotated90CW) {
     frame = {cursorX + fontData->ascender - top, cursorY - left, 0, -1, 1, 0};
+  } else if constexpr (rotation == TextRotation::Sideways90CW) {
+    // Glyph x runs down the column, glyph y leftward from the rotated baseline.
+    frame = {cursorX + top, cursorY + left, 0, 1, -1, 0};
   } else {
     frame = {cursorX + left, cursorY - top, 1, 0, 0, 1};
   }
@@ -2158,6 +2263,13 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
       const bool isSmallCap = smallCapCp != cp;
       cp = smallCapCp;
       int32_t advFP = sdIt->second->getAdvance(cp, styleIdx);
+      if (advFP == 0 && measureOnly_ && !syntheticGlyph::isSolid(cp)) {
+        // Layout only: not in the advance table (full, or not yet fetched), and nothing is
+        // about to draw this glyph, so read the advance alone rather than loading a bitmap
+        // into the overflow ring to answer a question about width. A render draws the glyph
+        // next, so there the load is the single SD trip and this path is skipped.
+        advFP = sdIt->second->readAdvanceOnly(cp, styleIdx);
+      }
       if (advFP == 0 || (syntheticGlyph::isSolid(cp) && !font.hasCodepoint(cp, style))) {
         EpdGlyph solidFallback;
         const EpdGlyph* glyph = font.getGlyphMetrics(cp, solidFallback, style);
@@ -2296,6 +2408,16 @@ int GfxRenderer::getFontAscenderSize(const int fontId) const {
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
 }
 
+int GfxRenderer::getFontDescenderSize(const int fontId) const {
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", fontId);
+    return 0;
+  }
+
+  return fontIt->second.getData(EpdFontFamily::REGULAR)->descender;
+}
+
 int GfxRenderer::getLineHeight(const int fontId) const {
   const auto fontIt = fontMap.find(fontId);
   if (fontIt == fontMap.end()) {
@@ -2304,6 +2426,31 @@ int GfxRenderer::getLineHeight(const int fontId) const {
   }
 
   return fontIt->second.getData(EpdFontFamily::REGULAR)->advanceY;
+}
+
+int GfxRenderer::getCjkCellWidth(const int fontId) const {
+  for (const auto& m : cjkCellWidths_) {
+    if (m.width != 0 && m.fontId == fontId) return m.width;
+  }
+
+  // U+3000 (ideographic space) is the cheapest full-width probe and every CJK font carries it.
+  // The kana and the kanji cover a subset that dropped it; a font with none of them is not a
+  // CJK font at all and can only fall back to its own line height.
+  static const char* const probes[] = {"\xE3\x80\x80", "\xE3\x81\x82", "\xE3\x82\xA2", "\xE5\x9B\xBD"};
+  int width = 0;
+  for (const char* probe : probes) {
+    width = getTextAdvanceX(fontId, probe, EpdFontFamily::REGULAR);
+    if (width > 0) break;
+  }
+  // Not memoized when no probe resolved: the font may simply not be ready yet (an SD font whose
+  // advance table is still empty and whose glyph read failed), and caching the fallback would
+  // pin the wrong cell width for the rest of the session.
+  if (width <= 0) return getLineHeight(fontId);
+
+  cjkCellWidths_[cjkCellWidthsNext_] = CjkCellMemo{fontId, width};
+  cjkCellWidthsNext_ = (cjkCellWidthsNext_ + 1) % CJK_CELL_MEMO_SIZE;
+  LOG_DBG("GFX", "CJK cell for font %d: %d px (line height %d)", fontId, width, getLineHeight(fontId));
+  return width;
 }
 
 int GfxRenderer::getLineHeight(const int fontId, const float compression) const {
@@ -2322,6 +2469,90 @@ int GfxRenderer::getTextHeight(const int fontId) const {
     return 0;
   }
   return fontIt->second.getData(EpdFontFamily::REGULAR)->ascender;
+}
+
+void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, const char* text, const int cellWidth,
+                                   const bool black, const EpdFontFamily::Style style, const bool centreInk) const {
+  if (text == nullptr || *text == '\0') {
+    return;
+  }
+
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  const auto fontIt = fontMap.find(resolvedFontId);
+  if (fontIt == fontMap.end()) {
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
+    return;
+  }
+
+  // Scan pass: the glyphs still have to reach the SD font prewarm cache, or every
+  // sideways run pays per-glyph SD reads while drawing.
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
+    fontCacheManager_->recordText(text, resolvedFontId, style);
+    return;
+  }
+
+  const auto& font = fontIt->second;
+  const EpdFontData* fontData = font.getData(style);
+  if (fontData == nullptr) {
+    return;
+  }
+
+  // Turning clockwise maps the line box's "up" onto screen-right, so the run occupies
+  // [baseline + descender, baseline + ascender] horizontally (descender is negative).
+  // Centre that span on the character cell, which is where the upright glyphs sit.
+  //
+  // A SUP/SUB run is drawn at half scale, so it is half as wide across the column as the
+  // font's own line box. Centring the full one would push it off the cell it belongs to --
+  // for ruby, into the body column beside it.
+  const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
+  int lineBoxCentre = (fontData->ascender + fontData->descender) / 2;
+  if (isSupSub) {
+    lineBoxCentre /= 2;
+  }
+  int baselineX = x + cellWidth / 2 - lineBoxCentre;
+
+  // A single turned mark is placed on its own ink instead (see the header). The turn maps
+  // the glyph's rise above the baseline onto screen-right, so the ink runs from
+  // baselineX + top back by its height; putting the middle of that span on the middle of
+  // the cell is what lines the mark up with the upright glyphs around it.
+  if (centreInk) {
+    const auto* probe = reinterpret_cast<const uint8_t*>(text);
+    const uint32_t firstCp = utf8NextCodepoint(&probe);
+    if (const EpdGlyph* g = font.getGlyph(firstCp, style)) {
+      const int top = isSupSub ? g->top / 2 : g->top;
+      const int height = isSupSub ? (g->height + 1) / 2 : g->height;
+      baselineX = x + cellWidth / 2 - top + (height - 1) / 2;
+    }
+  }
+
+  int cursorY = y;
+  int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
+  uint32_t prevCp = 0;
+  uint32_t cp;
+  while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&text)))) {
+    cp = font.applyLigatures(cp, text, style);
+
+    // Same differential-rounding rule as drawText, applied along the column.
+    if (prevCp != 0) {
+      const auto kernFP = font.getKerning(prevCp, cp, style);
+      cursorY += fp4::toPixel(prevAdvanceFP + kernFP);
+    }
+
+    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    prevAdvanceFP = glyph ? glyph->advanceX : 0;
+    if (isSupSub) {
+      // Halved to match the scaled glyph, exactly as drawText and getTextAdvanceX do, so
+      // a measured run and a drawn one stay the same length.
+      prevAdvanceFP = (prevAdvanceFP + 1) / 2;
+    }
+
+    if (isSupSub) {
+      renderCharScaled<TextRotation::Sideways90CW>(*this, renderMode, font, cp, baselineX, cursorY, black, style, 1, 2);
+    } else {
+      renderCharImpl<TextRotation::Sideways90CW>(*this, renderMode, font, cp, baselineX, cursorY, black, style);
+    }
+    prevCp = cp;
+  }
 }
 
 void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y, const char* text, const bool black,
@@ -2482,16 +2713,20 @@ void GfxRenderer::freeBwBufferChunks() {
  * Uses chunked allocation to avoid needing 48KB of contiguous memory.
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
-bool GfxRenderer::storeBwBuffer() {
+bool GfxRenderer::storeBwBuffer(const size_t headroom) {
+  // A copy still held is replaced either way. Free it before the heap check: it is counted in
+  // the shortfall, and a refusal that kept it would orphan it, since every caller records a
+  // false return as "nothing stored".
+  freeBwBufferChunks();
+  // Refuse up front when the copy cannot fit: every caller has a fallback (re-render, skip the
+  // grays), while an attempt that fails at chunk N leaves N freed 8KB holes behind.
+  if (ESP.getFreeHeap() < frameBufferSize + headroom || ESP.getMaxAllocHeap() < BW_BUFFER_CHUNK_SIZE) {
+    LOG_DBG("GFX", "Not storing BW buffer: free=%u maxAlloc=%u headroom=%u", ESP.getFreeHeap(), ESP.getMaxAllocHeap(),
+            static_cast<unsigned>(headroom));
+    return false;
+  }
   // Allocate and copy each chunk
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
-    // Check if any chunks are already allocated
-    if (bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
-      free(bwBufferChunks[i]);
-      bwBufferChunks[i] = nullptr;
-    }
-
     const size_t offset = i * BW_BUFFER_CHUNK_SIZE;
     const size_t chunkSize = std::min(BW_BUFFER_CHUNK_SIZE, static_cast<size_t>(frameBufferSize - offset));
     bwBufferChunks[i] = static_cast<uint8_t*>(malloc(chunkSize));

@@ -34,6 +34,14 @@ class HalClock {
   // Returns false if RTC is not available.
   bool localTime(struct tm& out) const;
 
+  // Current date and time in the configured timezone, seconds included.
+  //
+  // Separate from localTime() because that one serves a 10 s cache, which is fine for an
+  // HH:MM label but not for the clock face: it schedules its next repaint from the seconds.
+  // Reads the RTC on every call -- the caller runs about once a minute.
+  // Returns false if the RTC is absent or reports its time unreliable.
+  bool getLocalDateTime(Rtc::DateTime& out) const;
+
   // Get current local hour (0-23) and minute (0-59).
   // Returns false if RTC is not available.
   bool getTime(uint8_t& hour, uint8_t& minute) const;

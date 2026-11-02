@@ -29,6 +29,10 @@ class I18n {
   // Returns a sorted string of unique characters
   static const char* getCharacterSet(Language lang);
 
+  // Non-ASCII letters (UTF-8, sorted) used by a language's strings: what a UI
+  // font must carry to show that language
+  static const char* getUiLetters(Language lang);
+
  private:
   I18n() : _language(Language::EN) {}
 

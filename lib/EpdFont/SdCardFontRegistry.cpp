@@ -486,6 +486,7 @@ bool SdCardFontRegistry::discover() {
   }
   shrinkToFit(families_);  // the list is read-only until the next scan
 
+  generation_.fetch_add(1, std::memory_order_release);
   LOG_DBG("SDREG", "Discovery complete: %d families", static_cast<int>(families_.size()));
   return !families_.empty();
 }

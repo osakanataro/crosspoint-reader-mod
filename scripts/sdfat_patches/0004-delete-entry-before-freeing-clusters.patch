@@ -1,0 +1,51 @@
+Subject: [PATCH] FatFile: mark a removed entry deleted before freeing its clusters
+
+Not from upstream SdFat or crosspoint-reader: written for this fork to go
+with 0003.
+
+remove() freed the cluster chain and then marked the directory entry
+deleted. With 0003, cacheSync() writes the FAT before the directory
+sector, and with a separate FAT cache a dirty FAT sector can also be
+evicted to the card while freeChain() walks a long chain. Either way the
+freed clusters can reach the card while the entry still names them; a
+power cut there leaves a live entry pointing at free clusters, and the
+next allocation can hand them to another file (cross-linked files).
+
+The entry is now marked deleted and written first, then the chain is
+freed and synced. A power cut in between leaves allocated but
+unreferenced clusters instead: lost clusters, which fsck reclaims.
+
+---
+--- a/src/FatLib/FatFileLFN.cpp
++++ b/src/FatLib/FatFileLFN.cpp
+@@ -517,11 +517,6 @@
+     DBG_FAIL_MACRO;
+     goto fail;
+   }
+-  // Free any clusters.
+-  if (m_firstCluster && !m_vol->freeChain(m_firstCluster)) {
+-    DBG_FAIL_MACRO;
+-    goto fail;
+-  }
+   // Cache directory entry.
+   dir = cacheDirEntry(FsCache::CACHE_FOR_WRITE);
+   if (!dir) {
+@@ -537,11 +532,17 @@
+   m_attributes = FILE_ATTR_CLOSED;
+   m_flags = 0;
+ 
+-  // Write entry to device.
++  // Write entry to device before freeing its clusters: a power cut in between
++  // leaves lost clusters, not a live entry pointing at free ones.
+   if (!m_vol->cacheSync()) {
+     DBG_FAIL_MACRO;
+     goto fail;
+   }
++  // Free any clusters.
++  if (m_firstCluster && (!m_vol->freeChain(m_firstCluster) || !m_vol->cacheSync())) {
++    DBG_FAIL_MACRO;
++    goto fail;
++  }
+   if (!isLFN()) {
+     // Done, no LFN entries.
+     return true;

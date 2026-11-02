@@ -75,6 +75,36 @@ enum class CssVerticalAlign : uint8_t { Baseline = 0, Super = 1, Sub = 2 };
 // list-style-type — only None and Disc (bullet) are relevant for rendering
 enum class CssListStyleType : uint8_t { Disc = 0, None = 1 };
 
+// text-emphasis-style (bouten / 圏点). The fill keyword and the shape keyword are
+// collapsed into one enum because only the resulting mark glyph matters here;
+// "none" resets a mark inherited from an ancestor. Parsed from text-emphasis and
+// text-emphasis-style, including the -epub-/-webkit- prefixed spellings that
+// Japanese EPUB templates still ship.
+enum class CssTextEmphasis : uint8_t {
+  None = 0,
+  FilledDot = 1,
+  OpenDot = 2,
+  FilledCircle = 3,
+  OpenCircle = 4,
+  FilledSesame = 5,
+  OpenSesame = 6,
+  FilledTriangle = 7,
+  OpenTriangle = 8,
+  FilledDoubleCircle = 9,
+  OpenDoubleCircle = 10,
+};
+
+// text-orientation and text-combine-upright, folded into one value: both decide how a run
+// sits in a vertical column, and a span carries at most one of them in practice (the EBPAJ
+// template's upright / sideways / tcy classes). Only the -webkit-/-epub- prefixed spellings
+// appear in the surveyed commercial books, so those are read as well as the bare name.
+enum class CssTextOrientation : uint8_t {
+  Mixed = 0,     // the default: CJK upright, Latin turned (also text-combine-upright: none)
+  Upright = 1,   // every character upright, one cell each
+  Sideways = 2,  // every character turned with the column
+  Combine = 3,   // text-combine-upright: all -- the whole run upright inside one cell
+};
+
 enum class CssBorderStyle : uint8_t { None = 0, Solid = 1, Double = 2, Dotted = 3, Dashed = 4 };
 
 // One box edge. Width is in CSS pixels; a side draws only when both width and style are set.
@@ -118,6 +148,10 @@ struct CssPropertyFlags {
   uint16_t floatLeft : 1;
   uint16_t initialLetter : 1;
   uint16_t whiteSpace : 1;
+  uint16_t textEmphasis : 1;
+  uint16_t textOrientation : 1;
+  uint16_t imageMaxHeight : 1;
+  uint16_t imageMaxWidth : 1;
 
   CssPropertyFlags()
       : textAlign(0),
@@ -150,21 +184,26 @@ struct CssPropertyFlags {
         shaded(0),
         floatLeft(0),
         initialLetter(0),
-        whiteSpace(0) {}
+        whiteSpace(0),
+        textEmphasis(0),
+        textOrientation(0),
+        imageMaxHeight(0),
+        imageMaxWidth(0) {}
 
   [[nodiscard]] bool anySet() const {
     return textAlign || fontStyle || fontWeight || textDecoration || textIndent || marginTop || marginBottom ||
            marginLeft || marginRight || paddingTop || paddingBottom || paddingLeft || paddingRight || imageHeight ||
            imageWidth || display || direction || verticalAlign || listStyleType || fontSize || smallCaps ||
            pageBreakBefore || pageBreakAfter || borderTop || borderRight || borderBottom || borderLeft || shaded ||
-           floatLeft || initialLetter || whiteSpace;
+           floatLeft || initialLetter || whiteSpace || textEmphasis || textOrientation || imageMaxHeight ||
+           imageMaxWidth;
   }
 };
 
-// Cache serializes defined flags as uint32_t with bit indices 0..30.
-static_assert(sizeof(CssPropertyFlags) <= sizeof(uint32_t),
-              "CssPropertyFlags exceeds 32 bits; update cache read/write in CssParser.cpp");
-static_assert(sizeof(CssPropertyFlags) * 8 >= 31,
+// Cache serializes defined flags as a uint32_t (bits 0..30) and one more byte (bits 0..3).
+static_assert(sizeof(CssPropertyFlags) <= sizeof(uint64_t),
+              "CssPropertyFlags exceeds 64 bits; update cache read/write in CssParser.cpp");
+static_assert(sizeof(CssPropertyFlags) * 8 >= 35,
               "CssPropertyFlags has fewer bits than properties; update bitfield widths");
 
 // Represents a collection of CSS style properties
@@ -203,6 +242,13 @@ struct CssStyle {
   uint8_t initialLetter = 0;  // initial-letter: lines a drop cap spans, 0 = normal
 
   bool preserveWhitespace = false;  // white-space: pre, pre-wrap or break-spaces
+
+  // Upper bounds for img. Unlike width/height these only ever shrink a picture: a source smaller
+  // than the bound keeps its own size. This is how commercial EPUBs size their illustrations.
+  CssLength imageMaxHeight;
+  CssLength imageMaxWidth;
+  CssTextEmphasis textEmphasis = CssTextEmphasis::None;            // text-emphasis (bouten marks beside the text)
+  CssTextOrientation textOrientation = CssTextOrientation::Mixed;  // text-orientation / text-combine-upright
 
   CssPropertyFlags defined;  // Tracks which properties were explicitly set
 
@@ -339,6 +385,22 @@ struct CssStyle {
       initialLetter = base.initialLetter;
       defined.initialLetter = 1;
     }
+    if (base.hasImageMaxHeight()) {
+      imageMaxHeight = base.imageMaxHeight;
+      defined.imageMaxHeight = 1;
+    }
+    if (base.hasImageMaxWidth()) {
+      imageMaxWidth = base.imageMaxWidth;
+      defined.imageMaxWidth = 1;
+    }
+    if (base.hasTextEmphasis()) {
+      textEmphasis = base.textEmphasis;
+      defined.textEmphasis = 1;
+    }
+    if (base.hasTextOrientation()) {
+      textOrientation = base.textOrientation;
+      defined.textOrientation = 1;
+    }
   }
 
   [[nodiscard]] bool hasTextAlign() const { return defined.textAlign; }
@@ -364,6 +426,10 @@ struct CssStyle {
   [[nodiscard]] bool hasSmallCaps() const { return defined.smallCaps; }
   [[nodiscard]] bool hasPageBreakBefore() const { return defined.pageBreakBefore; }
   [[nodiscard]] bool hasPageBreakAfter() const { return defined.pageBreakAfter; }
+  [[nodiscard]] bool hasTextEmphasis() const { return defined.textEmphasis; }
+  [[nodiscard]] bool hasImageMaxHeight() const { return defined.imageMaxHeight; }
+  [[nodiscard]] bool hasImageMaxWidth() const { return defined.imageMaxWidth; }
+  [[nodiscard]] bool hasTextOrientation() const { return defined.textOrientation; }
   [[nodiscard]] bool hasVisibleBorder() const {
     return borderTop.visible() || borderRight.visible() || borderBottom.visible() || borderLeft.visible();
   }
