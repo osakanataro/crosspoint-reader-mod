@@ -1,6 +1,6 @@
-# CodeRabbit settings for this fork. Daily work lands on vertical-1.6.5; about once a day a PR
-# from it into the default branch vertical-1.6.5review is reviewed here, then the default branch
-# is fast-forwarded to the reviewed head.
+# CodeRabbit settings for this fork. Daily work lands on vertical-2.0.0; a PR from it into the
+# default branch vertical-2.0.0review is reviewed here, then the default branch is fast-forwarded
+# to the reviewed head.
 language: ja-JP
 reviews:
   auto_review:
@@ -11,3 +11,5 @@ reviews:
     - "!README.md"
     - "!CHANGELOG-OST.md"
     - "!src/images/ClockDigits.h"
+    # Screenshot baselines and books for scripts/sim_regress.py.
+    - "!test/sim-regress/**"
