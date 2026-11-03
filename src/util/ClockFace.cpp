@@ -90,12 +90,12 @@ uint8_t buildTime(const Rtc::DateTime& now, const bool twelveHour, uint8_t* out)
 
 namespace ClockFace {
 
-void render(const GfxRenderer& renderer, const Rtc::DateTime* now, const HalDisplay::RefreshMode mode,
+void render(GfxRenderer& renderer, const Rtc::DateTime* now, const HalDisplay::RefreshMode mode,
             const bool twelveHour) {
   // Native panel orientation: rotateCoordinates is the identity here, so the
   // bitmaps land exactly as generated. Any turn the device needs is baked into
   // them by scripts/build_clock_digits.py --rotate.
-  const_cast<GfxRenderer&>(renderer).setOrientation(GfxRenderer::LandscapeCounterClockwise);
+  renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
 
   renderer.clearScreen();
 

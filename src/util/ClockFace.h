@@ -27,6 +27,6 @@ namespace ClockFace {
 // `twelveHour` mirrors the status bar's Clock Format setting: false keeps the
 // 24-hour "HH:MM", true switches to "H:MM" with an AM/PM marker beside it.
 // Passed as a value so this stays free of CrossPointSettings (see above).
-void render(const GfxRenderer& renderer, const Rtc::DateTime* now, HalDisplay::RefreshMode mode, bool twelveHour);
+void render(GfxRenderer& renderer, const Rtc::DateTime* now, HalDisplay::RefreshMode mode, bool twelveHour);
 
 }  // namespace ClockFace

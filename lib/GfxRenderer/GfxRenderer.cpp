@@ -667,6 +667,8 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
   if (glyph == &solidFallback) {
     if constexpr (rotation == TextRotation::Rotated90CW) {
       renderer.fillRect(cursorX + fontData->ascender - top, cursorY - left - width + 1, height, width, pixelState);
+    } else if constexpr (rotation == TextRotation::Sideways90CW) {
+      renderer.fillRect(cursorX + top - height + 1, cursorY + left, height, width, pixelState);
     } else {
       renderer.fillRect(cursorX + left, cursorY - top, width, height, pixelState);
     }
@@ -2433,10 +2435,11 @@ int GfxRenderer::getCjkCellWidth(const int fontId) const {
     if (m.width != 0 && m.fontId == fontId) return m.width;
   }
 
-  // U+3000 (ideographic space) is the cheapest full-width probe and every CJK font carries it.
-  // The kana and the kanji cover a subset that dropped it; a font with none of them is not a
-  // CJK font at all and can only fall back to its own line height.
-  static const char* const probes[] = {"\xE3\x80\x80", "\xE3\x81\x82", "\xE3\x82\xA2", "\xE5\x9B\xBD"};
+  // Kana and kanji first, the same reference ParsedText takes for the cell: an SD face has been
+  // seen answering U+3000 with an advance far short of the em. U+3000 stays as the last resort
+  // for a subset without them; a font with none of these is not a CJK font at all and can only
+  // fall back to its own line height.
+  static const char* const probes[] = {"\xE3\x81\x82", "\xE3\x82\xA2", "\xE5\x9B\xBD", "\xE3\x80\x80"};
   int width = 0;
   for (const char* probe : probes) {
     width = getTextAdvanceX(fontId, probe, EpdFontFamily::REGULAR);
@@ -2538,7 +2541,10 @@ void GfxRenderer::drawTextSideways(const int fontId, const int x, const int y, c
       cursorY += fp4::toPixel(prevAdvanceFP + kernFP);
     }
 
-    const EpdGlyph* glyph = font.getGlyph(cp, style);
+    // getGlyphMetrics, not getGlyph: a missing glyph drawn as a solid box advances by the
+    // box, as getTextAdvanceX measured it.
+    EpdGlyph solidFallback;
+    const EpdGlyph* glyph = font.getGlyphMetrics(cp, solidFallback, style);
     prevAdvanceFP = glyph ? glyph->advanceX : 0;
     if (isSupSub) {
       // Halved to match the scaled glyph, exactly as drawText and getTextAdvanceX do, so

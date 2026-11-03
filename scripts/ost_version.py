@@ -19,7 +19,9 @@ Images for another board carry its name (-x4pro) before that suffix; the X3 imag
 from the default env keeps the bare name.
 
 Only the default env advances the counter. Another board's env reuses the number
-the default build just took, so the X3 and X4 Pro images of one change share it.
+the default build just took, so the X3 and X4 Pro images of one change share it --
+unless that board already has an image under the number, when it takes a new one
+rather than overwrite it.
 
 The number stays out of the compile: defining it (a past OST_VERSION macro) put
 a value that changes every build into every translation unit's command line,
@@ -166,6 +168,12 @@ def write_build_id_header(project_dir, build_id):
         warn(f'could not write {path} ({e}); the build id will be stale')
 
 
+def board_image_exists(project_dir, version, board):
+    """True when dist/ already holds this board's image (plain or -diag) under version."""
+    dist = os.path.join(project_dir, DIST_DIR)
+    return any(os.path.exists(os.path.join(dist, f'crosspoint-OST-{version}{board}{diag}.bin')) for diag in ('', '-diag'))
+
+
 def copy_to_dist(project_dir, version, suffix, source):
     dist = os.path.join(project_dir, DIST_DIR)
     target = os.path.join(dist, f'crosspoint-OST-{version}{suffix}.bin')
@@ -183,6 +191,9 @@ def main(env):
     board = BOARD_TAGS.get(pioenv, '')
     # Only a board with its own tag may share the day's number: its image name still differs.
     version = next_version(project_dir, advance=(pioenv not in BOARD_TAGS))
+    if board and board_image_exists(project_dir, version, board):
+        # A second build of this board on the X3's number: two images, two numbers.
+        version = next_version(project_dir)
     diag_at_pre = has_input_diag(env)
     write_build_id_header(project_dir, f'{version}{board}{"-diag" if diag_at_pre else ""}')
 

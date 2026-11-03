@@ -102,7 +102,8 @@ void ActivityManager::begin() {
   wdtConfig.idle_core_mask |= 1u << 1;
 #endif
   wdtConfig.trigger_panic = true;
-  esp_task_wdt_reconfigure(&wdtConfig);
+  const esp_err_t err = esp_task_wdt_reconfigure(&wdtConfig);
+  if (err != ESP_OK) LOG_ERR("ACT", "Task watchdog reconfigure failed: %s", esp_err_to_name(err));
 }
 
 void ActivityManager::renderTaskTrampoline(void* param) {
@@ -224,7 +225,9 @@ void ActivityManager::loop() {
       // The header back button shares this band; its taps stay Back.
       statusBarTap = mappedInput.wasScreenTapped(tx, ty) && ty < 44 && !HeaderBackTapTarget::contains(tx, ty);
     }
-    if (mappedInput.hasTouch() && currentActivity->name != "FrontlightPanel" &&
+    // Not over the clock: it keeps the main loop on the task watchdog until onExit, and the
+    // panel pushed above it would stop feeding it.
+    if (mappedInput.hasTouch() && currentActivity->name != "FrontlightPanel" && currentActivity->name != "Clock" &&
         (statusBarTap || mappedInput.wasLightPanelGesture())) {
       haptic_feedback::touchAction();
       pushActivity(std::make_unique<FrontlightPanelActivity>(renderer, mappedInput));

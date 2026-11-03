@@ -963,17 +963,22 @@ void ParsedText::layoutVerticalColumns(const GfxRenderer& renderer, const int fo
         size_t breakAt = i;
         // Kinsoku-head pullback: closing brackets / small kana cannot start a column. An inter-word
         // separator is pulled back for the same reason: at the head of a column it reads as an
-        // indent, while at the foot of the previous one it is invisible.
-        while (breakAt > columnStart + 1 &&
-               (wordAt(breakAt) == " " || VerticalTextUtils::isKinsokuHead(firstCodepoint(wordAt(breakAt))))) {
+        // indent, while at the foot of the previous one it is invisible. The JLREQ classes shared
+        // with horizontal text come from CjkBreaks; VerticalTextUtils adds the vertical forms.
+        const auto noColumnHead = [&](const uint32_t cp) {
+          return VerticalTextUtils::isKinsokuHead(cp) || CjkBreaks::isNoBreakBeforeCjkPunctuation(cp);
+        };
+        const auto noColumnFoot = [&](const uint32_t cp) {
+          return VerticalTextUtils::isKinsokuTail(cp) || CjkBreaks::isNoBreakAfterCjkPunctuation(cp);
+        };
+        while (breakAt > columnStart + 1 && (wordAt(breakAt) == " " || noColumnHead(firstCodepoint(wordAt(breakAt))))) {
           breakAt--;
         }
         // Kinsoku-tail pullback: opening brackets cannot end a column. Bounded loop rather
         // than a single step: nested quotes (『「, 「『) are common in fiction, and one step
         // left the outer bracket at the foot of the column.
-        for (int pulled = 0; pulled < 4 && breakAt > columnStart + 1 &&
-                             VerticalTextUtils::isKinsokuTail(firstCodepoint(wordAt(breakAt - 1)));
-             ++pulled) {
+        for (int pulled = 0;
+             pulled < 4 && breakAt > columnStart + 1 && noColumnFoot(firstCodepoint(wordAt(breakAt - 1))); ++pulled) {
           breakAt--;
         }
         columnEnds.push_back(breakAt);

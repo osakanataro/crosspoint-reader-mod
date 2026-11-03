@@ -2353,14 +2353,14 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
     if (tempBitmap) {
       const ScaledBox dstBox = self->scaledBox(tempGlyph);
       const uint32_t dstLen = bitmapBytes2Bit(dstBox.width, dstBox.height);
-      uint8_t* scaledBitmap = new (std::nothrow) uint8_t[dstLen];
+      uint8_t* scaledBitmap = psramNewArray<uint8_t>(dstLen);
       if (!scaledBitmap) {
         LOG_ERR("SDCF", "Overflow: failed to allocate %u bytes for scaled U+%04X", dstLen, codepoint);
-        delete[] tempBitmap;
+        psramDeleteArray(tempBitmap);
         return nullptr;
       }
       self->resampleBitmap2Bit(tempBitmap, tempGlyph, scaledBitmap, dstBox);
-      delete[] tempBitmap;
+      psramDeleteArray(tempBitmap);
       tempBitmap = scaledBitmap;
       tempGlyph.dataLength = static_cast<uint16_t>(dstLen);
     }

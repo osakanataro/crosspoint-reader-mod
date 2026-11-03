@@ -17,6 +17,11 @@
 // Compiled out unless INPUT_DIAG is defined. Put it in platformio.local.ini (gitignored), never in a
 // release build: the calls below become empty inlines the optimizer removes, so the shipped firmware
 // pays nothing.
+//
+// The mutex log in InputDiag.cpp also needs these linker wraps in the same env, or its __real_*
+// references fail to link:
+//   -Wl,--wrap=xQueueCreateMutex  -Wl,--wrap=xQueueGenericCreate
+//   -Wl,--wrap=_lock_acquire      -Wl,--wrap=_lock_acquire_recursive
 
 #ifdef INPUT_DIAG
 class InputDiag {

@@ -481,7 +481,8 @@ namespace {
 uint8_t* allocChunkDownTo(const size_t want, size_t* got) {
   // A request already below 512 is its own floor.
   const size_t floor = std::min<size_t>(want, 512);
-  for (size_t size = want; size >= floor && size > 0; size /= 2) {
+  // Halving steps past the floor (513 -> 256), so the last try is the floor itself.
+  for (size_t size = want; size >= floor && size > 0; size = (size > floor && size / 2 < floor) ? floor : size / 2) {
     if (auto* p = static_cast<uint8_t*>(malloc(size))) {
       *got = size;
       if (size != want) {

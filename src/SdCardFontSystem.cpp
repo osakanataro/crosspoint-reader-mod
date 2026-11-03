@@ -530,7 +530,8 @@ const SdCardFontFileInfo* SdCardFontSystem::cacheCandidate(char* pathOut, const 
   if (scaleDen) *scaleDen = 1;
   if (SETTINGS.sdFontFamilyName[0] == '\0') return nullptr;
   const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
-  if (!family) return nullptr;
+  // A vector (.ttf/.otf) family has no .cpfont to copy.
+  if (!family || family->vector) return nullptr;
   const auto* selected = family->findNearestSize(SETTINGS.fontPointSize);
   if (!selected) return nullptr;
   const auto cand = SdCardFontManager::cacheCandidate(*family, selected->pointSize);
@@ -541,6 +542,7 @@ const SdCardFontFileInfo* SdCardFontSystem::cacheCandidate(char* pathOut, const 
 }
 
 bool SdCardFontSystem::cacheRebuildNeeded() const {
+  if (SETTINGS.sdFontFlashCache == 0) return false;
   uint8_t scaleNum = 1;
   uint8_t scaleDen = 1;
   char path[SdCardFontFamilyInfo::PATH_BUFFER_SIZE];
@@ -557,7 +559,6 @@ bool SdCardFontSystem::cacheRebuildNeeded() const {
            static_cast<unsigned>(SdCardFontCache::capacity() / 1024), valid ? 1 : 0,
            static_cast<unsigned>(payload / 1024), manager_.readerFontFromFlash() ? "flash" : "sd");
   InputDiag::noteFontCopy(line);
-  if (SETTINGS.sdFontFlashCache == 0) return false;
   return file && !valid;
 }
 

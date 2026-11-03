@@ -57,17 +57,28 @@ bool HalOtaSlot::safeForScratchWrite() const {
   return false;
 }
 
+namespace {
+bool logged(const esp_err_t err, const char* op, const size_t offset, const size_t length) {
+  if (err == ESP_OK) return true;
+  LOG_ERR("OTASLOT", "%s %u+%u failed: %s", op, static_cast<unsigned>(offset), static_cast<unsigned>(length),
+          esp_err_to_name(err));
+  return false;
+}
+}  // namespace
+
 bool HalOtaSlot::read(size_t offset, void* data, size_t length) const {
-  return contains(offset, length) && esp_partition_read(asPartition(partition_), offset, data, length) == ESP_OK;
+  return contains(offset, length) &&
+         logged(esp_partition_read(asPartition(partition_), offset, data, length), "read", offset, length);
 }
 
 bool HalOtaSlot::erase(size_t offset, size_t length) const {
   return contains(offset, length) && offset % ERASE_SIZE == 0 && length % ERASE_SIZE == 0 &&
-         esp_partition_erase_range(asPartition(partition_), offset, length) == ESP_OK;
+         logged(esp_partition_erase_range(asPartition(partition_), offset, length), "erase", offset, length);
 }
 
 bool HalOtaSlot::write(size_t offset, const void* data, size_t length) const {
-  return contains(offset, length) && esp_partition_write(asPartition(partition_), offset, data, length) == ESP_OK;
+  return contains(offset, length) &&
+         logged(esp_partition_write(asPartition(partition_), offset, data, length), "write", offset, length);
 }
 
 bool HalOtaSlot::contains(size_t offset, size_t length) const {

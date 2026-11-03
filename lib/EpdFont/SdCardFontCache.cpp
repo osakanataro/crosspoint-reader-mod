@@ -19,6 +19,11 @@ namespace {
 // Set by invalidateUntilReboot() from the task running a firmware update, read by the render task.
 std::atomic<bool> slotBeingUpdated{false};
 // Reads of the copy in progress. A reader registers before it checks the flag, and
+// Set while preload() erases and rewrites the slot. A font still reading the old copy then
+// fails over to the SD instead of taking erased or new bytes as its own; callers reload the
+// SD fonts after preload() returns, which drops any reader left pointing at the old copy.
+std::atomic<bool> slotBeingWritten{false};
+
 // invalidateUntilReboot() waits for this to drain after setting it, so no read that passed the
 // check is still running when the update starts erasing (both sides are sequentially consistent).
 std::atomic<int> readsInFlight{0};
@@ -159,15 +164,17 @@ bool readAt(size_t offset, void* data, size_t length, size_t payloadBytes) {
       !sd_card_font_cache_format::containsPayloadRange(payloadBytes, offset, length)) {
     return false;
   }
-  if (length == 0) return !slotBeingUpdated.load();
+  if (length == 0) return !slotBeingUpdated.load() && !slotBeingWritten.load();
   readsInFlight.fetch_add(1);
-  const bool ok =
-      !slotBeingUpdated.load() && slot.read(sd_card_font_cache_format::HEADER_AREA_SIZE + offset, data, length);
+  const bool ok = !slotBeingUpdated.load() && !slotBeingWritten.load() &&
+                  slot.read(sd_card_font_cache_format::HEADER_AREA_SIZE + offset, data, length);
   readsInFlight.fetch_sub(1);
   return ok;
 }
 
 Result preload(const char* sourcePath, ProgressCallback progress, void* context) {
+  // A firmware update owns the slot until the reboot.
+  if (slotBeingUpdated.load()) return Result::NotSafe;
   SourceIdentity source{};
   if (!identifySource(sourcePath, source)) return Result::InvalidFont;
   if (isValidFor(sourcePath)) return Result::AlreadyCached;
@@ -183,6 +190,14 @@ Result preload(const char* sourcePath, ProgressCallback progress, void* context)
 
   HalFile file;
   if (!Storage.openFileForRead("SDFCACHE", sourcePath, file)) return Result::OpenFailed;
+  // Held over every return below. Reads already past the flag check are let finish first.
+  struct WriteGuard {
+    WriteGuard() {
+      slotBeingWritten.store(true);
+      while (readsInFlight.load() > 0) delay(1);
+    }
+    ~WriteGuard() { slotBeingWritten.store(false); }
+  } writeGuard;
   // Erasing the header sector first invalidates whatever copy was there, so a
   // power loss mid-way leaves an invalid cache rather than a half-new one.
   if (!slot.erase(0, HalOtaSlot::ERASE_SIZE)) return Result::EraseFailed;

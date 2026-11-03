@@ -96,8 +96,11 @@ constexpr uint32_t MAX_SERIALIZED_STRING_LEN = 65535;
     s.clear();
     return false;
   }
-  if (len > MAX_SERIALIZED_STRING_LEN) {
-    LOG_ERR("SER", "readString: length %u exceeds max, treating as corrupt", len);
+  // Checked against what the file still holds before resizing, so a corrupt length cannot
+  // allocate up to 64 KB for a read that is bound to come up short.
+  const int remaining = file.available();
+  if (len > MAX_SERIALIZED_STRING_LEN || remaining < 0 || len > static_cast<uint32_t>(remaining)) {
+    LOG_ERR("SER", "readString: length %u exceeds max or file, treating as corrupt", len);
     s.clear();
     return false;
   }

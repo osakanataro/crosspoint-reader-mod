@@ -90,8 +90,10 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input, const bool
 
   // Physical Up/Down when overriding, so sideButtonLayout's direction is bypassed;
   // PageBack/PageForward otherwise, which is where that setting is applied.
-  const bool sideOverride =
-      rtlPageProgression && SETTINGS.sideButtonLayout != CrossPointSettings::SIDE_BUTTONS_DISABLED;
+  // Only the two layouts that carry a direction are overridden: NEXT_NEXT / PREV_PREV give
+  // both buttons one meaning, which holds for a right-to-left book as well.
+  const bool sideOverride = rtlPageProgression && (SETTINGS.sideButtonLayout == CrossPointSettings::PREV_NEXT ||
+                                                   SETTINGS.sideButtonLayout == CrossPointSettings::NEXT_PREV);
   const auto sidePrevButton = sideOverride ? Button::Down : Button::PageBack;
   const auto sideNextButton = sideOverride ? Button::Up : Button::PageForward;
 

@@ -113,6 +113,12 @@ class BufferedFileReader {
   // Logical read position.
   size_t position() const { return bufStart + off; }
 
+  // Bytes left to read: what is still buffered plus what the file holds past it.
+  size_t remaining() const {
+    const int rest = file.available();
+    return (fill - off) + (rest > 0 ? static_cast<size_t>(rest) : 0);
+  }
+
   bool seek(const size_t target) {
     // Within the buffered window: just move the cursor.
     if (cap != 0 && target >= bufStart && target < bufStart + fill) {
@@ -161,8 +167,9 @@ inline void writeString(BufferedFileWriter& out, const std::string& s) {
     s.clear();
     return false;
   }
-  // See Serialization.h's MAX_SERIALIZED_STRING_LEN for why this is capped.
-  if (len > MAX_SERIALIZED_STRING_LEN) {
+  // See Serialization.h's MAX_SERIALIZED_STRING_LEN for why this is capped, and its HalFile
+  // overload for why the remaining bytes are checked before resizing.
+  if (len > MAX_SERIALIZED_STRING_LEN || len > in.remaining()) {
     LOG_ERR("SER", "readString: length %u exceeds max, treating as corrupt", len);
     s.clear();
     return false;

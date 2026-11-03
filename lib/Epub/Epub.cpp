@@ -29,7 +29,7 @@ Epub::Epub(std::string filepath, const std::string& cacheDir) : filepath(std::mo
   cachePath = cacheDir + "/epub_" + std::to_string(FsHelpers::pathHash(this->filepath));
 }
 #if INPUT_DIAG
-#include "../../../src/util/InputDiag.h"
+#include "../../src/util/InputDiag.h"
 #define COVER_DIAG(fmt, ...)                                          \
   do {                                                                \
     char coverDiagBuf[72];                                            \
@@ -940,10 +940,10 @@ std::string Epub::findCoverImageInDocument(const std::string& docHref) const {
   if (docHref.empty()) return {};
 
   size_t docSize;
-  uint8_t* docData = readItemContentsToBytes(docHref, &docSize, true);
+  // Read in place: a std::string copy would hold the document twice for the scan.
+  const std::unique_ptr<uint8_t, decltype(&free)> docData(readItemContentsToBytes(docHref, &docSize, true), &free);
   if (!docData) return {};
-  const std::string doc(reinterpret_cast<char*>(docData), docSize);
-  free(docData);
+  const std::string_view doc(reinterpret_cast<const char*>(docData.get()), docSize);
 
   // Relative references resolve against the document's own directory.
   std::string base;
@@ -961,7 +961,7 @@ std::string Epub::findCoverImageInDocument(const std::string& docHref) const {
       pos += strlen(pattern);
       const auto endPos = doc.find('"', pos);
       if (endPos != std::string::npos) {
-        const auto ref = std::string_view{doc}.substr(pos, endPos - pos);
+        const auto ref = doc.substr(pos, endPos - pos);
         if (FsHelpers::hasPngExtension(ref) || FsHelpers::hasJpgExtension(ref)) {
           imageRef = ref;
           break;

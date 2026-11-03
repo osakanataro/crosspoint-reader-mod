@@ -99,6 +99,12 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
+### Version 76 (OST fork)
+
+Same layout as version 75. Rebuilds sections because vertical column breaks now
+also follow the JLREQ line-start and line-end classes used for horizontal text,
+and the column pitch is measured on a kana before U+3000.
+
 ### Version 75 (OST fork)
 
 Same layout as version 74. Rebuilds sections because the vertical first-column
