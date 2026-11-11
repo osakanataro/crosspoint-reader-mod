@@ -226,6 +226,13 @@ void SettingsActivity::onEnter() {
   quickResumeTimeoutAutoEnabled = false;
   syncQuickResumeTimeoutForSleepScreen(/*sleepScreenChanged=*/true, /*quickResumeTimeoutChanged=*/false);
 
+  {
+    // Fonts may have arrived since (web upload, USB): one may now draw the
+    // saved UI language. May load or free SD fonts the render task draws with.
+    RenderLock lock(*this);
+    sdFontSystem.refreshIfDirty();
+    sdFontSystem.applyUiLanguage(renderer);
+  }
   rebuildSettings();
 }
 
@@ -462,6 +469,11 @@ void SettingsActivity::toggleSelectedSetting() {
         startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput),
                                [this](const ActivityResult&) {
                                  SETTINGS.saveToFile();
+                                 {
+                                   // A downloaded family may draw the saved UI language.
+                                   RenderLock lock(*this);
+                                   sdFontSystem.applyUiLanguage(renderer);
+                                 }
                                  rebuildSettings();
                                });
         break;

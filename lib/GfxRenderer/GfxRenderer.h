@@ -200,6 +200,17 @@ class GfxRenderer {
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
   void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
   void clearFallbackFonts() { fallbackFontMap_.clear(); }
+  // Fallback id registered for primaryFontId, or 0 when none.
+  int getFallbackFont(const int primaryFontId) const {
+    const auto it = fallbackFontMap_.find(primaryFontId);
+    return it != fallbackFontMap_.end() ? it->second : 0;
+  }
+  // Drop the fallbacks that route to fallbackFontId, before its font is freed.
+  void removeFallbacksTo(const int fallbackFontId) {
+    for (auto it = fallbackFontMap_.begin(); it != fallbackFontMap_.end();) {
+      it = (it->second == fallbackFontId) ? fallbackFontMap_.erase(it) : std::next(it);
+    }
+  }
 
   void setFontVariantProvider(const FontVariantProvider& provider) { fontVariantProvider_ = provider; }
   int resolveFontVariant(const int fontId, const float scale) const {

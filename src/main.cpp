@@ -41,6 +41,7 @@
 #include "OpdsTokenStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "UiLanguagePackStore.h"
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
@@ -126,7 +127,8 @@ constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
 constexpr uint32_t SILENT_REBOOT_TARGET_SETTINGS = 2;
 constexpr uint32_t SILENT_REBOOT_TARGET_JOIN_NETWORK = 3;
 constexpr uint32_t SILENT_REBOOT_TARGET_READER_SETTINGS = 4;
-constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_READER_SETTINGS;
+constexpr uint32_t SILENT_REBOOT_TARGET_GENERAL_SETTINGS = 5;
+constexpr uint32_t SILENT_REBOOT_TARGET_MAX = SILENT_REBOOT_TARGET_GENERAL_SETTINGS;
 constexpr uint32_t SILENT_REBOOT_LIGHT_ON = 1U << 0;
 
 // How the device is coming back to life, resolved once at boot. Both resume
@@ -181,6 +183,8 @@ void silentRestartToReader() { silentRestartTo(SILENT_REBOOT_TARGET_READER, "rea
 void silentRestartToSettings() { silentRestartTo(SILENT_REBOOT_TARGET_SETTINGS, "settings"); }
 
 void silentRestartToReaderSettings() { silentRestartTo(SILENT_REBOOT_TARGET_READER_SETTINGS, "reader settings"); }
+
+void silentRestartToGeneralSettings() { silentRestartTo(SILENT_REBOOT_TARGET_GENERAL_SETTINGS, "general settings"); }
 
 void silentRestartToJoinNetwork() {
   if (deepSleepInProgress) return;
@@ -647,6 +651,7 @@ void setup() {
   // UTC-offset setting on first boot after the update).
   timezones::applyToClock();
   RECENT_BOOKS.loadFromFile();
+  I18N.setPackLoader(UiLanguagePackStore::load);
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
@@ -779,6 +784,13 @@ void setup() {
   } else if (rebootedFromPanic) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
+#if I18N_LANGUAGE_PACKS
+  } else if (!UiLanguagePackStore::loadable(static_cast<Language>(SETTINGS.language))) {
+    // The saved UI language is no longer built in and neither flash nor the card
+    // holds a usable pack for it (the first boot after the update): offer to
+    // download it. The card pack is read in full only when flash lacks it.
+    activityManager.goToLanguagePackRestore(static_cast<Language>(SETTINGS.language));
+#endif
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);
@@ -788,6 +800,8 @@ void setup() {
     activityManager.goToJoinNetwork();
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER_SETTINGS) {
     activityManager.goToSettings(SettingsSection::Reader);
+  } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_GENERAL_SETTINGS) {
+    activityManager.goToSettings(SettingsSection::General);
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_SETTINGS) {
     // Back out of the WiFi rows and the user is where they left off, not on Home.
     activityManager.goToSettings(SettingsSection::Network);

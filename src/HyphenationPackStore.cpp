@@ -11,6 +11,8 @@
 #include <cstddef>
 #include <cstring>
 
+#include "SpiffsLayout.h"
+
 namespace HyphenationPackStore {
 namespace {
 
@@ -58,6 +60,7 @@ struct BankHeader {
 static_assert(sizeof(BankHeader) == 976 && sizeof(BankHeader) <= SECTOR_SIZE);
 
 const esp_partition_t* partition = nullptr;
+size_t bankStride = 0;
 size_t bankSize = 0;
 bool storeReady = false;
 int activeBank = -1;
@@ -66,7 +69,7 @@ esp_partition_mmap_handle_t mapHandle = 0;
 BankHeader activeHeader{};
 BankHeader nextHeader{};
 
-size_t bankOffset(const int bank) { return static_cast<size_t>(bank) * bankSize; }
+size_t bankOffset(const int bank) { return static_cast<size_t>(bank) * bankStride; }
 size_t align4(const size_t value) { return (value + 3u) & ~size_t{3u}; }
 
 uint32_t headerCrc(const BankHeader& header) {
@@ -240,11 +243,15 @@ bool rewriteBank(const char* replacedCode, HalFile* newFile, const PackFileHeade
 bool begin() {
   storeReady = false;
   partition = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
-  if (!partition || partition->size < 2 * SECTOR_SIZE) {
+  if (!partition || partition->size < 2 * (SpiffsLayout::UI_LANGUAGE_REGION_SIZE + 2 * SECTOR_SIZE)) {
     LOG_ERR("HYPH", "Internal flash partition unavailable");
     return false;
   }
-  bankSize = (partition->size / 2) & ~(SECTOR_SIZE - 1);
+  // Banks start at 0 and half the partition. Each ends 64 KB short of the
+  // next start, so the second leaves the UI language copy its 64 KB at the end
+  // (SpiffsLayout.h) and bank starts match layouts without that region.
+  bankStride = (partition->size / 2) & ~(SECTOR_SIZE - 1);
+  bankSize = bankStride - SpiffsLayout::UI_LANGUAGE_REGION_SIZE;
   const bool firstValid = readHeader(0, activeHeader);
   const bool secondValid = readHeader(1, nextHeader);
   if (secondValid && (!firstValid || static_cast<int32_t>(nextHeader.generation - activeHeader.generation) > 0)) {

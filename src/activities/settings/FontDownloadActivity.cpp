@@ -14,9 +14,11 @@
 #include <cstdint>
 #include <cstring>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
+#include "UiLanguagePackStore.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
@@ -25,8 +27,27 @@
 
 namespace fui = freeink::ui;
 
-FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-    : UiListActivity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
+namespace {
+
+// The family the list opens on when a UI language needs a font: the
+// _default_font of the language's pack on the card, or the one built in when
+// there is no pack. Languages the built-in fonts draw have none.
+const char* defaultFamilyName(const Language lang, char (&packFont)[UiLanguagePackStore::FONT_LEN]) {
+  const auto index = static_cast<size_t>(lang);
+  if (index >= static_cast<size_t>(Language::_COUNT)) return nullptr;
+  if (UiLanguagePackStore::packDefaultFont(lang, packFont, sizeof(packFont))) {
+    return packFont[0] != '\0' ? packFont : nullptr;
+  }
+  return DEFAULT_FONT_FAMILIES[index];
+}
+
+}  // namespace
+
+FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                           const Language adoptLanguage)
+    : UiListActivity("FontDownload", renderer, mappedInput),
+      adoptLanguage_(adoptLanguage),
+      fontInstaller_(sdFontSystem.registry()) {}
 
 void FontDownloadActivity::activateIndex(const int index) {
   switch (state_) {
@@ -72,6 +93,24 @@ void FontDownloadActivity::onBackButton() {
 
 void FontDownloadActivity::onEnter() {
   UiListActivity::onEnter();
+  {
+    // TLS needs more heap than the loaded SD fonts leave on X3. When the
+    // built-in fonts draw the UI, nothing here needs them: this activity's
+    // Wi-Fi exit reboots, and adoptLanguageIfDrawable() loads what it uses.
+    RenderLock lock(*this);
+    if (sdFontSystem.builtinFontsDrawUi(renderer)) sdFontSystem.unloadAll(renderer);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    // Handed over from another download on the same Wi-Fi session.
+    onWifiSelectionComplete(true);
+    return;
+  }
+  {
+    // Free glyph caches before Wi-Fi allocates, so caches refilled later do not
+    // split the large free block TLS needs.
+    RenderLock lock(*this);
+    if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
+  }
   WiFi.mode(WIFI_STA);
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                          [this](const ActivityResult& result) { onWifiSelectionComplete(!result.isCancelled); });
@@ -79,11 +118,27 @@ void FontDownloadActivity::onEnter() {
 
 void FontDownloadActivity::onExit() {
   Activity::onExit();
+  if (adoptLanguage_ != Language::_COUNT) adoptLanguageIfDrawable();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestart();
+    // A language change reopens General settings, as the language picker does.
+    if (adoptLanguage_ != Language::_COUNT) {
+      silentRestartToGeneralSettings();
+    } else {
+      silentRestart();
+    }
+  }
+}
+
+// Runs from onExit(), which holds the render lock, before the reboot. The
+// reboot runs before the caller's result handler, so the language is saved here.
+void FontDownloadActivity::adoptLanguageIfDrawable() {
+  if (sdFontSystem.switchUiLanguage(renderer, adoptLanguage_)) {
+    SETTINGS.saveToFile();
+  } else {
+    sdFontSystem.applyUiLanguage(renderer);  // back to the saved language
   }
 }
 
@@ -111,12 +166,26 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
-  if (!hasGroupScreen()) buildFilteredIndices(0);
+  // Open on the language's default family, in its first script group.
+  char packFont[UiLanguagePackStore::FONT_LEN];
+  const int defaultFamily = findFamily(defaultFamilyName(adoptLanguage_, packFont));
+  int groupListIndex = 0;
+  if (defaultFamily >= 0 && hasGroupScreen() && families_[defaultFamily].scriptMask != 0) {
+    groupListIndex = __builtin_ctz(families_[defaultFamily].scriptMask) + 1;
+  }
+  if (!hasGroupScreen() || defaultFamily >= 0) buildFilteredIndices(groupListIndex);
 
   {
     RenderLock lock(*this);
     rowsDirty_ = true;  // families_ just loaded
-    if (hasGroupScreen()) {
+    if (defaultFamily >= 0) {
+      groupNav_.reset();
+      groupNav_.selected = groupListIndex;
+      nav.reset();
+      const auto it = std::find(filteredIndices_.begin(), filteredIndices_.end(), defaultFamily);
+      nav.selected = specialRowCount() + static_cast<int>(std::distance(filteredIndices_.begin(), it));
+      state_ = FAMILY_LIST;
+    } else if (hasGroupScreen()) {
       groupNav_.reset();
       state_ = GROUP_LIST;
     } else {
@@ -452,6 +521,14 @@ int FontDownloadActivity::familyIndexFromList(const int listIndex) const {
   return filteredIndices_[filteredIndex];
 }
 
+int FontDownloadActivity::findFamily(const char* name) const {
+  if (name == nullptr) return -1;
+  for (int familyIndex = 0; familyIndex < static_cast<int>(families_.size()); familyIndex++) {
+    if (strcmp(str(families_[familyIndex].name), name) == 0) return familyIndex;
+  }
+  return -1;
+}
+
 int FontDownloadActivity::groupMemberCount(const int scriptGroupIndex) const {
   if (scriptGroupIndex < 0 || scriptGroupIndex >= static_cast<int>(scriptGroupLabels_.size())) return 0;
   const uint32_t groupBit = uint32_t{1} << scriptGroupIndex;
@@ -524,6 +601,7 @@ bool FontDownloadActivity::computeFileCrc32(const char* path, uint32_t& outCrc) 
 }
 
 void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
+  releaseUiFamily(str(family.name));  // an update rewrites its files
   {
     RenderLock lock(*this);
     state_ = DOWNLOADING;
@@ -699,6 +777,7 @@ void FontDownloadActivity::onDeleteConfirmationResult(const ActivityResult& resu
   }
   auto& family = families_[familyIndex];
 
+  releaseUiFamily(str(family.name));
   if (fontInstaller_.deleteFamily(str(family.name)) != FontInstaller::Error::OK) {
     RenderLock lock(*this);
     state_ = ERROR;
@@ -714,6 +793,16 @@ void FontDownloadActivity::onDeleteConfirmationResult(const ActivityResult& resu
   }
 
   requestUpdate();
+}
+
+void FontDownloadActivity::releaseUiFamily(const char* family) {
+  // Glyphs are read from the family's files on demand, so its fonts must go
+  // before the files change. Until the exit reboot loads what is then on the
+  // card, the built-in fonts show the UI in English.
+  RenderLock lock(*this);
+  if (!sdFontSystem.uiUsesFamily(renderer, family)) return;
+  sdFontSystem.unloadAll(renderer);
+  sdFontSystem.applyUiLanguage(renderer, Language::EN);
 }
 
 bool FontDownloadActivity::isSelectedFamilyDeletable() const {
@@ -881,6 +970,9 @@ bool FontDownloadActivity::handleCustomInput() {
       int y = 0;
       if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) {
         if (downloadingFamilyIndex_ >= 0 && downloadingFamilyIndex_ < static_cast<int>(families_.size())) {
+          // A retry fetches the failed family again from its first file.
+          currentFileIndex_ = 0;
+          currentFileTotal_ = families_[downloadingFamilyIndex_].fileCount;
           downloadFamily(families_[downloadingFamilyIndex_]);
           requestUpdateAndWait();
           return true;

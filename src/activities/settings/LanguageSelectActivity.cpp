@@ -5,10 +5,17 @@
 
 #include <algorithm>
 #include <iterator>
+#include <memory>
 
 #include "CrossPointSettings.h"
+#include "FontDownloadActivity.h"
 #include "I18nKeys.h"
+#include "LanguagePackDownloadActivity.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
+#include "SilentRestart.h"
+#include "UiLanguagePackStore.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -21,23 +28,37 @@ void LanguageSelectActivity::onEnter() {
 
   // Open on the current language, which may sit past the first page; the first
   // screen build pulls the viewport to it (ListNav follow-on-build).
-  const auto currentLang = static_cast<uint8_t>(I18N.getLanguage());
+  // The saved choice, which the UI may be showing in English for lack of a font.
+  const auto currentLang = SETTINGS.language;
   const auto* begin = std::begin(SORTED_LANGUAGE_INDICES);
   const auto* end = std::end(SORTED_LANGUAGE_INDICES);
   const auto* it = std::find(begin, end, currentLang);
   nav.selected = (it != end) ? static_cast<int>(std::distance(begin, it)) : 0;
+
+  // Languages that need a language file or a font from the network are marked.
+  Language langs[totalItems];
+  bool drawable[totalItems];
+  for (int i = 0; i < totalItems; ++i) langs[i] = static_cast<Language>(SORTED_LANGUAGE_INDICES[i]);
+  {
+    RenderLock lock(*this);
+    sdFontSystem.findDrawableLanguages(renderer, langs, totalItems, drawable);
+  }
 
   // Built once here rather than every buildScreen() call: labels are static,
   // and the "Selected" marker can't go stale mid-visit since activateIndex()
   // finishes the activity immediately on selection.
   for (int i = 0; i < totalItems; ++i) {
     fui::ListItem item;
-    item.label = I18N.getLanguageName(static_cast<Language>(SORTED_LANGUAGE_INDICES[i]));
-    if (SORTED_LANGUAGE_INDICES[i] == currentLang) {
-      item.value = tr(STR_SELECTED);
-    }
+    item.label = I18N.getLanguageName(langs[i]);
     item.actionValue = static_cast<int16_t>(i);
     rowItems[i] = item;
+    if (SORTED_LANGUAGE_INDICES[i] == currentLang) {
+      rowMarks[i] = RowMark::Selected;
+    } else if (!drawable[i] || !UiLanguagePackStore::available(langs[i])) {
+      rowMarks[i] = RowMark::NeedsDownload;
+    } else {
+      rowMarks[i] = RowMark::None;
+    }
   }
 }
 
@@ -50,16 +71,62 @@ void LanguageSelectActivity::activateIndex(const int index) {
   nav.selected = index;
   const uint8_t langIndex = SORTED_LANGUAGE_INDICES[index];
 
+  const auto chosen = static_cast<Language>(langIndex);
+  if (!UiLanguagePackStore::loadable(chosen)) {
+    // The language ships as an SD pack (/lang) and the card has none. The
+    // download activity switches to the language itself and reboots when it
+    // exits, so this screen does not continue.
+    startActivityForResult(
+        std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_UI_LANGUAGE_PACK_MISSING),
+                                               tr(STR_UI_LANGUAGE_PACK_MISSING_BODY)),
+        [this, chosen](const ActivityResult& result) {
+          if (result.isCancelled) return;
+          startActivityForResult(std::make_unique<LanguagePackDownloadActivity>(renderer, mappedInput, chosen),
+                                 nullptr);
+        });
+    return;
+  }
+  const bool changed = langIndex != SETTINGS.language;
+  bool shown;
   {
+    // May load or free SD fonts the render task draws with.
     RenderLock lock(*this);
-    I18N.setLanguage(static_cast<Language>(langIndex));
+    shown = sdFontSystem.switchUiLanguage(renderer, chosen);
   }
 
-  SETTINGS.language = langIndex;
-  SETTINGS.saveToFile();
+  if (shown) {
+    SETTINGS.saveToFile();
+    if (changed) restartOnFreshHeap();
+    finish();
+    return;
+  }
+  {
+    // switchUiLanguage() showed English; ask in the language still saved.
+    RenderLock lock(*this);
+    sdFontSystem.applyUiLanguage(renderer);
+  }
+  // No font on the card draws the chosen language. Offer the font download;
+  // SETTINGS keeps the previous language until a font for this one arrives.
+  startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_UI_FONT_MISSING),
+                                                                tr(STR_UI_FONT_MISSING_DOWNLOAD)),
+                         [this, chosen](const ActivityResult& result) {
+                           if (result.isCancelled) {
+                             finish();  // the saved language is already shown again
+                             return;
+                           }
+                           // It saves the language and reboots on exit; no result comes back.
+                           startActivityForResult(std::make_unique<FontDownloadActivity>(renderer, mappedInput, chosen),
+                                                  nullptr);
+                         });
+}
 
-  // Return to previous page
-  finish();
+void LanguageSelectActivity::restartOnFreshHeap() {
+  // Loading and freeing SD fonts for each language leaves the heap in pieces
+  // too small for a later Wi-Fi + TLS download on X3, and the pack switch
+  // rewrote the strings earlier screens may still point to. Reopen Settings
+  // after a reboot instead.
+  RenderLock lock(*this);
+  silentRestartToGeneralSettings();
 }
 
 void LanguageSelectActivity::buildScreen(UiScreen& screen) {
@@ -73,6 +140,13 @@ void LanguageSelectActivity::buildScreen(UiScreen& screen) {
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
 
   // rowItems was built once in onEnter() and is reused here on every repaint.
+  // Marks are looked up on each repaint: switching to a pack language rewrites
+  // the flash copy that earlier tr() pointers point into.
+  for (int i = 0; i < totalItems; ++i) {
+    rowItems[i].value = rowMarks[i] == RowMark::Selected        ? tr(STR_SELECTED)
+                        : rowMarks[i] == RowMark::NeedsDownload ? tr(STR_LANGUAGE_NEEDS_DOWNLOAD)
+                                                                : nullptr;
+  }
   fui::ListProps props;
   props.items = rowItems;
   props.count = static_cast<uint16_t>(totalItems);

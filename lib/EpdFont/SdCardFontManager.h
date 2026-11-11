@@ -37,7 +37,11 @@ class SdCardFontManager {
   // Unload and unregister one font loaded by loadFamilyVariant.
   void unloadFont(GfxRenderer& renderer, int fontId);
 
-  // Unload everything, unregister from renderer.
+  // True when fontId is one of this manager's loaded fonts.
+  bool ownsFont(int fontId) const;
+
+  // Unload this manager's fonts, unregister them and the UI fallbacks that
+  // point at them from the renderer.
   void unloadAll(GfxRenderer& renderer);
 
   // Look up the loaded font at pointSize (0 selects the reader size).
