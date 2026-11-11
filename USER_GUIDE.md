@@ -363,7 +363,15 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
   - Plugins with web settings appear on the **Plugins** page of the web UI while **File Transfer** is running. Its link is hidden while plugins are disabled.
   - Plugin Hub is optional. Users who prefer manual installation can download it directly from [crosspoint-plugin-hub releases](https://github.com/crosspoint-reader/crosspoint-plugin-hub/releases) and copy/extract the `pluginhub` folder so it ends up at `/.crosspoint/plugins/pluginhub/`, `/plugins/pluginhub/`, or `/.plugins/pluginhub/`. Once installed, Plugin Hub appears as a normal entry under **Home → Plugins**.
 
-- **Language**: Set the UI language. CrossPoint supports 32 languages: English, Spanish, French, German, Czech, Brazilian Portuguese, European Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish, Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew, Arabic, Slovak, Bosnian, Vietnamese, Norwegian Bokmål, Indonesian, and Orangutan.
+- **Language**: Set the UI language. See [i18n.md](./docs/i18n.md#supported-languages) for the supported languages.
+  - Languages other than English are read from a language file in `/lang` on the SD card. If the file is missing, choosing the language offers to download it over Wi-Fi. The chosen language is copied to internal flash, so it keeps working without the card.
+  - On the first start after updating from a firmware that had your language built in, the device asks to download its language file. If you decline, it stays in English and does not ask again; if the download fails, it asks again at the next start.
+  - Some languages (Japanese, Chinese and Korean for now) need an SD card font that covers their script: a `.cpfont` family with sizes 8, 10 and 12. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
+  - If no such font is on the card, choosing the language shows a warning that offers the font download, and the previous language stays selected.
+  - The list marks languages that need a language file or a font download with "Needs download".
+  - After the language changes, the device restarts. It opens Settings, or Home when a download was needed.
+  - If the font is later removed, the UI shows English and the saved language is kept.
+  - When the reader uses a built-in font, choosing such a language also sets **Font Family** to the SD family that draws it.
 
 - **Manage Fonts**: Browse, download, and manage custom font families installed from the SD card. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card) for more information.
 

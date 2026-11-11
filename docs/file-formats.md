@@ -767,12 +767,33 @@ Hypher trie with its four-byte root prefix removed. The generator lives at
 `scripts/build-hyphenation-assets.py` and pins the upstream source revision.
 
 Installed packs occupy the existing `spiffs` partition as raw mapped data.
-The partition is split into two equal banks. Each bank has a CRC-protected
+The two banks start at 0 and at half the partition. Each is 64 KB shorter than
+half, leaving the last 64 KB to the UI language copy (`src/SpiffsLayout.h`).
+Each bank has a CRC-protected
 header in its first 4 KiB sector, followed by packed trie payloads. Updates
 copy retained packs to the inactive bank and write its header last, so a power
 loss before commit leaves the previous bank readable. Firmware updates must
 continue reading version 1 packages and bank headers, and must keep this
 partition's location and size if installed packs are to survive OTA.
+
+## UI language files (`/lang/<code>.cplang`)
+
+Written by `scripts/gen_i18n.py` (`write_language_pack`). Little-endian. A
+60-byte header: `CPLG`, format version 2, the language code (8 bytes,
+NUL-padded), 3 pad bytes, the string count (uint16), 2 pad bytes, the string
+data size (uint32, at most 32 KB), the CRC32 of everything after the header,
+and the default font family (32 bytes, NUL-padded, outside the CRC). Then the
+FNV-1a hashes of the key names (uint32 each, sorted), the string offsets
+(uint16 each), padding to 4 bytes, and the NUL-terminated strings. Only
+strings that differ from English are stored.
+
+The language in use is copied to the last 64 KB of the `spiffs` partition
+(`src/UiLanguagePackStore.cpp`): a 32-byte header (`CPLS`, store version 2,
+key count, a hash of the English key table, the file's CRC, the code, the data
+size, a header CRC), an offset table in `StrId` order (bit 15 marks an English
+offset), then the strings. The header is written last, and its magic is
+cleared before an erase, so a copy cut short by power loss is not used. A
+change to the English key table rewrites the copy at the next boot.
 
 ## Clipping store (`/.crosspoint/clippings/epub_<path-hash>.bin`)
 

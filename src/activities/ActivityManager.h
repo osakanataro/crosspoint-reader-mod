@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "GfxRenderer.h"
+#include "I18nKeys.h"
 #include "MappedInputManager.h"
 #include "settings/SettingsSection.h"
 #include "util/ScreenshotInfo.h"
@@ -89,6 +90,7 @@ class ActivityManager {
   void goToUsbDrive();
   // openSection jumps straight into one group (End = the section list).
   void goToSettings(SettingsSection openSection = SettingsSection::End);
+  void goToLanguagePackRestore(Language lang);  // saved UI language without a pack
   void goToFileBrowser(std::string path = {});
   void goToLibrary();
   void goToBrowser();

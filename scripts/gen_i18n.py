@@ -13,6 +13,8 @@ Each YAML file must contain:
   _order: "N"                       (e.g. "1"; historical metadata, unused)
   _bcp47: "tag"                     (e.g. "es"; drives Language enum order)
   STR_KEY: "translation text"
+and may contain:
+  _default_font: "family"           (e.g. "NotoSansCJKJP"; default "system", the built-in fonts)
 
 The English file is the reference. Missing keys in other languages are
 automatically filled from English, with a warning.
@@ -34,6 +36,9 @@ Examples:
 import sys
 import os
 import re
+import struct
+import unicodedata
+import zlib
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -44,6 +49,8 @@ I18N_NAMESPACE_CLOSE = "}  // namespace i18n_strings"
 YAML_KEY_RE = re.compile(r'^([A-Za-z_]\w*)\s*:\s*"(.*)"$', flags=re.ASCII)
 CPP_IDENTIFIER_RE = re.compile(r"^[A-Za-z_]\w*$", flags=re.ASCII)
 STR_KEY_RE = re.compile(r"\bSTR_\w+\b", flags=re.ASCII)
+# Same characters FontInstaller::isValidFamilyName accepts.
+FONT_FAMILY_RE = re.compile(r"^[A-Za-z0-9_-]+$", flags=re.ASCII)
 
 
 # ---------------------------------------------------------------------------
@@ -123,12 +130,13 @@ def parse_yaml_file(filepath: str) -> Dict[str, str]:
 def load_translations(
     translations_dir: str,
     verbose: bool = False,
-) -> Tuple[List[str], List[str], List[str], List[str], Dict[str, List[str]], List[Set[str]]]:
+) -> Tuple[List[str], List[str], List[str], List[str], List[str], Dict[str, List[str]], List[Set[str]]]:
     """
     Read every YAML file in *translations_dir* and return:
         language_codes   e.g. ["EN", "ES", ...]
         language_names   e.g. ["English", "Español", ...]
         language_bcp47   e.g. ["en", "es", ...]
+        default_fonts    e.g. ["", "", "NotoSansCJKJP", ...]; "" means the built-in fonts
         string_keys      ordered list of STR_* keys (from English)
         translations     {key: [translation_per_language]}
 
@@ -202,6 +210,7 @@ def load_translations(
     language_codes: List[str] = []
     language_names: List[str] = []
     language_bcp47: List[str] = []
+    default_fonts: List[str] = []
     for fname in ordered_files:
         data = parsed[fname]
         code = data.get("_language_code")
@@ -211,6 +220,14 @@ def load_translations(
         language_codes.append(code)
         language_names.append(name)
         language_bcp47.append(data["_bcp47"])
+        # The family the font download list opens on for this language. A missing
+        # key means "system": the built-in fonts draw the language.
+        font = data.get("_default_font", "system")
+        if font == "system":
+            font = ""
+        elif not FONT_FAMILY_RE.match(font):
+            raise ValueError(f"{fname}: invalid _default_font '{font}'")
+        default_fonts.append(font)
 
     # String keys come from English (order matters)
     english_data = parsed[english_file]
@@ -254,7 +271,7 @@ def load_translations(
 
     if verbose:
         print(f"Loaded {len(language_codes)} languages, {len(string_keys)} string keys")
-    return language_codes, language_names, language_bcp47, string_keys, translations, inherited_sets
+    return language_codes, language_names, language_bcp47, default_fonts, string_keys, translations, inherited_sets
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +461,149 @@ def compute_character_set(translations: Dict[str, List[str]], lang_index: int) -
     return "".join(chr(cp) for cp in sorted(chars))
 
 
+def compute_ui_letters(translations: Dict[str, List[str]], lang_index: int) -> str:
+    """Return the sorted non-ASCII letters a language's strings use.
+
+    The firmware checks these against the loaded UI fonts to decide whether it
+    can show the language. Punctuation and symbols are left out: a missing
+    arrow or quote leaves one blank, not an unreadable screen. Arabic letters
+    are left out too: the bidi shaper turns them into presentation forms before
+    drawing, so a font that draws Arabic need not carry the base letters.
+    """
+    letters = set()
+    for values in translations.values():
+        for ch in values[lang_index]:
+            cp = ord(ch)
+            if cp >= 0x80 and not 0x0600 <= cp <= 0x06FF and unicodedata.category(ch).startswith("L"):
+                letters.add(cp)
+    return "".join(chr(cp) for cp in sorted(letters))
+
+
+# ---------------------------------------------------------------------------
+# Language packs
+# ---------------------------------------------------------------------------
+
+# A pack holds one language's strings for the SD card (/lang/<code>.cplang).
+# Strings are found by a hash of the key name, not by position, so a pack keeps
+# working with a firmware that adds or removes keys; a key the pack lacks shows
+# in English. The header also names the language's _default_font ("" for the
+# built-in fonts), so a new pack can change it without a firmware update.
+PACK_MAGIC = b"CPLG"
+PACK_VERSION = 2
+PACK_CODE_LEN = 8  # UiLanguagePackStore::CODE_LEN
+PACK_FONT_LEN = 32  # UiLanguagePackStore::FONT_LEN, NUL included
+# magic, version, code, pad, count, pad, data size, crc32 (of the body), default font
+PACK_HEADER = struct.Struct("<4sB8s3sHHII32s")
+
+
+def fnv1a32(data: bytes, h: int = 0x811C9DC5) -> int:
+    for b in data:
+        h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+    return h
+
+
+def key_hash(key: str) -> int:
+    return fnv1a32(key.encode("utf-8"))
+
+
+def check_key_hashes(string_keys: List[str]) -> None:
+    seen: Dict[int, str] = {}
+    for key in string_keys:
+        h = key_hash(key)
+        if h in seen:
+            raise ValueError(f"Key hash collision: {seen[h]} and {key}; rename one key")
+        seen[h] = key
+
+
+def compute_build_hash(string_keys: List[str], translations: Dict[str, List[str]]) -> int:
+    """Hash of the key list and the English strings.
+
+    A pack copied to flash is laid out for one firmware: its table points at
+    English strings for the keys it lacks. A firmware with another hash copies
+    the pack again.
+    """
+    h = 0x811C9DC5
+    for key in string_keys:
+        h = fnv1a32(key.encode("utf-8") + b"\0" + translations[key][0].encode("utf-8") + b"\0", h)
+    return h
+
+
+PRINTF_CONVERSION_RE = re.compile(r"%(?:%|[-+#0']*(\*|\d*)(?:\.(\*|\d*))?([hljztL]*)([diouxXeEfFgGaAcspn]))")
+
+
+def printf_conversions(text: str) -> List[str]:
+    """The printf arguments `text` reads, as the firmware's PrintfConversions::next() sees them."""
+    result = []
+    for m in PRINTF_CONVERSION_RE.finditer(text):
+        if m.group(0) == "%%":
+            continue
+        stars = ("*" if m.group(1) == "*" else "") + ("*" if m.group(2) == "*" else "")
+        result.append(stars + m.group(3) + m.group(4))
+    return result
+
+
+def safe_conversions(translated: str, english: str) -> bool:
+    """Whether `translated` reads no printf arguments other than `english` does (the firmware's PrintfConversions::safe())."""
+    ours = printf_conversions(translated)
+    return ours == printf_conversions(english)[: len(ours)]
+
+
+def write_language_pack(
+    path: str,
+    code: str,
+    default_font: str,
+    string_keys: List[str],
+    translations: Dict[str, List[str]],
+    lang_idx: int,
+) -> int:
+    """Write one language pack and return its size in bytes."""
+    if len(code) > PACK_CODE_LEN:
+        raise ValueError(f"Language code {code} is longer than {PACK_CODE_LEN} characters")
+    if len(default_font) >= PACK_FONT_LEN:
+        raise ValueError(f"Language {code}: _default_font is longer than {PACK_FONT_LEN - 1} characters")
+    mismatched = [
+        k
+        for k in string_keys
+        if translations[k][lang_idx] != translations[k][0]
+        and not safe_conversions(translations[k][lang_idx], translations[k][0])
+    ]
+    for k in mismatched:
+        print(f"  WARNING: {code} {k}: reads printf arguments English does not; the pack leaves it out")
+    entries = sorted(
+        (key_hash(k), translations[k][lang_idx])
+        for k in string_keys
+        if translations[k][lang_idx] != translations[k][0] and k not in mismatched
+    )
+    data = bytearray()
+    offsets = []
+    for _, text in entries:
+        offsets.append(len(data))
+        data += text.encode("utf-8") + b"\0"
+    # Offsets are 15-bit in flash (bit 15 marks English); the loader rejects more.
+    if len(data) > 0x7FFF:
+        raise ValueError(f"Language {code}: pack strings exceed 32 KB")
+    body = bytearray()
+    body += struct.pack(f"<{len(entries)}I", *(h for h, _ in entries))
+    body += struct.pack(f"<{len(entries)}H", *offsets)
+    body += b"\0" * (-len(body) % 4)
+    body += data
+    header = PACK_HEADER.pack(
+        PACK_MAGIC,
+        PACK_VERSION,
+        code.encode("ascii"),
+        b"",
+        len(entries),
+        0,
+        len(data),
+        zlib.crc32(body),
+        default_font.encode("ascii"),
+    )
+    with open(path, "wb") as f:
+        f.write(header)
+        f.write(body)
+    return len(header) + len(body)
+
+
 # ---------------------------------------------------------------------------
 # Code generators
 # ---------------------------------------------------------------------------
@@ -457,14 +617,18 @@ def generate_keys_header(
     output_path: str,
     verbose: bool = False,
     builtin: Optional[Set[str]] = None,
+    packs: Optional[Set[str]] = None,
+    build_hash: int = 0,
 ) -> None:
     """Generate I18nKeys.h.
 
     Every language keeps its enum value, code and name, so code that names a
     language (keyboard layouts, the V1 migration table) compiles either way.
-    Only built-in languages get string tables and appear in the picker.
+    Only built-in languages get string tables. Built-in languages and those
+    shipped as packs appear in the picker.
     """
     compiled = [c for c in languages if builtin is None or c in builtin]
+    packs = packs or set()
     lines: List[str] = [
         "#pragma once",
         "#include <cstdint>",
@@ -504,6 +668,21 @@ def generate_keys_header(
     lines.append("// Character sets for each language (defined in I18nStrings.cpp)")
     lines.append("extern const char* const CHARACTER_SETS[];")
     lines.append("")
+    lines.append("// Non-ASCII letters each language uses (defined in I18nStrings.cpp)")
+    lines.append("extern const char* const UI_LETTERS[];")
+    lines.append("")
+    lines.append("// SD font family the font download list opens on; nullptr for the built-in")
+    lines.append("// fonts (defined in I18nStrings.cpp)")
+    lines.append("extern const char* const DEFAULT_FONT_FAMILIES[];")
+    lines.append("")
+
+    if packs:
+        lines.append("// Languages not built in are read from SD packs (see gen_i18n.py)")
+        lines.append("#define I18N_LANGUAGE_PACKS 1")
+        lines.append(f"constexpr uint32_t I18N_BUILD_HASH = 0x{build_hash:08X}u;")
+        lines.append("// FNV-1a hash of each key name, in StrId order (defined in I18nStrings.cpp)")
+        lines.append("extern const uint32_t I18N_KEY_HASHES[];")
+        lines.append("")
 
     # StrId enum
     lines.append("// String IDs")
@@ -543,6 +722,18 @@ def generate_keys_header(
     lines.append("")
 
     # getLanguageCount helper (single line to match checked-in format)
+    lines.append("// Whether a language's strings are compiled into the firmware")
+    lines.append("inline bool isLanguageBuiltIn(Language lang) {")
+    lines.append("  switch (lang) {")
+    for code in compiled:
+        lines.append(f"    case Language::{code}:")
+    lines.append("      return true;")
+    lines.append("    default:")
+    lines.append("      return false;")
+    lines.append("  }")
+    lines.append("}")
+    lines.append("")
+
     lines.append("// Helper function to get language count")
     lines.append(
         "constexpr uint8_t getLanguageCount() "
@@ -554,7 +745,7 @@ def generate_keys_header(
     # (English first, then by _bcp47 tag alphabetically)
     english_idx = languages.index("EN")
     rest = sorted(
-        (i for i in range(len(languages)) if i != english_idx and languages[i] in compiled),
+        (i for i in range(len(languages)) if i != english_idx and (languages[i] in compiled or languages[i] in packs)),
         key=lambda i: language_bcp47[i],
     )
     sorted_indices = [english_idx] + rest
@@ -567,7 +758,7 @@ def generate_keys_header(
         "};"
     )
     lines.append("")
-    size_check = "==" if builtin is None else "<="
+    size_check = "==" if builtin is None or len(compiled) + len(packs) == len(languages) else "<="
     lines.append(
         f"static_assert(sizeof(SORTED_LANGUAGE_INDICES) / sizeof(SORTED_LANGUAGE_INDICES[0]) {size_check} getLanguageCount(),"
     )
@@ -623,14 +814,17 @@ def generate_strings_header(
 def generate_strings_cpp(
     languages: List[str],
     language_names: List[str],
+    default_fonts: List[str],
     string_keys: List[str],
     translations: Dict[str, List[str]],
     output_path: str,
     verbose: bool = False,
     builtin: Optional[Set[str]] = None,
+    packs: Optional[Set[str]] = None,
 ) -> None:
     """Generate I18nStrings.cpp."""
     compiled = [c for c in languages if builtin is None or c in builtin]
+    packs = packs or set()
     lines: List[str] = [
         AUTO_GENERATED_COMMENT,
         CLANG_FORMAT_OFF_COMMENT,
@@ -661,11 +855,41 @@ def generate_strings_cpp(
     lines.append("const char* const CHARACTER_SETS[] = {")
     for lang_idx, name in enumerate(language_names):
         # A language left out of the build renders English strings, so it needs English glyphs.
-        in_build = languages[lang_idx] in compiled
+        in_build = languages[lang_idx] in compiled or languages[lang_idx] in packs
         charset = compute_character_set(translations, lang_idx if in_build else 0)
         _append_string_entry(lines, charset, comment=name)
     lines.append("};")
     lines.append("")
+
+    # UI_LETTERS array
+    lines.append("// Non-ASCII letters each language uses")
+    lines.append("const char* const UI_LETTERS[] = {")
+    for lang_idx, name in enumerate(language_names):
+        in_build = languages[lang_idx] in compiled or languages[lang_idx] in packs
+        letters = compute_ui_letters(translations, lang_idx if in_build else 0)
+        _append_string_entry(lines, letters, comment=name)
+    lines.append("};")
+    lines.append("")
+
+    # DEFAULT_FONT_FAMILIES array
+    lines.append("// SD font family the font download list opens on; nullptr for the built-in fonts")
+    lines.append("const char* const DEFAULT_FONT_FAMILIES[] = {")
+    for font, name in zip(default_fonts, language_names):
+        if font:
+            _append_string_entry(lines, font, comment=name)
+        else:
+            lines.append(f"    nullptr,  // {name}")
+    lines.append("};")
+    lines.append("")
+
+    if packs:
+        lines.append("// FNV-1a hash of each key name, in StrId order")
+        lines.append("const uint32_t I18N_KEY_HASHES[] = {")
+        hashes = [f"0x{key_hash(k):08X}u" for k in string_keys]
+        for i in range(0, len(hashes), 6):
+            lines.append("    " + ", ".join(hashes[i : i + 6]) + ",")
+        lines.append("};")
+        lines.append("")
 
     # Per-language flat string blobs and offset tables.
     # Non-English languages skip strings identical to English; their offset
@@ -878,6 +1102,7 @@ def main(
     strip_unused: bool = False,
     verbose: bool = False,
     builtin_langs: Optional[str] = None,
+    pack_dir: Optional[str] = None,
 ) -> None:
     # Default paths (relative to project root)
     default_translations_dir = "lib/I18n/translations"
@@ -910,7 +1135,7 @@ def main(
         print()
 
     try:
-        languages, language_names, language_bcp47, string_keys, translations, inherited_sets = (
+        languages, language_names, language_bcp47, default_fonts, string_keys, translations, inherited_sets = (
             load_translations(translations_dir, verbose)
         )
         builtin = parse_builtin_langs(builtin_langs, languages)
@@ -977,6 +1202,28 @@ def main(
             inherited_sets = [s - unused_set for s in inherited_sets]
             print(f"  Stripping {len(unused_set)} unused string(s) from output.")
 
+        # Languages left out of the build ship as SD packs when a pack directory is given.
+        packs: Set[str] = set()
+        if pack_dir and builtin is not None:
+            packs = {c for c in languages if c not in builtin}
+        build_hash = 0
+        if packs:
+            check_key_hashes(string_keys)
+            build_hash = compute_build_hash(string_keys, translations)
+            os.makedirs(pack_dir, exist_ok=True)
+            total = 0
+            for idx, code in enumerate(languages):
+                if code in packs:
+                    total += write_language_pack(
+                        os.path.join(pack_dir, f"{code.lower()}.cplang"),
+                        code,
+                        default_fonts[idx],
+                        string_keys,
+                        translations,
+                        idx,
+                    )
+            print(f"  Packs: {len(packs)} languages, {total:,} B in {pack_dir}")
+
         out = Path(output_dir)
         generate_keys_header(
             languages,
@@ -986,6 +1233,8 @@ def main(
             str(out / "I18nKeys.h"),
             verbose,
             builtin,
+            packs,
+            build_hash,
         )
         generate_strings_header(
             languages, str(out / "I18nStrings.h"), verbose, builtin
@@ -993,11 +1242,13 @@ def main(
         generate_strings_cpp(
             languages,
             language_names,
+            default_fonts,
             string_keys,
             translations,
             str(out / "I18nStrings.cpp"),
             verbose,
             builtin,
+            packs,
         )
 
         print()
@@ -1054,6 +1305,12 @@ if __name__ == "__main__":
         help='Comma-separated language codes to compile in, e.g. "en,de,fr" (default: all)',
     )
     parser.add_argument(
+        "--pack-dir",
+        metavar="DIR",
+        default=None,
+        help="Write languages left out of --builtin-langs as SD packs into DIR",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -1067,6 +1324,7 @@ if __name__ == "__main__":
         args.strip_unused,
         args.verbose,
         args.builtin_langs,
+        args.pack_dir,
     )
 else:
     if "Import" in globals():
@@ -1074,4 +1332,9 @@ else:
         main(
             strip_unused=True,
             builtin_langs=env.GetProjectOption("custom_i18n_builtin_langs", "all"),
+            pack_dir=(
+                os.path.join(env.subst("$PROJECT_DIR"), ".pio", "lang")
+                if env.GetProjectOption("custom_i18n_sd_packs", "no").lower() in ("yes", "true", "1")
+                else None
+            ),
         )

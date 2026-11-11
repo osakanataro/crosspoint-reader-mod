@@ -28,6 +28,7 @@
 #include "plugins/PluginCatalogActivity.h"
 #include "reader/ReaderActivity.h"
 #include "reader/RemoteTurnGate.h"
+#include "settings/LanguagePackDownloadActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsListActivity.h"
 #include "util/BmpViewerActivity.h"
@@ -295,6 +296,11 @@ void ActivityManager::goToUsbDrive() {
 
 void ActivityManager::goToSettings(const SettingsSection openSection) {
   replaceActivity(std::make_unique<SettingsListActivity>(renderer, mappedInput, openSection));
+}
+
+void ActivityManager::goToLanguagePackRestore(const Language lang) {
+  // Its Wi-Fi exit reboots to Home; a declined download finishes to Home.
+  replaceActivity(std::make_unique<LanguagePackDownloadActivity>(renderer, mappedInput, lang, /*restoreAtBoot=*/true));
 }
 
 void ActivityManager::goToFileBrowser(std::string path) {

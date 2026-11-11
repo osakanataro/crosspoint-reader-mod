@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -77,6 +78,8 @@ class SdCardFontRegistry {
   const SdCardFontFamilyInfo* findFamily(const std::string& name) const;
   int getFamilyIndex(const std::string& name) const;
   int getFamilyCount() const { return static_cast<int>(families_.size()); }
+  // Bumped by every discover(), so callers can tell the family list changed.
+  uint32_t generation() const { return generation_.load(std::memory_order_acquire); }
 
 #if CROSSPOINT_VECTOR_FONTS
   // FtFont::ReadFn over a HalFile* ctx (absolute-offset reads; count 0 is a
@@ -87,6 +90,7 @@ class SdCardFontRegistry {
 
  private:
   std::vector<SdCardFontFamilyInfo> families_;  // sorted alphabetically
+  std::atomic<uint32_t> generation_{0};
 
   static bool parseFilename(const char* filename, uint8_t& size, uint8_t& style);
   // True when `filename` is exactly "<family>_<size>.cpfont", the name

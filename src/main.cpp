@@ -41,6 +41,7 @@
 #include "OpdsTokenStore.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "UiLanguagePackStore.h"
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
@@ -674,6 +675,7 @@ void setup() {
   // UTC-offset setting on first boot after the update).
   timezones::applyToClock();
   RECENT_BOOKS.loadFromFile();
+  I18N.setPackLoader(UiLanguagePackStore::load);
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
@@ -806,6 +808,12 @@ void setup() {
   } else if (rebootedFromPanic) {
     // If we rebooted from a panic, go to crash report screen to show the panic info
     activityManager.goToCrashReport();
+#if I18N_LANGUAGE_PACKS
+  } else if (!UiLanguagePackStore::available(static_cast<Language>(SETTINGS.language))) {
+    // The saved UI language is no longer built in and the card has no pack for
+    // it (the first boot after the update): offer to download it.
+    activityManager.goToLanguagePackRestore(static_cast<Language>(SETTINGS.language));
+#endif
   } else if (resume == BootResume::Silent && snapshotTarget == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);
