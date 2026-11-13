@@ -2,6 +2,7 @@
 
 #include <Epub/blocks/TextBlock.h>
 #include <HalStorage.h>  // HalFile (kept open for streamed TTFs)
+#include <I18nKeys.h>
 #include <SdCardFontManager.h>
 #include <SdCardFontRegistry.h>
 #include <VectorFontSupport.h>
@@ -52,6 +53,48 @@ class SdCardFontSystem {
   /// Thread-safe: can be called from the web server task.
   void markRegistryDirty() { registryDirty_.store(true, std::memory_order_release); }
 
+  /// Show the UI in `lang` when the loaded fonts can draw its letters. When
+  /// neither the built-in UI fonts nor the reader family can, load an SD family
+  /// that can for the UI sizes. If none on the card can, show English. Returns
+  /// whether `lang` is shown. Does not change SETTINGS. Main task, under a
+  /// RenderLock when a render may be running.
+  bool applyUiLanguage(GfxRenderer& renderer, Language lang);
+
+  /// applyUiLanguage() for the saved language (SETTINGS.language), which stays
+  /// as saved when it falls back to English, so the screens stay readable after
+  /// the font is removed. Called by begin() and ensureLoaded().
+  void applyUiLanguage(GfxRenderer& renderer);
+
+  /// For the language list: sets drawable[i] when langs[i] can be shown without
+  /// a font download, through the loaded fonts or an SD family that
+  /// applyUiLanguage() could load. Reads only each candidate family's 8 pt
+  /// coverage table, not its glyphs. Main task, under a RenderLock.
+  void findDrawableLanguages(const GfxRenderer& renderer, const Language* langs, size_t count, bool* drawable);
+
+  /// When the reader uses a built-in font that cannot draw the saved language
+  /// and an SD family was loaded for the UI instead, make that family the
+  /// reader font too, so books in the language show text rather than boxes.
+  /// Returns true when the reader font changed. Same task and lock rules as
+  /// applyUiLanguage(); the caller saves the settings.
+  bool adoptUiFamilyForReader(GfxRenderer& renderer);
+
+  /// applyUiLanguage(renderer, lang); when `lang` is shown, store it in
+  /// SETTINGS.language and call adoptUiFamilyForReader(). Returns whether `lang`
+  /// is shown. Same task and lock rules; the caller saves the settings.
+  bool switchUiLanguage(GfxRenderer& renderer, Language lang);
+
+  /// Whether the built-in UI fonts alone draw the language shown now.
+  bool builtinFontsDrawUi(const GfxRenderer& renderer) const;
+
+  /// Whether the UI draws letters from `family`'s files now: the UI family, or
+  /// the reader family filling in letters the built-in UI fonts lack.
+  bool uiUsesFamily(const GfxRenderer& renderer, const char* family) const;
+
+  /// Unload every SD font (reader and UI families) to free heap for a network
+  /// transfer. Nothing on screen may be drawn until ensureLoaded() reloads
+  /// them. Main task, under a RenderLock.
+  void unloadAll(GfxRenderer& renderer);
+
   /// If the registry is dirty, re-scan the SD card now and clear the flag.
   /// Used by the web UI so uploaded/deleted fonts appear in the list
   /// without waiting for the reader activity to run ensureLoaded().
@@ -62,6 +105,14 @@ class SdCardFontSystem {
   }
 
  private:
+  // ensureLoaded() without the UI language check.
+  void loadReaderFamily(GfxRenderer& renderer);
+
+  // Load the first SD family that carries every letter in `letters` at all
+  // UI sizes, and register it as the UI fallback. Skips the reader family.
+  bool loadUiFamily(GfxRenderer& renderer, const char* letters);
+  void unloadUiFamily(GfxRenderer& renderer);
+
   // Load the active SD family at the built-in UI point sizes and register each
   // as a size-matched script fallback for the corresponding UI font, so book
   // titles/list rows in scripts the built-ins lack (CJK, Greek, Cyrillic, ...)
@@ -114,6 +165,17 @@ class SdCardFontSystem {
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
+  // UI sizes of an SD family loaded only to draw the UI language, when the
+  // reader family can't. Empty uiFamily_ = none loaded.
+  SdCardFontManager uiManager_;
+  std::string uiFamily_;
+  int uiFontIds_[3] = {};            // parallel to kUiFontSizes
+  uint32_t uiFamilyGeneration_ = 0;  // registry generation when uiFamily_ loaded
+  // Registry generation and language of the last search that found no UI
+  // family, so the card is not re-read on every call until either changes.
+  uint32_t uiSearchFailedGeneration_ = 0;
+  int uiSearchFailedLanguage_ = -1;
+  Language uiLanguageLoggedMissing_ = Language::_COUNT;  // logs "no font" once per language
   std::atomic<bool> registryDirty_{false};
 
 #if CROSSPOINT_VECTOR_FONTS
@@ -140,6 +202,7 @@ class SdCardFontSystem {
   // UI-size TTF fallbacks (share ttfSources_); parallel to their renderer font ids.
   std::vector<std::unique_ptr<TtfEpdFont>> ttfUi_;
   std::vector<int> ttfUiIds_;
+  std::vector<int> ttfUiPrimaryIds_;  // UI font each ttfUiIds_ entry backs
 
   // Reader-font faces at other sizes (share ttfSources_).
   struct TtfVariant {
